@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "quotadeck",
+  "version": "0.1.0",
+  "description": "Provider usage and balance badge (fixture-only milestone)",
+  "action": {
+    "default_title": "quotadeck"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["storage", "alarms"]
+}

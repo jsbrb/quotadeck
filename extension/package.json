@@ -1,0 +1,19 @@
+{
+  "name": "quotadeck-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "quotadeck browser extension — provider usage badge (MV3, fixture-only milestone)",
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.2.8",
+    "@types/node": "^26.4.1",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
