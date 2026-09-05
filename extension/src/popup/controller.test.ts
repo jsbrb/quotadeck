@@ -10,7 +10,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { QWEN_AK_SK_GUIDANCE } from '../core/credentials';
-import type { ProviderId } from '../core/provider';
+import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
@@ -25,7 +25,7 @@ const storageKey = (id: ProviderId): string => `${KEY_STORAGE_PREFIX}${id}`;
 const NOW_MS = 1_754_000_000_000;
 
 /** BrowserApi-shaped harness over FakeBrowser parts (same pattern as background.test.ts). */
-function makePopupHarness(): { api: BrowserApi; local: FakeStorageArea } {
+function makePopupHarness(): { api: BrowserApi; local: FakeStorageArea; browser: FakeBrowser } {
   const base = new FakeBrowser();
   const api: BrowserApi = {
     storage: base.storage,
@@ -36,7 +36,23 @@ function makePopupHarness(): { api: BrowserApi; local: FakeStorageArea } {
       onStartup: { listen: () => undefined },
     },
   };
-  return { api, local: base.local };
+  return { api, local: base.local, browser: base };
+}
+
+/** One valid credential per provider, each in its provider's credential shape. */
+const PROVIDER_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
+  zai: { type: 'raw', token: 'sk-zai-cccc3333' },
+  qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tPopupAccessKey', accessKeySecret: 'PopupPairSecret0000000000000' },
+  openai: { type: 'openai-admin-read', token: 'sk-admin-abcdefgh1234' },
+  kimi: { type: 'bearer', token: 'sk-kimi-bbbb2222' },
+};
+
+/** Seeds every provider credential — the main view filter then keeps all cards. */
+async function seedAllKeys(local: FakeStorageArea): Promise<void> {
+  const keys = new KeyStore(local);
+  for (const [id, credential] of Object.entries(PROVIDER_CREDENTIALS) as Array<[ProviderId, Credential]>) {
+    await keys.saveCredential(id, credential);
+  }
 }
 
 async function seedKey(local: FakeStorageArea, id: ProviderId, credential: string): Promise<void> {
@@ -107,13 +123,15 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
   it('opens on the main view: usage, ZAI monitor block, per-class error label', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, LAST_CYCLE);
+    await seedAllKeys(h.local); // hito-6: cards render for keyed providers only
     mountApp();
 
     await openPopup(h);
 
     const text = document.body.textContent ?? '';
     expect(text).toContain('Level: Pro');
-    expect(text).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // countdown from the injected now
+    expect(text).toContain('5h: 16440 / 12000 · Resets in 1h 30m'); // countdown from the injected now
+    expect(document.querySelector('.hero-percentage')?.textContent).toBe('137%'); // dual hero (hito-6)
     expect(text).toContain('Weekly: 42% · 5040 / 12000');
     expect(text).toContain('MCP: 3 / 60');
     expect(text).toContain('$20.00');
@@ -121,14 +139,26 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     expect(text).toContain('Auth failed'); // qwen error entry, per class (AD-21/22)
   });
 
-  it('opens with an empty state per provider when no cycle has completed yet', async () => {
+  it('opens with an empty state per KEYED provider when no cycle has completed yet', async () => {
     const h = makePopupHarness();
+    await seedAllKeys(h.local); // keyed, no snapshot → "No cycle data yet" per card
     mountApp();
 
     await openPopup(h);
 
     const text = document.body.textContent ?? '';
     expect(text.match(/No cycle data yet/g)).toHaveLength(4);
+  });
+
+  it('keyless providers render no card at all on open — the noise card is gone (hito-6)', async () => {
+    const h = makePopupHarness();
+    await seedSnapshot(h.local, LAST_CYCLE); // cycle data exists for everyone…
+    mountApp();
+
+    await openPopup(h); // …but NO provider is keyed
+
+    expect(document.body.textContent ?? '').not.toContain('No cycle data yet');
+    expect(document.querySelector('#app section.provider')).toBeNull();
   });
 
   it('the main view carries the gear and renders NO key forms (spec §Gear replaces inline key forms)', async () => {
@@ -345,6 +375,7 @@ describe('controller — wrong-platform guidance (AD-27; popup-ui spec)', () => 
   it('a ZAI auth-error snapshot surfaces the wrong-platform guidance in the main view', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, { results: { zai: { status: 'error', errorClass: 'auth' } } });
+    await seedAllKeys(h.local); // hito-6: the error card renders for a CREDENTIALED provider
     mountApp();
     await openPopup(h);
 
@@ -356,6 +387,7 @@ describe('controller — wrong-platform guidance (AD-27; popup-ui spec)', () => 
   it('a ZAI rate-limit error shows the class label only — no guidance', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, { results: { zai: { status: 'error', errorClass: 'rate-limit' } } });
+    await seedAllKeys(h.local);
     mountApp();
     await openPopup(h);
 

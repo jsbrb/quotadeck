@@ -9,12 +9,20 @@
 //   (all key management). The header of each carries the switch — a
 //   `data-action="open-settings"` gear on main, `data-action="back"` on
 //   settings — wired by the controller's click delegation.
-// - Main view: one provider CARD per provider in PopupState.providers order
-//   (PROVIDER_METADATA order in production, AD-6). ZAI renders its monitor
-//   block from `usage.windows` (plan level, 5h/weekly windows with the
-//   percentage uncapped, used/total, countdown via the pure
-//   `formatResetCountdown` from `windows.*.resetAt` rendered as a distinct
-//   `.countdown` element, and the monthly MCP window with per-tool rows);
+// - Main view: one provider CARD per KEYED provider in PopupState.providers
+//   order (PROVIDER_METADATA order in production, AD-6) — keyless providers
+//   render no card at all (hito-6); the settings view keeps every provider.
+//   The main header carries the refresh affordance
+//   (`data-action="refresh"`, hito-6 §Manual Refresh Control) next to the
+//   gear. ZAI renders its monitor block from `usage.windows` (plan level,
+//   5h/weekly windows with the percentage uncapped, used/total, countdown
+//   via the pure `formatResetCountdown` from `windows.*.resetAt` rendered
+//   as a distinct `.countdown` element, and the monthly MCP window with
+//   per-tool rows); where a card's primary percentage exists (ZAI: the 5h
+//   window) it renders TWICE — as the card's largest, boldest element
+//   (`.hero-percentage`) above all other card content, and as the same
+//   number inside its threshold bar (`.bar-pct`) — while secondary info
+//   (window label, used/total, countdown) stays in normal weight below;
 //   every percentage-bearing window and the MCP window carry a
 //   threshold-colored bar (`band-green|band-amber|band-red`, contiguous
 //   bands from the rounded displayed percentage; visual fill caps at 100
@@ -169,24 +177,31 @@ export function thresholdBand(percentage: number): ThresholdBand {
 
 /**
  * Threshold-colored progress bar (popup-ui spec — Fill capped, text
- * uncapped): the visual fill caps at 100; width is presentation only.
+ * uncapped): the visual fill caps at 100; width is presentation only. The
+ * primary window's bar additionally carries the same uncapped percentage as
+ * a `bar-pct` overlay (hito-6 — the figure renders twice: hero + in-bar).
  */
-function bar(band: ThresholdBand, fillPercent: number): string {
+function bar(band: ThresholdBand, fillPercent: number, pctLabel?: string): string {
   const width = Math.min(Math.round(fillPercent), 100);
-  return `<div class="bar ${band}"><div class="bar-fill" style="width: ${width}%"></div></div>`;
+  const pct = pctLabel === undefined ? '' : `<span class="bar-pct">${pctLabel}</span>`;
+  return `<div class="bar ${band}"><div class="bar-fill" style="width: ${width}%"></div>${pct}</div>`;
 }
 
 /**
- * One monitor window line (AD-26): percentage uncapped (integer display —
- * the model keeps the exact value), used/total (bare total when used is
+ * One monitor window line (AD-26): used/total (bare total when used is
  * absent, nothing when total is absent too — the live plan-pro shape),
- * countdown when `resetAt` is present. Absent parts are simply omitted —
- * nothing is synthesized. Percentage-bearing lines carry a threshold bar
- * (popup-ui §Threshold bands); windows without one render the line only.
+ * countdown when `resetAt` is present, and the percentage — EXCEPT on the
+ * primary window, whose percentage lives in the hero figure and the in-bar
+ * overlay instead (hito-6: renders exactly twice, so the line keeps only
+ * label, used/total and countdown in normal weight below the hero). Absent
+ * parts are simply omitted — nothing is synthesized. Percentage-bearing
+ * lines carry a threshold bar (popup-ui §Threshold bands); windows without
+ * one render the line only. A primary window whose line has no parts left
+ * renders just its bar — the number is already on the card twice.
  */
-function windowLine(label: string, window: UsageWindow, state: PopupState): string {
+function windowLine(label: string, window: UsageWindow, state: PopupState, primary = false): string {
   const parts: string[] = [];
-  if (window.percentage !== undefined) {
+  if (window.percentage !== undefined && !primary) {
     parts.push(`${Math.round(window.percentage)}%`);
   }
   if (window.used !== undefined) {
@@ -200,8 +215,11 @@ function windowLine(label: string, window: UsageWindow, state: PopupState): stri
     // is unchanged, so pinned combined-text assertions keep holding.
     parts.push(`Resets in <span class="countdown">${formatResetCountdown(window.resetAt, state.nowMs)}</span>`);
   }
-  const line = `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
-  return window.percentage === undefined ? line : line + bar(thresholdBand(window.percentage), window.percentage);
+  const line = parts.length === 0 ? '' : `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
+  if (window.percentage === undefined) {
+    return line;
+  }
+  return line + bar(thresholdBand(window.percentage), window.percentage, primary ? `${Math.round(window.percentage)}%` : undefined);
 }
 
 /** ZAI monitor block: level, 5h/weekly windows, monthly MCP + per-tool rows (AD-26/27). */
@@ -212,7 +230,7 @@ function monitorBlock(usage: NormalizedUsage, state: PopupState): string {
     parts.push(`<p class="monitor-level">Level: ${escapeHtml(windows.level)}</p>`);
   }
   if (windows.fiveHour !== undefined) {
-    parts.push(windowLine('5h', windows.fiveHour, state));
+    parts.push(windowLine('5h', windows.fiveHour, state, true)); // primary window (hito-6)
   }
   if (windows.weekly !== undefined) {
     parts.push(windowLine('Weekly', windows.weekly, state));
@@ -263,6 +281,16 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
       parts.push(`<p class="guidance" role="alert">${escapeHtml(ZAI_WRONG_PLATFORM_GUIDANCE)}</p>`);
     }
   } else {
+    // Dual hero percentage (hito-6 §Provider List Rendering): where a card's
+    // primary percentage exists (ZAI: the 5h window), it renders as the
+    // card's largest, boldest element ABOVE all other card content; the same
+    // number repeats inside its threshold bar. Monetary cards have no
+    // primary percentage — their balance stays the leading figure, and no
+    // percentage is ever synthesized for them.
+    const heroPercentage = entry.usage.windows?.fiveHour?.percentage;
+    if (heroPercentage !== undefined) {
+      parts.push(`<p class="hero-percentage">${Math.round(heroPercentage)}%</p>`);
+    }
     parts.push(`<p class="usage">${formatUsageText(entry.usage)}</p>`);
     if (entry.usage.tier !== undefined) {
       parts.push(`<p class="tier">Tier: ${escapeHtml(entry.usage.tier)}</p>`);
@@ -280,10 +308,16 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
 
 /** Renders the consumption view; deterministic for identical state. */
 export function renderMain(state: PopupState): string {
-  const sections = state.providers.map((provider) => providerMainSection(provider, state)).join('\n');
+  // Keyless filtering (hito-6 §Provider List Rendering): one card per
+  // provider WITH a stored credential — keyless providers render no card
+  // ("No cycle data yet" noise dies); the settings view keeps everyone.
+  const keyedProviders = state.providers.filter((provider) => state.keyStates[provider.id] !== undefined);
+  const sections = keyedProviders.map((provider) => providerMainSection(provider, state)).join('\n');
   const header =
-    '<header class="popup-header"><h1>quotadeck</h1>' +
-    '<button type="button" class="header-action" data-action="open-settings">Settings</button></header>';
+    '<header class="popup-header"><h1>quotadeck</h1><div class="header-actions">' +
+    '<button type="button" class="header-action" data-action="refresh">Refresh</button>' +
+    '<button type="button" class="header-action" data-action="open-settings">Settings</button>' +
+    '</div></header>';
   return `${header}\n${sections}\n${BRANDING_FOOTER}`;
 }
 

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
 import { currencySymbol, type McpWindow, type MonitorWindows, type NormalizedUsage } from '../core/usage';
+import type { MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 import {
   escapeHtml,
@@ -30,6 +31,19 @@ const PROVIDERS: readonly PopupProvider[] = [
 ];
 
 const NOW_MS = 1_754_000_000_000;
+
+/**
+ * Every provider keyed (hito-6 §Provider List Rendering): the main view
+ * renders cards only for providers with a stored credential, so the shared
+ * popupState factory seeds a masked credential per provider; keyless tests
+ * override individual entries with `undefined`.
+ */
+const KEYED_STATES: Readonly<Record<ProviderId, MaskedCredential>> = {
+  zai: { type: 'raw', maskedToken: '••••zai1' },
+  qwen: { type: 'ak-sk', maskedAccessKeyId: '••••AK00', maskedAccessKeySecret: '••••0000' },
+  openai: { type: 'openai-admin-read', maskedToken: '••••1234' },
+  kimi: { type: 'bearer', maskedToken: '••••cdef' },
+};
 
 /** Full monitor payload (AD-26/27): level, both windows, MCP with two tools. */
 const MONITOR_WINDOWS: MonitorWindows = {
@@ -73,7 +87,7 @@ function popupState(overrides: Partial<PopupState> = {}): PopupState {
     view: 'main',
     providers: PROVIDERS,
     snapshot: undefined,
-    keyStates: {},
+    keyStates: KEYED_STATES,
     guidance: {},
     nowMs: NOW_MS,
     zaiPlatform: 'zai',
@@ -181,8 +195,11 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(html, 'zai');
 
     expect(zai).toContain('Level: Pro');
-    // combined textContent (the countdown span splits the raw string)
-    expect(stripTags(zai)).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // 137 stays 137 — uncapped
+    // combined textContent (the countdown span splits the raw string); the 5h
+    // percentage lives in the hero + bar-pct now (hito-6) — the line keeps
+    // label, used/total and countdown.
+    expect(stripTags(zai)).toContain('5h: 16440 / 12000 · Resets in 1h 30m');
+    expect(zai).toContain('<p class="hero-percentage">137%</p>'); // 137 stays 137 — uncapped
     expect(stripTags(zai)).toContain('Weekly: 42% · 5040 / 12000');
     expect(zai).toContain('MCP: 3 / 60');
     // Per-tool rows sorted by name for determinism (AD-27 ordering, view-side too).
@@ -239,7 +256,8 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     };
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
-    expect(zai).toContain('5h: 43% · 12000 total'); // Math.round(42.6) for display; no used part
+    expect(zai).toContain('5h: 12000 total'); // no used part; the pct lives in hero + bar (hito-6)
+    expect(zai).toContain('<p class="hero-percentage">43%</p>'); // Math.round(42.6) for display
     expect(zai).toContain('Weekly: 130000 total');
   });
 
@@ -260,7 +278,8 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
     expect(zai).toContain('Level: pro');
-    expect(stripTags(zai)).toContain('5h: 32% · Resets in 1h 30m'); // no used/total part — nothing to render
+    expect(zai).toContain('<p class="hero-percentage">32%</p>'); // pct-only window: hero + bar, no line parts
+    expect(stripTags(zai)).toContain('Resets in 1h 30m'); // countdown stays in the line's combined text
     expect(zai).not.toContain('undefined'); // the absent total must not leak into text
   });
 
@@ -335,9 +354,8 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
 
   it('renders bars and guidance deterministically — repeated renders stay byte-identical', () => {
     const state = popupState({
-      snapshot: fullSnapshot, // bars via the monitor windows
+      snapshot: fullSnapshot, // bars via the monitor windows (zai keyed by default)
       guidance: { kimi: 'Credential must not be empty.' },
-      keyStates: { qwen: { type: 'ak-sk', maskedAccessKeyId: '••••AK00', maskedAccessKeySecret: '••••0000' } },
     });
     const mainA = renderMain(state);
     const settingsA = renderSettings({ ...state, view: 'settings' });
@@ -502,17 +520,19 @@ describe('renderMain — Threshold bands + capped fill (popup-ui spec)', () => {
   }
 
   it('renders a threshold-colored bar after each percentage-bearing window line', () => {
+    // The 5h bar is the primary bar: it carries the same percentage as a
+    // bar-pct overlay (hito-6 — the figure renders twice: hero + in-bar).
     expect(renderFiveHour(55)).toContain(
-      '<div class="bar band-green"><div class="bar-fill" style="width: 55%"></div></div>',
+      '<div class="bar band-green"><div class="bar-fill" style="width: 55%"></div><span class="bar-pct">55%</span></div>',
     );
     expect(renderFiveHour(70)).toContain(
-      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div></div>',
+      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div><span class="bar-pct">70%</span></div>',
     );
     expect(renderFiveHour(90)).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div><span class="bar-pct">90%</span></div>',
     );
     expect(renderFiveHour(137)).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-pct">137%</span></div>',
     );
   });
 
@@ -520,7 +540,8 @@ describe('renderMain — Threshold bands + capped fill (popup-ui spec)', () => {
     const zai = renderFiveHour(137);
 
     expect(zai).toContain('style="width: 100%"'); // fill capped…
-    expect(stripTags(zai)).toContain('5h: 137%'); // …text uncapped
+    expect(zai).toContain('<p class="hero-percentage">137%</p>'); // …hero text uncapped…
+    expect(zai).toContain('<span class="bar-pct">137%</span>'); // …in-bar text uncapped too
   });
 });
 
@@ -699,14 +720,148 @@ describe('renderMain — ZAI budget block (popup-ui spec)', () => {
     const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
 
     expect(zai).toContain('Level: Pro');
-    // Combined textContent is byte-preserved…
-    expect(stripTags(zai)).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // 137 stays 137 — uncapped
+    // Combined textContent: the 5h line keeps used/total + countdown; the 137
+    // itself renders twice — hero above all content, bar-pct in the bar.
+    expect(stripTags(zai)).toContain('5h: 16440 / 12000 · Resets in 1h 30m');
+    expect(zai).toContain('<p class="hero-percentage">137%</p>');
     // …while the countdown renders as a distinct, prominent element.
     expect(zai).toContain('Resets in <span class="countdown">1h 30m</span>');
-    // One bar per window: 5h 137% → red (fill capped), weekly 42% → green.
-    expect(zai).toContain('<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>');
+    // One bar per window: 5h 137% → red (fill capped, pct overlay), weekly 42% → green.
+    expect(zai).toContain(
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-pct">137%</span></div>',
+    );
     expect(zai).toContain('<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div></div>');
     expect(zai).toContain('MCP: 3 / 60');
     expect(zai).toContain('web-search · 2'); // per-tool rows
+  });
+});
+
+describe('renderMain — dual hero percentage (popup-ui §Provider List Rendering, hito-6)', () => {
+  it('renders the uncapped 5h percentage as hero-percentage above all other ZAI card content', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+
+    // An own element — independently assertable from the in-bar figure.
+    expect(zai).toContain('<p class="hero-percentage">137%</p>'); // uncapped: 137, never 100
+    // Above all other card content: right after the provider name, before the
+    // monitor block and every window line.
+    expect(zai.indexOf('class="hero-percentage"')).toBeGreaterThan(zai.indexOf('class="provider-name"'));
+    expect(zai.indexOf('class="hero-percentage"')).toBeLessThan(zai.indexOf('class="monitor"'));
+    expect(zai.indexOf('class="hero-percentage"')).toBeLessThan(zai.indexOf('5h:'));
+  });
+
+  it('renders NO hero on monetary cards — the balance stays the leading figure', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    for (const id of ['qwen', 'openai', 'kimi'] as const) {
+      expect(sectionFor(html, id)).not.toContain('hero-percentage');
+    }
+    expect(sectionFor(html, 'qwen')).toContain('<p class="usage">¥100.28</p>');
+  });
+
+  it('renders NO hero for a monitor card without a 5h percentage — nothing synthesized for MCP', () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', {
+            kind: 'cost',
+            value: undefined,
+            currency: undefined,
+            windows: { mcp: { used: 1, ceiling: 5, tools: [] } },
+          }),
+        },
+      },
+    };
+    expect(sectionFor(renderMain(popupState({ snapshot })), 'zai')).not.toContain('hero-percentage');
+  });
+
+  it('rounds the hero display like the line did — 42.6 renders as 43%', () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', {
+            kind: 'cost',
+            value: undefined,
+            currency: undefined,
+            windows: { fiveHour: { percentage: 42.6, used: 5_112, total: 12_000 } },
+          }),
+        },
+      },
+    };
+    expect(sectionFor(renderMain(popupState({ snapshot })), 'zai')).toContain('<p class="hero-percentage">43%</p>');
+  });
+});
+
+describe('renderMain — in-bar percentage (popup-ui §Provider List Rendering, hito-6)', () => {
+  it('carries the same 137 inside the 5h bar as bar-pct while the fill caps at 100', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+
+    expect(zai).toContain(
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-pct">137%</span></div>',
+    );
+    // Hero and in-bar figures are separate elements — trimming one leaves the other.
+    expect(zai).toContain('<p class="hero-percentage">137%</p>');
+  });
+
+  it('the primary line drops its percentage part — the number renders exactly twice', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+
+    expect(zai.match(/137%/g)).toHaveLength(2); // hero + bar-pct, never a third copy in the line
+    // Secondary info stays below the hero in normal weight.
+    expect(stripTags(zai)).toContain('5h: 16440 / 12000 · Resets in 1h 30m');
+  });
+
+  it('only the primary bar carries bar-pct — weekly keeps its percentage in the line only', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+
+    expect((zai.match(/class="bar-pct"/g) ?? []).length).toBe(1);
+    expect(zai).toContain('Weekly: 42% · 5040 / 12000');
+    expect(zai).toContain(
+      '<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div></div>',
+    );
+  });
+});
+
+describe('renderMain — keyless filtering (popup-ui §Provider List Rendering, hito-6)', () => {
+  it('a keyless provider renders no main card even with cycle data; settings keeps it unchanged', () => {
+    const keyStates: Partial<Record<ProviderId, MaskedCredential | undefined>> = { ...KEYED_STATES, kimi: undefined };
+    const main = renderMain(popupState({ snapshot: FULL_SNAPSHOT, keyStates }));
+
+    expect(main).not.toContain('data-provider="kimi"'); // keyless → no card, data or not
+    expect(main).toContain('data-provider="zai"'); // keyed providers keep their cards
+    expect(main).toContain('data-provider="qwen"');
+
+    const settings = renderSettings(popupState({ view: 'settings', keyStates }));
+    expect(settings).toContain('data-provider="kimi"'); // settings still lists everyone
+    expect(sectionFor(settings, 'kimi')).toContain('id="key-add-kimi"');
+    expect(sectionFor(settings, 'kimi')).toContain(SETTINGS_GUIDANCE.kimi);
+  });
+
+  it('a keyed provider with no snapshot entry still renders its card (no-cycle note)', () => {
+    const snapshot: CycleSnapshot = { results: { zai: FULL_SNAPSHOT.results.zai! } };
+    const html = renderMain(popupState({ snapshot }));
+
+    expect(sectionFor(html, 'kimi')).toContain('No cycle data yet');
+    expect(sectionFor(html, 'qwen')).toContain('No cycle data yet');
+  });
+
+  it('every provider keyless renders no sections at all — deterministically', () => {
+    const state = popupState({ keyStates: {} });
+    const html = renderMain(state);
+
+    expect(html).not.toContain('<section');
+    expect(html).toContain('data-action="open-settings"'); // header and footer stay
+    strictEqual(html, renderMain(state));
+  });
+});
+
+describe('renderMain — refresh affordance (popup-ui §Manual Refresh Control, hito-6)', () => {
+  it('the main header carries a refresh action BEFORE any card content; the settings header does not', () => {
+    const main = renderMain(popupState());
+    expect(main).toContain('data-action="refresh"');
+    expect(main.indexOf('data-action="refresh"')).toBeLessThan(main.indexOf('<section'));
+
+    expect(renderSettings(popupState({ view: 'settings' }))).not.toContain('data-action="refresh"');
   });
 });
