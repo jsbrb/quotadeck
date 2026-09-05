@@ -10,7 +10,10 @@
       (MV3 default CSP permits style elements and generated style attributes).
       Styles cover both popup views (AD-22): the consumption main view and the
       gear-driven settings view — minimal claro (hito-5): light surface, white
-      cards, threshold-colored bars, prominent countdown.
+      cards, threshold-colored bars, prominent countdown. Hito-6 adds the
+      dual hero percentage (largest, boldest element; the same number again
+      inside the primary threshold bar) and keeps the header refresh button
+      on the shared .header-action styling.
     -->
     <style>
       body {
@@ -29,6 +32,10 @@
       .popup-header h1 {
         font-size: 15px;
         margin: 0;
+      }
+      .header-actions {
+        display: flex;
+        gap: 6px;
       }
       .header-action {
         background: #ffffff;
@@ -54,6 +61,13 @@
       .provider-name {
         font-size: 13px;
         font-weight: 600;
+        margin: 0 0 6px;
+      }
+      .hero-percentage {
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: -0.3px;
+        line-height: 1.1;
         margin: 0 0 6px;
       }
       .usage {
@@ -105,10 +119,26 @@
         border-radius: 999px;
         height: 6px;
         margin: 2px 0 6px;
-        overflow: hidden;
+        position: relative;
       }
       .bar-fill {
+        border-radius: 999px;
         height: 100%;
+      }
+      .bar:has(.bar-pct) {
+        height: 14px;
+      }
+      .bar-pct {
+        color: #ffffff;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 0 6px;
+        position: absolute;
+        right: 0;
+        text-shadow: 0 1px 2px rgba(31, 35, 40, 0.45);
+        top: 50%;
+        transform: translateY(-50%);
       }
       .band-green .bar-fill {
         background: #2e9e5b;
