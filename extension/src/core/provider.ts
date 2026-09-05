@@ -21,6 +21,18 @@ export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
 export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read';
 
 /**
+ * Body-level API failure (AD-21): the provider payload answered non-success
+ * even though the transport succeeded (e.g. ZAI numeric `code !== 200`).
+ * Classifies as `server` in the refresh taxonomy.
+ */
+export class ProviderApiError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ProviderApiError';
+  }
+}
+
+/**
  * Provider-agnostic refresh query. Fields are optional because providers consume
  * different subsets; each provider validates the fields it requires inside
  * `firstRequest` — invalid parameters throw BEFORE any request is dispatched
