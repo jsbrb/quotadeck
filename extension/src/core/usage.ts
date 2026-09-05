@@ -32,21 +32,62 @@ export interface BudgetReport {
   readonly resetAt: number | undefined;
 }
 
+/** One monitor usage window (AD-26): API-provided passthrough, nothing derived here. */
+export interface UsageWindow {
+  /** API percentage, UNCAPPED (137 stays 137); absent when the API omits/nulls it. */
+  readonly percentage?: number;
+  /** round(total × percentage / 100); absent when percentage or total is. */
+  readonly used?: number;
+  /** Window quota ceiling. */
+  readonly total: number;
+  /** Reset instant (epoch ms, `nextResetTime` verbatim); absent when the API omits it. */
+  readonly resetAt?: number;
+}
+
+/** Per-tool monthly MCP usage (AD-26). */
+export interface McpToolUsage {
+  readonly name: string;
+  readonly used: number;
+}
+
+/** Monthly MCP window (AD-26): no percentage, no countdown — never synthesized. */
+export interface McpWindow {
+  readonly used: number;
+  readonly ceiling: number;
+  readonly tools: readonly McpToolUsage[];
+}
+
+/** ZAI monitor windows (AD-26): plan level, 5h/weekly token windows, monthly MCP. */
+export interface MonitorWindows {
+  /** Plan level (`data.level`); absent when the API omits it. */
+  readonly level?: string;
+  readonly fiveHour?: UsageWindow;
+  readonly weekly?: UsageWindow;
+  readonly mcp?: McpWindow;
+}
+
 /** The single result shape every provider folds into. */
 export interface NormalizedUsage {
   readonly providerId: ProviderId;
   /** `balance` = remaining credit; `cost` = spend over the queried window. */
   readonly kind: 'balance' | 'cost';
-  /** ZAI: sum(costPrice / 1000 * deductUsage); Qwen: Data.AvailableAmount; Kimi: data.available_balance; OpenAI: sum(results[].amount.value). */
-  readonly value: number;
-  /** ISO currency code from the response (Qwen `Data.Currency`, Kimi `CNY`, OpenAI `amount.currency`, ZAI `CNY`). */
-  readonly currency: string;
+  /**
+   * Monetary figure (ZAI sum(costPrice / 1000 * deductUsage); Qwen
+   * Data.AvailableAmount; Kimi data.available_balance; OpenAI
+   * sum(results[].amount.value)) — optional since the ZAI monitor endpoint
+   * reports no monetary value (AD-26).
+   */
+  readonly value?: number;
+  /** ISO currency code from the response; optional alongside `value` (AD-26). */
+  readonly currency?: string;
   /** ZAI only: tier label — the latest in-window `tokenResourceName` (AD-23). */
   readonly tier?: string;
   /** OpenAI only: per (model, usage_type) bucket totals. */
   readonly breakdown?: readonly LineItem[];
   /** ZAI only: trailing-5h tier budget (AD-22); absent on non-ZAI results. */
   readonly budget?: BudgetReport;
+  /** ZAI monitor windows (AD-26); absent on non-ZAI results. */
+  readonly windows?: MonitorWindows;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */
   readonly fetchedAt: number;
 }
@@ -76,12 +117,28 @@ function compactThousands(magnitude: number): string {
 /**
  * Renders a NormalizedUsage (or `null` for a failed refresh) as badge text.
  * Pure and deterministic: the same input yields the same string on every call.
+ *
+ * Windows branch first (AD-26): a monitor result renders its 5h percentage
+ * uncapped as integer display text; without a percentage it falls back to the
+ * plan level, and with neither the honest badge is the empty string.
  */
 export function formatBadgeText(usage: NormalizedUsage | null): string {
   if (usage === null) {
     return ERROR_BADGE_TEXT;
   }
-  const symbol = currencySymbol(usage.currency);
+  if (usage.windows !== undefined) {
+    const percentage = usage.windows.fiveHour?.percentage;
+    if (percentage !== undefined) {
+      return `${Math.round(percentage)}%`;
+    }
+    return usage.windows.level ?? '';
+  }
+  // Type guard (n3): value is optional now; a usage with neither windows nor
+  // a monetary value renders the empty badge rather than `NaN`-style output.
+  if (usage.value === undefined) {
+    return '';
+  }
+  const symbol = currencySymbol(usage.currency ?? '');
   const magnitude = Math.abs(usage.value);
   const sign = usage.value < 0 ? '-' : '';
   if (magnitude >= 1000) {

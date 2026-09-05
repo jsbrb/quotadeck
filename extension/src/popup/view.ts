@@ -70,7 +70,12 @@ export function escapeHtml(text: string): string {
 
 /** Full-precision popup rendering of one normalized result (no badge budget). */
 export function formatUsageText(usage: NormalizedUsage): string {
-  const symbol = currencySymbol(usage.currency) || usage.currency;
+  // Optional-value guard (AD-26): monitor results carry no monetary figure;
+  // the dedicated monitor block arrives with the popup slice.
+  if (usage.value === undefined) {
+    return '';
+  }
+  const symbol = currencySymbol(usage.currency ?? '') || (usage.currency ?? '');
   return `${symbol}${usage.value.toFixed(2)}`;
 }
 
@@ -112,7 +117,7 @@ function modelRows(usage: NormalizedUsage): string {
   const sorted = [...(usage.breakdown as readonly LineItem[])].sort((a, b) =>
     a.model !== b.model ? compareStrings(a.model, b.model) : compareStrings(a.usageType, b.usageType),
   );
-  const symbol = currencySymbol(usage.currency) || usage.currency;
+  const symbol = currencySymbol(usage.currency ?? '') || (usage.currency ?? '');
   const items = sorted.map(
     (row) =>
       `<li class="model-row">${escapeHtml(row.model)} · ${escapeHtml(row.usageType)} — ${symbol}${row.value.toFixed(2)}</li>`,

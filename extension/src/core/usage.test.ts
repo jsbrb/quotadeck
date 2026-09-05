@@ -3,6 +3,7 @@ import {
   ERROR_BADGE_TEXT,
   formatBadgeText,
   type BudgetReport,
+  type MonitorWindows,
   type NormalizedUsage,
 } from './usage';
 
@@ -34,6 +35,66 @@ describe('NormalizedUsage.budget (AD-22)', () => {
   it('budget presence never changes badge rendering — the badge stays cost-based', () => {
     expect(formatBadgeText(usage({ value: 12.34, budget }))).toBe('¥12');
     expect(formatBadgeText(usage({ value: 12.34 }))).toBe(formatBadgeText(usage({ value: 12.34, budget })));
+  });
+});
+
+describe('NormalizedUsage.windows (AD-26) — MonitorWindows model', () => {
+  const windows: MonitorWindows = {
+    level: 'Pro',
+    fiveHour: { percentage: 137, used: 16_440, total: 12_000, resetAt: 1_788_080_400_000 },
+    weekly: { percentage: 42, used: 5_040, total: 12_000 },
+    mcp: { used: 3, ceiling: 60, tools: [{ name: 'web-search', used: 2 }, { name: 'code-execution', used: 1 }] },
+  };
+
+  it('carries windows alongside the result; value/currency may be absent on monitor results', () => {
+    const monitor: NormalizedUsage = {
+      providerId: 'zai',
+      kind: 'cost',
+      windows,
+      fetchedAt: 1_700_000_000_000,
+    };
+    expect(monitor.windows).toEqual(windows);
+    expect(monitor.value).toBeUndefined();
+    expect(monitor.currency).toBeUndefined();
+  });
+
+  it('monitor usage without value/currency does not render a monetary badge', () => {
+    const monitor: NormalizedUsage = {
+      providerId: 'zai',
+      kind: 'cost',
+      windows: { level: 'Pro' },
+      fetchedAt: 1_700_000_000_000,
+    };
+    // No percentage and no monetary value: the honest badge is the level.
+    expect(formatBadgeText(monitor)).toBe('Pro');
+  });
+});
+
+describe('formatBadgeText — windows branch (usage-badge §Badge Rendering)', () => {
+  it('renders the 5h percentage uncapped as integer display text', () => {
+    expect(formatBadgeText(usage({ windows: { fiveHour: { percentage: 137, total: 12_000 } } }))).toBe('137%');
+    expect(formatBadgeText(usage({ windows: { fiveHour: { percentage: 100, total: 12_000 } } }))).toBe('100%');
+  });
+
+  it('rounds a fractional percentage for display only', () => {
+    expect(formatBadgeText(usage({ windows: { fiveHour: { percentage: 12.5, total: 1_000 } } }))).toBe('13%');
+    expect(formatBadgeText(usage({ windows: { fiveHour: { percentage: 0.4, total: 1_000 } } }))).toBe('0%');
+  });
+
+  it('falls back to the plan level when the 5h percentage is absent', () => {
+    expect(formatBadgeText(usage({ windows: { level: 'Pro', fiveHour: { used: 100, total: 12_000 } } }))).toBe('Pro');
+    expect(formatBadgeText(usage({ windows: { level: 'Lite' } }))).toBe('Lite');
+  });
+
+  it('renders an empty badge when both percentage and level are absent', () => {
+    expect(formatBadgeText(usage({ windows: { fiveHour: { total: 12_000 } } }))).toBe('');
+    expect(formatBadgeText(usage({ windows: {} }))).toBe('');
+  });
+
+  it('monetary results keep the existing rendering — windows take precedence only when present', () => {
+    // Regression pair: identical monetary usage, with and without windows.
+    expect(formatBadgeText(usage({ value: 12.34 }))).toBe('¥12');
+    expect(formatBadgeText(usage({ value: 12.34, windows: { level: 'Pro' } }))).toBe('Pro');
   });
 });
 
