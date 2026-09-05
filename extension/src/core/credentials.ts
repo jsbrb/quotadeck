@@ -1,12 +1,23 @@
-// Credential validation (provider-framework spec §Qwen — DashScope key rejected).
+// Credential validation (provider-framework spec §Qwen — DashScope key
+// rejected; §Qwen AK/SK Pair Handling, AD-17).
 //
-// Pure checks per CredentialType; storage and UI layers call this before a key is
-// persisted or used. No I/O, no provider knowledge beyond the credential type.
+// Pure checks per CredentialType; storage and UI layers call this before a
+// key is persisted or used. No I/O, no provider knowledge beyond the
+// credential type. The ak-sk type has TWO modes: a legacy single-string check
+// (token-shaped inputs, still used by the transitional popup forms) and the
+// pair mode introduced with live usage — pairs reject empty/missing parts and
+// DashScope `sk-` values in EITHER part.
 import type { CredentialType } from './provider';
 
 export type CredentialValidation =
   | { readonly ok: true }
   | { readonly ok: false; readonly message: string };
+
+/** A candidate Alibaba Cloud AccessKeyId/AccessKeySecret pair. */
+export interface AccessKeyPair {
+  readonly accessKeyId: string;
+  readonly accessKeySecret: string;
+}
 
 /**
  * Guidance emitted when a DashScope-style `sk-` key is offered for Qwen: the
@@ -21,7 +32,23 @@ export const QWEN_AK_SK_GUIDANCE =
 /** Empty/blank credentials are never acceptable, for any type. */
 const EMPTY_MESSAGE = 'Credential must not be empty.';
 
-export function validateCredential(type: CredentialType, credential: string): CredentialValidation {
+export function validateCredential(type: CredentialType, credential: string): CredentialValidation;
+export function validateCredential(type: 'ak-sk', pair: AccessKeyPair): CredentialValidation;
+export function validateCredential(
+  type: CredentialType,
+  credential: string | AccessKeyPair,
+): CredentialValidation {
+  if (typeof credential !== 'string') {
+    // ak-sk pair mode (AD-17): both parts required; `sk-` in either part is a
+    // DashScope key offered for BSS — rejected with the guidance.
+    if (credential.accessKeyId.trim().length === 0 || credential.accessKeySecret.trim().length === 0) {
+      return { ok: false, message: EMPTY_MESSAGE };
+    }
+    if (credential.accessKeyId.startsWith('sk-') || credential.accessKeySecret.startsWith('sk-')) {
+      return { ok: false, message: QWEN_AK_SK_GUIDANCE };
+    }
+    return { ok: true };
+  }
   if (credential.trim().length === 0) {
     return { ok: false, message: EMPTY_MESSAGE };
   }

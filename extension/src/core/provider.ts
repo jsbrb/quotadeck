@@ -21,6 +21,15 @@ export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
 export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read';
 
 /**
+ * A concrete credential as stored and attached (AD-17). Token credentials
+ * travel exclusively as the `Authorization` header value; the ak-sk pair
+ * feeds the BSS RPC signer — the secret never leaves the signing boundary.
+ */
+export type Credential =
+  | { readonly type: 'bearer' | 'openai-admin-read'; readonly token: string }
+  | { readonly type: 'ak-sk'; readonly accessKeyId: string; readonly accessKeySecret: string };
+
+/**
  * Body-level API failure (AD-21): the provider payload answered non-success
  * even though the transport succeeded (e.g. ZAI numeric `code !== 200`).
  * Classifies as `server` in the refresh taxonomy.
