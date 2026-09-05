@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { FetchTransport, HttpStatusError, ResponseParseError } from './fetch-transport';
 import type { AuthorizedRequest } from './transport';
+import { classifyRefreshError } from '../refresh/error-taxonomy';
 
 /** Structural response double — exactly what FetchTransport consumes. */
 interface StubResponse {
@@ -66,6 +67,38 @@ describe('FetchTransport — non-2xx throws HttpStatusError (status only, AD-13 
     expect(failure).toBeInstanceOf(HttpStatusError);
     expect((failure as HttpStatusError).status).toBe(status);
     expect((failure as Error).message).toBe(`HTTP ${status}`); // no body text captured
+  });
+});
+
+describe('FetchTransport — status-first error classification (AD-30 pins)', () => {
+  // zai-monitor §Status-First Error Classification: error responses are
+  // classified by HTTP status BEFORE any body parse — a plain-text body on an
+  // error status can never cause a parse failure. Each stub's json() REJECTS
+  // and records the call: if the transport ever tried to read the body, these
+  // pins would fail twice over (ResponseParseError + jsonCalls > 0).
+  it.each([
+    [401, 'auth'],
+    [403, 'auth'],
+    [429, 'rate-limit'],
+    [500, 'server'],
+  ] as const)('plain-text body on HTTP %i classifies %s with no body parse', async (status, errorClass) => {
+    let jsonCalls = 0;
+    const transport = new FetchTransport(async () => ({
+      status,
+      ok: false,
+      json: () => {
+        jsonCalls += 1;
+        return Promise.reject(new SyntaxError('Unexpected token <')); // plain-text body
+      },
+    }));
+
+    const failure = await transport.fetch(GET_REQUEST).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(HttpStatusError);
+    expect(failure).not.toBeInstanceOf(ResponseParseError);
+    expect((failure as HttpStatusError).status).toBe(status);
+    expect(jsonCalls).toBe(0); // the error body is never even read
+    expect(classifyRefreshError(failure)).toBe(errorClass);
   });
 });
 
