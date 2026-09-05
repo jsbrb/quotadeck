@@ -42,7 +42,8 @@ const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = {
   GBP: '£',
 };
 
-function currencySymbol(currency: string): string {
+/** Symbol for an ISO currency code; `''` when unknown. Exported for popup display reuse (AD-11). */
+export function currencySymbol(currency: string): string {
   return CURRENCY_SYMBOLS[currency.toUpperCase()] ?? '';
 }
 
