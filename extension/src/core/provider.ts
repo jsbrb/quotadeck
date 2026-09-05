@@ -7,6 +7,7 @@
 // the refresh engine.
 import type { ProviderRequest } from '../network/request';
 import type { NormalizedUsage } from './usage';
+import type { ZaiPlatform } from './zai-platforms';
 
 /** Stable provider identifiers. Also the registry key and the allowlist scope. */
 export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
@@ -53,7 +54,7 @@ export interface UsageQuery {
   /** Billing months for month-scoped endpoints (ZAI): `YYYY-MM`, oldest first (AD-23). */
   readonly billingMonths?: readonly string[];
   /** ZAI monitor platform selection; absent → `'zai'` (AD-28). */
-  readonly zaiPlatform?: 'zai' | 'zhipu';
+  readonly zaiPlatform?: ZaiPlatform;
   /** Inclusive range start for cost-window endpoints (OpenAI), epoch seconds. */
   readonly startTime?: number;
   /** Exclusive range end for cost-window endpoints (OpenAI), epoch seconds. */
