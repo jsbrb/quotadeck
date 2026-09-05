@@ -48,19 +48,23 @@ export class ProviderApiError extends Error {
  * (provider-framework spec §OpenAI Request Validation).
  */
 export interface UsageQuery {
-  /** Billing month for month-scoped endpoints (ZAI): `YYYY-MM`. */
-  readonly billingMonth?: string;
+  /** Billing months for month-scoped endpoints (ZAI): `YYYY-MM`, oldest first (AD-23). */
+  readonly billingMonths?: readonly string[];
   /** Inclusive range start for cost-window endpoints (OpenAI), epoch seconds. */
   readonly startTime?: number;
   /** Exclusive range end for cost-window endpoints (OpenAI), epoch seconds. */
   readonly endTime?: number;
+  /** Refresh instant from the injected Clock, epoch ms — anchors ZAI's 5h window. */
+  readonly now?: number;
+  /** Tier-limit overrides over the defaults (ZAI; AD-20); absent → defaults. */
+  readonly tierLimits?: Readonly<Record<string, number>>;
 }
 
 /**
  * Opaque pagination state owned by the provider, threaded by the engine across
  * pages (AD-2). The engine never inspects its contents — ZAI keeps its `billingNo`
- * dedupe set and page cursor here; OpenAI keeps its accumulated cost plus
- * `next_page` cursor here.
+ * dedupe set, billing-months queue and page cursor here; OpenAI keeps its
+ * accumulated cost plus `next_page` cursor here.
  */
 export type ProviderState = Readonly<Record<string, unknown>>;
 

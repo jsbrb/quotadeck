@@ -16,7 +16,12 @@ import { RefreshEngine, type RefreshCallbacks } from './engine';
 // multi-page OpenAI without one, and single-page Kimi — through the real
 // AllowlistNetworkClient over a RecordingTransport. No network I/O can occur,
 // and jitter assertions read FakeClock.sleeps, never the wall clock.
-const QUERY: UsageQuery = { billingMonth: '2026-08', startTime: 1754006400, endTime: 1754179200 };
+const QUERY: UsageQuery = {
+  billingMonths: ['2026-08'],
+  now: 1_788_062_400_000, // 2026-08-30 12:00 +08:00 — the fixtures' window anchor
+  startTime: 1754006400,
+  endTime: 1754179200,
+};
 
 /** Registry containing exactly the given ids, in the default registration order. */
 function keyedRegistry(ids: readonly ProviderId[]): ProviderRegistry {

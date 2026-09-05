@@ -17,6 +17,7 @@
 //   an unrouted URL throws, there is no network path at all.
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
+import { cstEpoch } from './core/tier-budget';
 import { ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { AllowlistNetworkClient } from './network/client';
@@ -33,17 +34,21 @@ export const USAGE_REFRESH_ALARM = 'usage-refresh';
 export const REFRESH_PERIOD_MINUTES = 1;
 
 // Fixture-milestone constants (AD-8): the recorded fixture set pins one ZAI
-// billing month and one OpenAI cost window. The tick query AND the transport
-// route table below derive from these, so every dispatched URL resolves to a
-// recorded fixture. The live milestone replaces the transport, not these
-// query semantics.
+// billing month, the fixture-internal "now" its records were recorded around,
+// and one OpenAI cost window. The tick query AND the transport route table
+// below derive from these, so every dispatched URL resolves to a recorded
+// fixture. The live milestone replaces the transport and derives the query
+// from the injected Clock (buildTickQuery), not these constants.
 const ZAI_BILLING_MONTH = '2026-08';
+/** 2026-08-30 12:00:00 +08:00 — the main-flow fixtures' window anchor (AD-20). */
+const ZAI_FIXTURE_NOW = cstEpoch(2026, 8, 30, 12, 0, 0);
 const OPENAI_START_TIME = 1_754_006_400;
 const OPENAI_END_TIME = 1_754_179_200;
 
 /** The query every tick dispatches; each provider consumes its own fields. */
 export const FIXTURE_QUERY: UsageQuery = {
-  billingMonth: ZAI_BILLING_MONTH,
+  billingMonths: [ZAI_BILLING_MONTH],
+  now: ZAI_FIXTURE_NOW,
   startTime: OPENAI_START_TIME,
   endTime: OPENAI_END_TIME,
 };

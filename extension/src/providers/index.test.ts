@@ -46,7 +46,7 @@ describe('createDefaultRegistry (AD-6)', () => {
     const registry = createDefaultRegistry();
 
     const zai = registry.get('zai');
-    zai.firstRequest({ billingMonth: '2026-08' });
+    zai.firstRequest({ billingMonths: ['2026-08'], now: 0 }); // now is irrelevant — page 1 continues
     expect(zai.parsePage(FIXTURE_RESPONSES['zai/expense-bill-list--page-1'].body, null).done).toBe(false);
 
     const qwen = registry.get('qwen');
