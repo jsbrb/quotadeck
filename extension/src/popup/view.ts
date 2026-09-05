@@ -29,7 +29,7 @@ export interface PopupState {
   /** Last completed cycle; `undefined` = no cycle completed yet. */
   readonly snapshot: CycleSnapshot | undefined;
   /** Masked key form per provider (`KeyStore.readMaskedKey`); absent = no stored key. */
-  readonly keyStates: Readonly<Record<ProviderId, string | undefined>>;
+  readonly keyStates: Readonly<Partial<Record<ProviderId, string | undefined>>>;
   /** Last validation message per provider, rendered verbatim. */
   readonly guidance: Readonly<Partial<Record<ProviderId, string>>>;
 }
