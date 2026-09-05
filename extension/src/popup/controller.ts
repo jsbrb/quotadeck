@@ -1,8 +1,16 @@
 // Popup controller (popup-ui spec §Settings Gear Surface, §Per-Model
 // Consumption View, §Current Cycle Data on Open, §Key Addition with
-// Validation, §Masked Key Display, §Revocation from the Popup; AD-11/15/22/24)
-// — owns state and DOM events over an injected document and browser port.
-// The view stays pure; this module is the only popup code that touches the DOM.
+// Validation, §Masked Key Display, §Revocation from the Popup, §Manual
+// Refresh Control; AD-11/15/22/24) — owns state and DOM events over an
+// injected document and browser port. The view stays pure; this module is
+// the only popup code that touches the DOM.
+//
+// Manual refresh (hito-6): the main-view header's `data-action="refresh"`
+// registers an idempotent storage.onChanged listener for `qd:snapshot`
+// (local area only) and then creates the one-shot `refresh-now` alarm with
+// an immediate `when` through the injected alarms port; the worker's tick
+// rewrites the snapshot, and the change event re-reads + re-renders — the
+// refresh flow introduces no other data path.
 //
 // Security invariants (AD-15, structural — not conventions):
 // - Credential reads go through `KeyStore.readMaskedCredential` ONLY; no
@@ -25,7 +33,7 @@ import type { ZaiPlatform } from '../core/zai-platforms';
 import type { BrowserApi } from '../platform/browser-api';
 import { KeyStore } from '../storage/key-store';
 import type { MaskedCredential } from '../storage/key-store';
-import { SnapshotStore, type CycleSnapshot } from '../storage/snapshot-store';
+import { SnapshotStore, SNAPSHOT_STORAGE_KEY, type CycleSnapshot } from '../storage/snapshot-store';
 import { readZaiPlatform, writeZaiPlatform } from '../storage/zai-platform-store';
 import { renderMain, renderSettings, type PopupProvider, type PopupState } from './view';
 
@@ -35,6 +43,14 @@ export interface PopupDeps {
   /** Countdown clock for display; defaults to Date.now — UI only, never provider logic. */
   readonly now?: () => number;
 }
+
+/**
+ * Module-local copy of the one-shot refresh alarm name (hito-6 §Manual
+ * Refresh Control; AD-24): importing background.ts would pull the entire
+ * worker graph — registry, network client, providers — into the popup
+ * bundle, so the popup owns its own literal; tests pin the two equal.
+ */
+const REFRESH_NOW_ALARM = 'refresh-now';
 
 /** The input ids one provider's credential form owns (two for the qwen pair). */
 function credentialInputIds(id: ProviderId, type: CredentialType): readonly string[] {
@@ -129,6 +145,18 @@ export function startPopup(deps: PopupDeps): void {
     render();
   }
 
+  /**
+   * Manual refresh (hito-6 §Manual Refresh Control): the storage-change
+   * listener's single data path — re-read the snapshot through SnapshotStore
+   * and re-render from it. No other refresh data path exists.
+   */
+  async function refreshFromSnapshot(): Promise<void> {
+    state.snapshot = await snapshots.read();
+    render();
+  }
+  /** Guards the one-time onChanged subscription — repeated clicks add no listeners. */
+  let refreshListening = false;
+
   const root = app();
   root.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
@@ -140,6 +168,23 @@ export function startPopup(deps: PopupDeps): void {
     const action = target.closest('[data-action]');
     if (action !== null) {
       const name = action.getAttribute('data-action');
+      if (name === 'refresh') {
+        // Subscribe FIRST (idempotently), THEN fire the one-shot alarm — the
+        // tick's snapshot write can never race the subscription. The worker
+        // handles the alarm; its qd:snapshot write lands as a change event
+        // and refreshFromSnapshot re-reads + re-renders.
+        if (!refreshListening) {
+          refreshListening = true;
+          deps.browser.storage.onChanged.listen((changes, area) => {
+            if (area !== 'local' || changes[SNAPSHOT_STORAGE_KEY] === undefined) {
+              return;
+            }
+            void refreshFromSnapshot();
+          });
+        }
+        deps.browser.alarms.create(REFRESH_NOW_ALARM, { when: now() + 1 });
+        return; // no immediate re-render: no data has changed yet
+      }
       if (name === 'open-settings') {
         state.view = 'settings';
       } else if (name === 'back') {

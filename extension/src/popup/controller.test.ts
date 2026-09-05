@@ -14,7 +14,7 @@ import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
-import { type CycleSnapshot, SnapshotStore } from '../storage/snapshot-store';
+import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY, SnapshotStore } from '../storage/snapshot-store';
 import { FakeBrowser, type FakeStorageArea } from '../testing/fake-browser';
 import { startPopup } from './controller';
 import { ZAI_WRONG_PLATFORM_GUIDANCE } from './view';
@@ -397,6 +397,94 @@ describe('controller — wrong-platform guidance (AD-27; popup-ui spec)', () => 
   });
 });
 
+/** The cycle a manual refresh lands after the tick: 5h drops to 55%. */
+const REFRESHED_CYCLE: CycleSnapshot = {
+  results: {
+    zai: {
+      status: 'ok',
+      usage: {
+        providerId: 'zai',
+        kind: 'cost',
+        windows: { fiveHour: { percentage: 55, used: 6_600, total: 12_000 } },
+        fetchedAt: NOW_MS + 5_000,
+      },
+    },
+  },
+};
+
+/** How many times the popup read `qd:snapshot` from the local area so far. */
+const snapshotReads = (h: { local: FakeStorageArea }): number =>
+  h.local.calls.filter((call) => call.op === 'get' && call.args[0] === SNAPSHOT_STORAGE_KEY).length;
+
+describe('controller — Manual Refresh Control (popup-ui spec, hito-6)', () => {
+  /** Opens the main view with a full cycle and every provider keyed. */
+  async function openKeyedMain(h: { api: BrowserApi; local: FakeStorageArea }): Promise<void> {
+    await seedSnapshot(h.local, LAST_CYCLE);
+    await seedAllKeys(h.local);
+    mountApp();
+    await openPopup(h);
+  }
+
+  it('activation registers the storage-change listener, THEN creates refresh-now with an immediate when [activation]', async () => {
+    const h = makePopupHarness();
+    await openKeyedMain(h);
+
+    const listenSpy = vi.spyOn(h.browser.onChanged, 'listen');
+    const createSpy = vi.spyOn(h.browser.alarms, 'create');
+
+    document.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+
+    expect(createSpy).toHaveBeenCalledWith('refresh-now', { when: NOW_MS + 1 }); // one-shot, immediate when
+    expect(listenSpy).toHaveBeenCalledTimes(1); // the click registered exactly one listener…
+    // …BEFORE the alarm: the tick's snapshot write can never race the subscription.
+    expect(listenSpy.mock.invocationCallOrder[0]).toBeLessThan(createSpy.mock.invocationCallOrder[0]);
+  });
+
+  it('a storage change to qd:snapshot re-reads the cycle and re-renders the main view [re-read]', async () => {
+    const h = makePopupHarness();
+    await openKeyedMain(h);
+    expect(document.querySelector('.hero-percentage')?.textContent).toBe('137%'); // pre-refresh figure
+
+    document.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    await seedSnapshot(h.local, REFRESHED_CYCLE); // the alarm tick's write → chrome-shaped change event
+
+    await vi.waitFor(() => expect(document.querySelector('.hero-percentage')?.textContent).toBe('55%'));
+    expect(document.body.textContent).toContain('5h: 6600 / 12000'); // re-rendered from the re-read snapshot
+  });
+
+  it('repeated clicks add no listeners — one snapshot write triggers exactly one re-read', async () => {
+    const h = makePopupHarness();
+    await openKeyedMain(h);
+    const readsBefore = snapshotReads(h);
+
+    const refresh = document.querySelector<HTMLButtonElement>('[data-action="refresh"]')!;
+    refresh.click();
+    refresh.click();
+    refresh.click();
+    await seedSnapshot(h.local, REFRESHED_CYCLE);
+    await vi.waitFor(() => expect(document.querySelector('.hero-percentage')?.textContent).toBe('55%'));
+
+    expect(snapshotReads(h) - readsBefore).toBe(1); // one listener → exactly one re-read per change
+  });
+
+  it('ignores non-local areas and non-snapshot keys — no re-read, no re-render', async () => {
+    const h = makePopupHarness();
+    await openKeyedMain(h);
+    document.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    expect(await h.browser.alarms.get('refresh-now')).toEqual({ name: 'refresh-now', when: NOW_MS + 1 });
+    const readsAfterActivation = snapshotReads(h);
+
+    // A snapshot-shaped change in the SYNC area never reaches the popup.
+    h.browser.onChanged.dispatch({ [SNAPSHOT_STORAGE_KEY]: { newValue: REFRESHED_CYCLE } }, 'sync');
+    // A local write to a different key is not the snapshot key.
+    await h.local.set({ [ZAI_PLATFORM_STORAGE_KEY]: 'zhipu' });
+    await Promise.resolve(); // flush microtasks so a wrong re-read would surface
+
+    expect(snapshotReads(h)).toBe(readsAfterActivation); // neither event re-read…
+    expect(document.querySelector('.hero-percentage')?.textContent).toBe('137%'); // …nor re-rendered
+  });
+});
+
 describe('controller — Revocation from the Popup (popup-ui spec)', () => {
   async function openSettingsWith(
     h: { api: BrowserApi; local: FakeStorageArea },
@@ -455,5 +543,11 @@ describe('controller — import boundary (AD-24)', () => {
     const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'controller.ts'), 'utf8');
     expect(source).toContain("from '../core/provider-metadata'");
     expect(source).not.toMatch(/from\s+'\.\.\/providers/); // no provider classes → no dead endpoint URLs
+  });
+
+  it('the refresh alarm name is a module-local literal — the popup never imports background.ts (AD-24)', () => {
+    const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'controller.ts'), 'utf8');
+    expect(source).toContain("'refresh-now'"); // module-local copy, pinned to the worker's literal
+    expect(source).not.toMatch(/from\s+'\.\.\/background/); // no worker graph in the popup bundle
   });
 });
