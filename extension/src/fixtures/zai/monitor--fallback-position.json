@@ -1,0 +1,21 @@
+{
+  "code": 200,
+  "msg": "success",
+  "success": true,
+  "data": {
+    "level": "Pro",
+    "tokenLimits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 30,
+        "total": 1000,
+        "nextResetTime": 1788066000000
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "percentage": 10,
+        "total": 2000
+      }
+    ]
+  }
+}

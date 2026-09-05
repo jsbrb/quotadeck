@@ -1,0 +1,36 @@
+{
+  "code": 200,
+  "msg": "success",
+  "success": true,
+  "data": {
+    "level": "Max",
+    "tokenLimits": [
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": 3,
+        "number": 5,
+        "percentage": 137,
+        "total": 12000,
+        "nextResetTime": 1788069600000
+      },
+      {
+        "type": "TOKENS_LIMIT",
+        "unit": 6,
+        "number": 1,
+        "percentage": 64,
+        "total": 130000,
+        "nextResetTime": 1788576000000
+      },
+      {
+        "type": "TIME_LIMIT",
+        "unit": 3,
+        "number": 4,
+        "currentValue": 12,
+        "usage": 60,
+        "usageDetails": {
+          "web-search": 12
+        }
+      }
+    ]
+  }
+}

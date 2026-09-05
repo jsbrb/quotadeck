@@ -1,9 +1,9 @@
-// Test-only refresh driver: the minimal pagination loop that the Phase-5
-// RefreshEngine will own (AD-2). NEVER imported by production code — testing
-// doubles only (AD-1). It dispatches through the real AllowlistNetworkClient
-// (so host admission + Authorization-only credentials stay proven) against a
-// RecordingTransport, draws the declared inter-page delay window from the
-// injected Clock (deterministic via the `rng` seam), and stamps `fetchedAt`.
+// Test-only refresh driver: the minimal pagination loop mirroring the
+// RefreshEngine (AD-2). NEVER imported by production code — testing doubles
+// only (AD-1). It dispatches through the real AllowlistNetworkClient (so host
+// admission + Authorization-only credentials stay proven) against a
+// RecordingTransport and stamps `fetchedAt`. No inter-page sleep machinery
+// remains after hito-4 — `next` requests dispatch back to back.
 import type { Clock } from '../core/clock';
 import type { Credential, CredentialType, Provider, UsageQuery } from '../core/provider';
 import type { NormalizedUsage } from '../core/usage';
@@ -26,7 +26,6 @@ export async function driveRefresh(
   query: UsageQuery,
   client: AllowlistNetworkClient,
   clock: Clock,
-  rng: () => number = Math.random,
 ): Promise<NormalizedUsage> {
   const credential = TEST_CREDENTIALS[provider.credentialType];
   let parse = provider.parsePage(
@@ -34,10 +33,6 @@ export async function driveRefresh(
     null,
   );
   while (!parse.done) {
-    if (provider.interPageDelayMs !== undefined) {
-      const [min, max] = provider.interPageDelayMs;
-      await clock.sleep(Math.round(min + rng() * (max - min)));
-    }
     parse = provider.parsePage(
       (await client.send(provider.id, parse.next, credential)).body,
       parse.state,

@@ -65,7 +65,6 @@ export class OpenAiProvider implements Provider {
   readonly id = 'openai' as const;
   readonly displayName = 'OpenAI';
   readonly credentialType = 'openai-admin-read' as const;
-  // No interPageDelayMs: the costs endpoint documents no politeness window.
 
   /**
    * Query window of the current refresh cycle, set by firstRequest and read

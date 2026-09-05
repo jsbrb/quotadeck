@@ -9,7 +9,7 @@ import { createDefaultRegistry } from './index';
 // documented response shape. (Duplicate/unknown id failures are proven in
 // core/registry.test.ts against the same registry class.)
 const EXPECTED_CREDENTIALS: Readonly<Record<ProviderId, CredentialType>> = {
-  zai: 'bearer',
+  zai: 'raw',
   qwen: 'ak-sk',
   openai: 'openai-admin-read',
   kimi: 'bearer',
@@ -46,8 +46,8 @@ describe('createDefaultRegistry (AD-6)', () => {
     const registry = createDefaultRegistry();
 
     const zai = registry.get('zai');
-    zai.firstRequest({ billingMonths: ['2026-08'], now: 0 }); // now is irrelevant — page 1 continues
-    expect(zai.parsePage(FIXTURE_RESPONSES['zai/expense-bill-list--page-1'].body, null).done).toBe(false);
+    zai.firstRequest({}); // no platform → default base; single-shot parse below
+    expect(zai.parsePage(FIXTURE_RESPONSES['zai/monitor--pro-plan'].body, null).done).toBe(true);
 
     const qwen = registry.get('qwen');
     expect(qwen.parsePage(FIXTURE_RESPONSES['qwen/query-account-balance--ok'].body, null).done).toBe(true);

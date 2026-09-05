@@ -26,12 +26,8 @@ function queryOf(url: string): Record<string, string> {
   return out;
 }
 
-function zaiRequest(url = 'https://bigmodel.cn/api/finance/expenseBill/expenseBillList'): ProviderRequest {
-  return {
-    method: 'GET',
-    url,
-    query: { billingMonth: '2026-08', pageNum: 1, pageSize: 20 },
-  };
+function zaiRequest(url = 'https://api.z.ai/api/monitor/usage/quota/limit'): ProviderRequest {
+  return { method: 'GET', url };
 }
 
 function qwenRequest(): ProviderRequest {
@@ -53,9 +49,7 @@ describe('AllowlistNetworkClient — admission', () => {
     expect(transport.requests).toHaveLength(1);
     const sent = transport.requests[0]!;
     expect(sent.method).toBe('GET');
-    expect(sent.url).toBe(
-      'https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=2026-08&pageNum=1&pageSize=20',
-    );
+    expect(sent.url).toBe('https://api.z.ai/api/monitor/usage/quota/limit');
     // Key placement: the credential appears ONLY in the Authorization header.
     expect(sent.headers).toEqual({ Authorization: `Bearer ${ZAI_CREDENTIAL.token}` });
     expect(sent.url).not.toContain(ZAI_CREDENTIAL.token);
@@ -65,7 +59,16 @@ describe('AllowlistNetworkClient — admission', () => {
     const transport = new RecordingTransport([okResponse]);
     const client = new AllowlistNetworkClient(transport);
 
-    await client.send('zai', zaiRequest('https://open.bigmodel.cn/api/finance/expenseBill/expenseBillList'), ZAI_CREDENTIAL);
+    await client.send('zai', zaiRequest('https://edge.api.z.ai/api/monitor/usage/quota/limit'), ZAI_CREDENTIAL);
+
+    expect(transport.requests).toHaveLength(1);
+  });
+
+  it('admits the second monitor host open.bigmodel.cn (AD-29)', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    await client.send('zai', zaiRequest('https://open.bigmodel.cn/api/monitor/usage/quota/limit'), ZAI_CREDENTIAL);
 
     expect(transport.requests).toHaveLength(1);
   });
@@ -75,15 +78,15 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
   it.each([
     {
       case: 'non-allowlisted host',
-      request: zaiRequest('https://evil.example.com/api/finance/expenseBill/expenseBillList'),
+      request: zaiRequest('https://evil.example.com/api/monitor/usage/quota/limit'),
     },
     {
       case: 'cross-provider host (Kimi host used by ZAI)',
       request: zaiRequest('https://api.moonshot.cn/v1/users/me/balance'),
     },
     {
-      case: 'unverified international variant api.z.ai',
-      request: zaiRequest('https://api.z.ai/api/finance/expenseBill/expenseBillList'),
+      case: 'retired apex bigmodel.cn (AD-29 — expenseBillList is dead)',
+      request: zaiRequest('https://bigmodel.cn/api/finance/expenseBill/expenseBillList'),
     },
   ])('rejects $case before any I/O', async ({ request }) => {
     const transport = new RecordingTransport(); // empty queue: any fetch would throw
@@ -99,7 +102,7 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
     const client = new AllowlistNetworkClient(new RecordingTransport());
     const attempt = client.send(
       'zai',
-      zaiRequest('https://evil.example.com/api/finance/expenseBill/expenseBillList'),
+      zaiRequest('https://evil.example.com/api/monitor/usage/quota/limit'),
       ZAI_CREDENTIAL,
     );
     await expect(attempt).rejects.toMatchObject({
@@ -113,7 +116,7 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
     const client = new AllowlistNetworkClient(transport);
     const smuggled: ProviderRequest = {
       method: 'GET',
-      url: 'https://bigmodel.cn/api/finance/expenseBill/expenseBillList',
+      url: 'https://api.z.ai/api/monitor/usage/quota/limit',
       query: { apikey: ZAI_CREDENTIAL.token },
     };
 
@@ -128,7 +131,7 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
     const client = new AllowlistNetworkClient(transport);
     const smuggled: ProviderRequest = {
       method: 'POST',
-      url: 'https://bigmodel.cn/api/finance/expenseBill/expenseBillList',
+      url: 'https://api.z.ai/api/monitor/usage/quota/limit',
       body: JSON.stringify({ token: ZAI_CREDENTIAL.token }),
     };
 
@@ -139,16 +142,14 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
   });
 });
 
-describe('AllowlistNetworkClient — raw attach (AD-25, ZAI monitor hosts only)', () => {
-  // S1 interim pin: bigmodel.cn is the CURRENT zai allowlist host; slice 2
-  // re-pins these contract tests to api.z.ai when the allowlist swaps.
+describe('AllowlistNetworkClient — raw attach (AD-25, ZAI monitor hosts only; re-pinned to api.z.ai by AD-29)', () => {
   const RAW_CREDENTIAL = { type: 'raw', token: 'zai-monitor-key-7f3d' } as const;
 
-  it('attaches raw credentials verbatim (no Bearer) with Accept-Language on the zai host', async () => {
+  it('attaches raw credentials verbatim (no Bearer) with Accept-Language on the monitor host', async () => {
     const transport = new RecordingTransport([okResponse]);
     const client = new AllowlistNetworkClient(transport);
 
-    const response = await client.send('zai', zaiRequest('https://bigmodel.cn/api/monitor/usage/quota/limit'), RAW_CREDENTIAL);
+    const response = await client.send('zai', zaiRequest('https://api.z.ai/api/monitor/usage/quota/limit'), RAW_CREDENTIAL);
 
     expect(response).toBe(okResponse);
     expect(transport.requests).toHaveLength(1);
@@ -157,6 +158,19 @@ describe('AllowlistNetworkClient — raw attach (AD-25, ZAI monitor hosts only)'
     expect(sent.headers.Authorization).toBe('zai-monitor-key-7f3d');
     expect(sent.headers.Authorization).not.toContain('Bearer');
     expect(sent.headers['Accept-Language']).toBe('zh-CN');
+  });
+
+  it('attaches raw credentials on both monitor hosts (§Raw Authorization)', async () => {
+    const transport = new RecordingTransport([okResponse, okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    await client.send('zai', zaiRequest('https://api.z.ai/api/monitor/usage/quota/limit'), RAW_CREDENTIAL);
+    await client.send('zai', zaiRequest('https://open.bigmodel.cn/api/monitor/usage/quota/limit'), RAW_CREDENTIAL);
+
+    for (const sent of transport.requests) {
+      expect(sent.headers.Authorization).toBe('zai-monitor-key-7f3d'); // raw key, no Bearer
+      expect(sent.headers['Accept-Language']).toBeDefined();
+    }
   });
 
   it('rejects raw attach off the ZAI monitor hosts — zero transport I/O', async () => {
@@ -187,7 +201,7 @@ describe('AllowlistNetworkClient — raw attach (AD-25, ZAI monitor hosts only)'
     const client = new AllowlistNetworkClient(transport);
     const smuggled: ProviderRequest = {
       method: 'GET',
-      url: 'https://bigmodel.cn/api/monitor/usage/quota/limit',
+      url: 'https://api.z.ai/api/monitor/usage/quota/limit',
       query: { apikey: RAW_CREDENTIAL.token },
     };
 

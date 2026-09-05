@@ -1,0 +1,21 @@
+{
+  "code": 200,
+  "msg": "success",
+  "success": true,
+  "data": {
+    "level": "Pro",
+    "tokenLimits": [
+      {
+        "type": "TIME_LIMIT",
+        "unit": 3,
+        "number": 4,
+        "currentValue": 3,
+        "usage": 60,
+        "usageDetails": {
+          "web-search": 2,
+          "deep-research": 1
+        }
+      }
+    ]
+  }
+}

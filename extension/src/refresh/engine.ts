@@ -1,13 +1,12 @@
 // RefreshEngine (AD-2) — the single owner of the pagination loop.
 //
 // The engine drives any Provider through `firstRequest` → `parsePage`,
-// treating the provider's `PageParse.state` as fully opaque (ZAI keeps its
-// billingNo dedupe set + cursor there; OpenAI keeps its cost fold + next_page
-// cursor there). Between consecutive pages it sleeps on the injected Clock
-// for a duration drawn from the provider's declared `interPageDelayMs` window
-// (ZAI only: [500, 2000] ms — exactly N−1 sleeps for N pages). The folded
-// `NormalizedUsage` gets its `fetchedAt` stamped here from the Clock — slice-2
-// providers emit 0 by contract.
+// treating the provider's `PageParse.state` as fully opaque (OpenAI keeps its
+// cost fold + next_page cursor there; the single-shot ZAI monitor provider
+// keeps none). HitO-4 removed the inter-page sleep machinery: no provider
+// declares a politeness window anymore, so `next` requests dispatch back to
+// back. The folded `NormalizedUsage` gets its `fetchedAt` stamped here from
+// the Clock — providers emit 0 by contract.
 //
 // Error policy: a failing provider propagates its error to the CALLER —
 // `refresh()` rejects, and `refreshAll()` reports it through
@@ -28,10 +27,8 @@ export interface RefreshEngineDeps {
   readonly client: AllowlistNetworkClient;
   /** Stored credentials; providers without a key are skipped by `refreshAll`. */
   readonly keys: KeyStore;
-  /** Time source for inter-page sleeps and the `fetchedAt` stamp. */
+  /** Time source for the `fetchedAt` stamp. */
   readonly clock: Clock;
-  /** Jitter draw inside a provider's [min, max] window. Defaults to Math.random. */
-  readonly rng?: () => number;
 }
 
 /** Per-result callbacks `refreshAll` reports in registry order. */
@@ -43,11 +40,7 @@ export interface RefreshCallbacks {
 }
 
 export class RefreshEngine {
-  private readonly rng: () => number;
-
-  constructor(private readonly deps: RefreshEngineDeps) {
-    this.rng = deps.rng ?? Math.random;
-  }
+  constructor(private readonly deps: RefreshEngineDeps) {}
 
   /**
    * Runs ONE provider's full pagination cycle to the folded result. Throws on
@@ -61,7 +54,6 @@ export class RefreshEngine {
       null,
     );
     while (!parse.done) {
-      await this.sleepBetweenPages(provider);
       parse = provider.parsePage(
         (await this.deps.client.send(provider.id, parse.next, credential)).body,
         parse.state,
@@ -92,15 +84,5 @@ export class RefreshEngine {
         await callbacks.onError(id, error);
       }
     }
-  }
-
-  /** Draws the inter-page delay from the provider's declared window, if any. */
-  private async sleepBetweenPages(provider: Provider): Promise<void> {
-    const delay = provider.interPageDelayMs;
-    if (delay === undefined) {
-      return;
-    }
-    const [min, max] = delay;
-    await this.deps.clock.sleep(Math.round(min + this.rng() * (max - min)));
   }
 }

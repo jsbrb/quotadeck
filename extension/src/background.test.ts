@@ -8,12 +8,12 @@ import {
   USAGE_REFRESH_ALARM,
 } from './background';
 import type { Credential, ProviderId } from './core/provider';
-import { cstEpoch } from './core/tier-budget';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { HttpStatusError } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
 import type { BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
+import { writeZaiPlatform } from './storage/zai-platform-store';
 import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
 import { FakeClock } from './testing/fake-clock';
 import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-store';
@@ -22,27 +22,28 @@ import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-sto
 // end-to-end through FakeBrowser-shaped fakes and locally built fixture route
 // tables keyed at CLOCK-DERIVED URLs — the live tick derives every time
 // parameter from the injected clock, so a route only matches when the
-// derivation is exactly right. Zero network: tests that exercise the default
-// transport stub the global fetch; everything else injects FixtureTransport
-// (no network path). No slice-2 file is modified.
+// derivation is exactly right. ZAI routes key at the PLATFORM-SELECTED
+// monitor URL (default api.z.ai; zhipu preference → open.bigmodel.cn), which
+// only matches when the platform store read feeds buildTickQuery. Zero
+// network: tests that exercise the default transport stub the global fetch;
+// everything else injects FixtureTransport (no network path).
 const ALL_KEYS: readonly ProviderId[] = ['zai', 'qwen', 'openai', 'kimi'];
 
-/** 2026-08-30 12:00 +08:00 — the ZAI fixtures' window anchor (2026-08 month). */
+/** 2026-08-30 12:00 +08:00 — a fixed anchor instant for the trailing-24h window. */
 const TICK_NOW = Date.UTC(2026, 7, 30, 4, 0, 0);
 /** OpenAI trailing window derived from TICK_NOW: [end − 24h, end], epoch s. */
 const END_TIME = TICK_NOW / 1000;
 const START_TIME = END_TIME - 86_400;
 
-function zaiPageUrl(pageNum: number): string {
-  return `https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=2026-08&pageNum=${pageNum}&pageSize=2`;
+/** Monitor URL the tick targets for a platform (AD-28/29). */
+function zaiMonitorUrl(platform: 'zai' | 'zhipu' = 'zai'): string {
+  return `https://${platform === 'zhipu' ? 'open.bigmodel.cn' : 'api.z.ai'}/api/monitor/usage/quota/limit`;
 }
 
 /** Route table keyed at the exact URLs the clock-derived tick query produces. */
 function liveRoutes(): Record<string, TransportResponse> {
   return {
-    [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-1'],
-    [zaiPageUrl(2)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-2'],
-    [zaiPageUrl(3)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-3'],
+    [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--pro-plan'],
     [`https://api.openai.com/v1/organization/costs?start_time=${START_TIME}&bucket_width=1d&end_time=${END_TIME}`]:
       FIXTURE_RESPONSES['openai/costs--page-1'],
     [`https://api.openai.com/v1/organization/costs?start_time=${START_TIME}&bucket_width=1d&end_time=${END_TIME}&page=costs_page2_cursor_9f3ab2c1`]:
@@ -96,9 +97,9 @@ function makeApi(): Harness {
   };
 }
 
-/** Typed credentials per provider — qwen keys as an AK/SK pair (AD-17). */
+/** Typed credentials per provider — ZAI keys attach raw, qwen as an AK/SK pair (AD-17/25). */
 const TEST_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
-  zai: { type: 'bearer', token: 'fixture-milestone-key' },
+  zai: { type: 'raw', token: 'fixture-milestone-key' },
   qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tFixtureAccessKey', accessKeySecret: 'fixture-milestone-secret' },
   openai: { type: 'openai-admin-read', token: 'fixture-milestone-key' },
   kimi: { type: 'bearer', token: 'fixture-milestone-key' },
@@ -133,21 +134,38 @@ class SignedQwenRouteTransport implements Transport {
   }
 }
 
+/**
+ * Transport double mirroring FetchTransport's status-first ordering (AD-30):
+ * an error status throws HttpStatusError BEFORE the body is ever read — a
+ * plain-text error body (e.g. the recorded 401) can never cause a parse
+ * failure.
+ */
+class StatusFirstTransport implements Transport {
+  private readonly routes: FixtureTransport;
+
+  constructor(routes: Readonly<Record<string, TransportResponse>>) {
+    this.routes = new FixtureTransport(routes);
+  }
+
+  async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+    const fixture = await this.routes.fetch(request);
+    if (fixture.status < 200 || fixture.status >= 300) {
+      throw new HttpStatusError(fixture.status); // body never touched
+    }
+    return fixture;
+  }
+}
+
 /** Lets fire-and-forget listener promises (alarm ensure/tick) settle. */
 const flushTasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
- * Clock double pinned to ONE instant: unlike FakeClock it never advances on
- * inter-page sleeps, so repeated ticks derive byte-identical request URLs and
- * the route table matches on every cycle.
+ * Clock double pinned to ONE instant: repeated ticks derive byte-identical
+ * request URLs and the route table matches on every cycle.
  */
 class FixedClock extends FakeClock {
   override now(): number {
     return TICK_NOW;
-  }
-
-  override async sleep(): Promise<void> {
-    /* pinned: the engine's inter-page sleep resolves without advancing time */
   }
 }
 
@@ -198,19 +216,22 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
 });
 
 describe('background — buildTickQuery (usage-badge spec §Live refresh per tick)', () => {
-  it('derives billingMonths, now and the trailing-24h OpenAI window from the injected clock', () => {
-    expect(buildTickQuery(new FakeClock(TICK_NOW), { Lite: 4800 })).toEqual({
-      billingMonths: ['2026-08'], // 2026-08-30 12:00 +08:00; window start 07:00 same month
+  it('derives { zaiPlatform, now, trailing-24h OpenAI window } from the injected clock — no months, no tier limits', () => {
+    expect(buildTickQuery(new FakeClock(TICK_NOW), 'zai')).toEqual({
+      zaiPlatform: 'zai',
       now: TICK_NOW,
       startTime: START_TIME,
       endTime: END_TIME,
-      tierLimits: { Lite: 4800 }, // limit-store feed passes through verbatim
     });
   });
 
-  it('queues both billing months when the 5h window straddles a month boundary', () => {
-    const straddleNow = cstEpoch(2026, 9, 1, 2, 0, 0); // window starts 2026-08-31 21:00 +08:00
-    expect(buildTickQuery(new FakeClock(straddleNow), {}).billingMonths).toEqual(['2026-08', '2026-09']);
+  it('carries the stored platform selection through to the query', () => {
+    expect(buildTickQuery(new FakeClock(TICK_NOW), 'zhipu')).toEqual({
+      zaiPlatform: 'zhipu',
+      now: TICK_NOW,
+      startTime: START_TIME,
+      endTime: END_TIME,
+    });
   });
 });
 
@@ -220,18 +241,43 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     await saveKeys(h.local, ALL_KEYS);
     startWorker(h.api, {
       clock: new FixedClock(),
-      rng: () => 0,
       transport: new SignedQwenRouteTransport(liveRoutes()),
     });
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['¥39', '¥100', '$20', '¥89'];
+    const perTick = ['42%', '¥100', '$20', '¥89'];
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(perTick));
 
     h.alarms.fire(USAGE_REFRESH_ALARM); // repeated tick, identical fixture results
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]));
+  });
+
+  it('renders the 5h percentage uncapped — 137 stays 137%', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      transport: new FixtureTransport({ ...liveRoutes(), [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--over-100'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['137%']); // uncapped (AD-26)
+  });
+
+  it('falls back to the plan level when the 5h percentage is null', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      transport: new FixtureTransport({ ...liveRoutes(), [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--null-pct'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['Lite']); // absent pct → level (AD-26)
   });
 
   it('refreshes only keyed providers — unkeyed providers leave the badge untouched', async () => {
@@ -246,18 +292,48 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
   it('dispatches live-shaped requests whose time parameters derive from the clock', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'openai']);
-    // Routes are keyed ONLY at clock-derived URLs: the ZAI pages match only
-    // when billingMonth comes from the clock, the OpenAI pages only when the
-    // start/end window does — any wall-clock or fixture-table query misses.
+    // Routes are keyed ONLY at clock-derived URLs: the ZAI monitor route has
+    // no time parameter (single-shot), the OpenAI pages match only when the
+    // start/end window comes from the clock — any wall-clock or fixture-table
+    // query misses.
     const engine = createRefreshEngine(h.api, {
       clock: new FakeClock(TICK_NOW),
-      rng: () => 0,
       transport: new FixtureTransport(liveRoutes()),
     });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['¥39', '$20']);
+    expect(h.action.badgeTexts).toEqual(['42%', '$20']);
+  });
+
+  it('targets open.bigmodel.cn when the zhipu platform preference is stored (§Platform Binding)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    await writeZaiPlatform(h.local, 'zhipu');
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      // Keyed ONLY at the zhipu base: the tick must read qd:pref:zai-platform
+      // and route through it — a default api.z.ai dispatch misses the route.
+      transport: new FixtureTransport({ [zaiMonitorUrl('zhipu')]: FIXTURE_RESPONSES['zai/monitor--pro-plan'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['42%']);
+  });
+
+  it('defaults to api.z.ai when no platform preference is stored (§Platform Binding)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    // Keyed ONLY at the default base: an absent preference must read 'zai'.
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      transport: new FixtureTransport({ [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--pro-plan'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['42%']);
   });
 });
 
@@ -305,7 +381,6 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
     try {
       const engine = createRefreshEngine(h.api, {
         clock: new FakeClock(TICK_NOW),
-        rng: () => 0,
         transport: new SignedQwenRouteTransport(liveRoutes()),
       });
       await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
@@ -313,7 +388,7 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['¥39', '¥100', '$20', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['42%', '¥100', '$20', '¥89']);
   });
 });
 
@@ -349,16 +424,15 @@ describe('background — Error State (usage-badge spec)', () => {
   it('replaces the marker within the same tick when a later provider succeeds', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
-    // Recorded ZAI failure fixture routed at page 1 — the recorded-flow way to
-    // inject a provider error.
+    // Recorded ZAI failure fixture routed at the monitor URL — the
+    // recorded-flow way to inject a provider error.
     const routes = {
       ...liveRoutes(),
-      [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
+      [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--code-string-200'],
     };
     const engine = createRefreshEngine(h.api, {
       transport: new FixtureTransport(routes),
       clock: new FakeClock(TICK_NOW),
-      rng: () => 0,
     });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
@@ -398,11 +472,11 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
     expect(stored.results.kimi).toEqual({ status: 'error', errorClass: expected });
   });
 
-  it('a body-level provider failure (ZAI numeric code 500) classifies as server', async () => {
+  it('a body-level provider failure (ZAI string "200" code) classifies as server', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai']);
     const engine = createRefreshEngine(h.api, {
-      transport: new FixtureTransport({ [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'] }),
+      transport: new FixtureTransport({ [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--code-string-200'] }),
       clock: new FakeClock(TICK_NOW),
     });
 
@@ -412,21 +486,38 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(stored.results.zai).toEqual({ status: 'error', errorClass: 'server' });
   });
+
+  it('a plain-text 401 body classifies auth with no parse failure (§Status-First Error Classification)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    // The recorded 401 fixture carries a plain-text body; StatusFirstTransport
+    // mirrors FetchTransport (status checked BEFORE any body read), so the
+    // plain-text body can never reach a parser.
+    const engine = createRefreshEngine(h.api, {
+      transport: new StatusFirstTransport({ [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--plain-text-401'] }),
+      clock: new FakeClock(TICK_NOW),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['ERR']);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.zai).toEqual({ status: 'error', errorClass: 'auth' }); // auth — not a parse/server class
+  });
 });
 
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
-  it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage incl. budget', async () => {
+  it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage incl. monitor windows', async () => {
     const h = makeApi();
     await saveKeys(h.local, ALL_KEYS);
     startWorker(h.api, {
       clock: new FixedClock(),
-      rng: () => 0,
       transport: new SignedQwenRouteTransport(liveRoutes()),
     });
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['¥39', '¥100', '$20', '¥89'];
+    const perTick = ['42%', '¥100', '$20', '¥89'];
     h.alarms.fire(USAGE_REFRESH_ALARM);
     // The snapshot write is the tick's LAST operation — once it lands, the
     // badge sequence is final, so both can be asserted deterministically.
@@ -444,16 +535,19 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
       usage: expect.objectContaining({
         providerId: 'zai',
         kind: 'cost',
-        value: 39,
-        currency: 'CNY',
-        tier: 'Lite',
-        // The single cycle write carries the ZAI budget report verbatim (AD-22).
-        budget: {
-          used: 2400,
-          limit: 2400,
-          percent: 100,
-          tier: 'Lite',
-          resetAt: cstEpoch(2026, 8, 30, 17, 0, 0),
+        // The single cycle write carries the monitor windows verbatim (AD-26).
+        windows: {
+          level: 'Pro',
+          fiveHour: { percentage: 42, used: 5040, total: 12_000, resetAt: 1_788_066_000_000 },
+          weekly: { percentage: 17, used: 22_100, total: 130_000, resetAt: 1_788_576_000_000 },
+          mcp: {
+            used: 3,
+            ceiling: 60,
+            tools: [
+              { name: 'deep-research', used: 1 },
+              { name: 'web-search', used: 2 },
+            ],
+          },
         },
       }),
     });
@@ -465,12 +559,12 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
   it('unkeyed providers have no snapshot entry and no credential material reaches the snapshot', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
-    startWorker(h.api, { clock: new FakeClock(TICK_NOW), rng: () => 0, transport: new FixtureTransport(liveRoutes()) });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW), transport: new FixtureTransport(liveRoutes()) });
 
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
 
-    expect(h.action.badgeTexts).toEqual(['¥39', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['42%', '¥89']);
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(Object.keys(stored.results)).toEqual(['zai', 'kimi']); // qwen + openai absent
     expect(JSON.stringify(stored)).not.toContain('fixture-milestone-key');
@@ -481,12 +575,11 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     await saveKeys(h.local, ['zai', 'kimi']);
     const routes = {
       ...liveRoutes(),
-      [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
+      [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--code-string-200'],
     };
     const engine = createRefreshEngine(h.api, {
       transport: new FixtureTransport(routes),
       clock: new FakeClock(TICK_NOW),
-      rng: () => 0,
     });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));

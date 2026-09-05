@@ -34,15 +34,16 @@ describe('manifest host_permissions sync (AD-16)', () => {
     deepStrictEqual(manifest.host_permissions, expectedHostPatterns());
   });
 
-  it('pins the exact four shipped host patterns', () => {
+  it('pins the exact five shipped host patterns (4 → 5 per AD-29)', () => {
     const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as {
       host_permissions?: string[];
     };
     deepStrictEqual(manifest.host_permissions, [
       'https://api.moonshot.cn/*',
       'https://api.openai.com/*',
-      'https://bigmodel.cn/*',
+      'https://api.z.ai/*',
       'https://business.aliyuncs.com/*',
+      'https://open.bigmodel.cn/*',
     ]);
   });
 });

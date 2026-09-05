@@ -14,7 +14,7 @@ export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
 
 /**
  * Credential shapes the four vendors accept:
- * - `bearer` — ZAI and Kimi API tokens (`Authorization: Bearer <key>`).
+ * - `bearer` — Kimi API tokens (`Authorization: Bearer <key>`).
  * - `ak-sk` — Alibaba Cloud AccessKeyId/AccessKeySecret (Qwen via BSS; DashScope
  *   `sk-` keys are rejected — see core/credentials.ts).
  * - `openai-admin-read` — OpenAI admin key with read scope (`sk-admin-...`).
@@ -45,39 +45,36 @@ export class ProviderApiError extends Error {
 }
 
 /**
- * Provider-agnostic refresh query. Fields are optional because providers consume
- * different subsets; each provider validates the fields it requires inside
+ * Provider-agnostic refresh query (provider-framework spec §Provider
+ * Contract). Fields are optional because providers consume different
+ * subsets; each provider validates the fields it requires inside
  * `firstRequest` — invalid parameters throw BEFORE any request is dispatched
- * (provider-framework spec §OpenAI Request Validation).
+ * (provider-framework spec §OpenAI Request Validation). The query MUST NOT
+ * carry tier limits or billing months — hito-4 retired both feeds.
  */
 export interface UsageQuery {
-  /** Billing months for month-scoped endpoints (ZAI): `YYYY-MM`, oldest first (AD-23). */
-  readonly billingMonths?: readonly string[];
   /** ZAI monitor platform selection; absent → `'zai'` (AD-28). */
   readonly zaiPlatform?: ZaiPlatform;
   /** Inclusive range start for cost-window endpoints (OpenAI), epoch seconds. */
   readonly startTime?: number;
   /** Exclusive range end for cost-window endpoints (OpenAI), epoch seconds. */
   readonly endTime?: number;
-  /** Refresh instant from the injected Clock, epoch ms — anchors ZAI's 5h window. */
+  /** Refresh instant from the injected Clock, epoch ms — engine/fetchedAt symmetry. */
   readonly now?: number;
-  /** Tier-limit overrides over the defaults (ZAI; AD-20); absent → defaults. */
-  readonly tierLimits?: Readonly<Record<string, number>>;
 }
 
 /**
  * Opaque pagination state owned by the provider, threaded by the engine across
- * pages (AD-2). The engine never inspects its contents — ZAI keeps its `billingNo`
- * dedupe set, billing-months queue and page cursor here; OpenAI keeps its
- * accumulated cost plus `next_page` cursor here.
+ * pages (AD-2). The engine never inspects its contents — OpenAI keeps its
+ * accumulated cost plus `next_page` cursor here; the single-shot ZAI monitor
+ * provider keeps none.
  */
 export type ProviderState = Readonly<Record<string, unknown>>;
 
 /**
  * Result of parsing one response page:
  * - `done: true` — the refresh completes and emits the folded usage result.
- * - `done: false` — another page is required; `next` is dispatched after the
- *   provider's inter-page delay.
+ * - `done: false` — another page is required; `next` is dispatched next.
  */
 export type PageParse =
   | { readonly done: true; readonly usage: NormalizedUsage }
@@ -87,13 +84,8 @@ export type PageParse =
 export interface Provider {
   readonly id: ProviderId;
   readonly displayName: string;
+  /** The attach-mode declaration (AD-25): how the client attaches the credential. */
   readonly credentialType: CredentialType;
-  /**
-   * Delay window between consecutive pages, `[min, max]` ms. Declared only by
-   * providers whose endpoint documents a politeness window (ZAI: [500, 2000]).
-   * The engine draws the actual duration from the injected Clock (AD-2).
-   */
-  readonly interPageDelayMs?: readonly [min: number, max: number];
   /** Builds the first request; MUST throw on invalid query parameters (no dispatch happens then). */
   firstRequest(query: UsageQuery): ProviderRequest;
   /**

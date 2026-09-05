@@ -14,7 +14,8 @@
   "host_permissions": [
     "https://api.moonshot.cn/*",
     "https://api.openai.com/*",
-    "https://bigmodel.cn/*",
-    "https://business.aliyuncs.com/*"
+    "https://api.z.ai/*",
+    "https://business.aliyuncs.com/*",
+    "https://open.bigmodel.cn/*"
   ]
 }

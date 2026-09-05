@@ -30,31 +30,33 @@ describe('allowlist single-source sync (AD-4)', () => {
     deepStrictEqual(parsed, PROVIDER_ALLOWLIST);
   });
 
-  it('pins: ZAI allowlists bigmodel.cn and NOT the unverified api.z.ai', () => {
-    strictEqual(PROVIDER_ALLOWLIST.zai.hosts.includes('bigmodel.cn'), true);
+  it('pins: ZAI allowlists exactly the two monitor hosts; the apex bigmodel.cn is absent (AD-29)', () => {
+    deepStrictEqual(PROVIDER_ALLOWLIST.zai.hosts, ['api.z.ai', 'open.bigmodel.cn']);
     strictEqual(
-      PROVIDER_ALLOWLIST.zai.hosts.includes('api.z.ai'),
+      PROVIDER_ALLOWLIST.zai.hosts.includes('bigmodel.cn'),
       false,
-      'api.z.ai is unverified and must not appear on the ZAI allowlist (spec §Unverified Variant Excluded)',
+      'the apex bigmodel.cn grant retired with expenseBillList — a permission grant with no caller violates least privilege',
     );
   });
 });
 
-describe('isHostAllowed suffix matching (AD-5)', () => {
-  it('admits the exact host and any subdomain of an allowlisted pattern', () => {
-    strictEqual(isHostAllowed('zai', 'bigmodel.cn'), true);
+describe('isHostAllowed suffix matching (AD-5, re-pinned to the monitor hosts)', () => {
+  it('admits both monitor hosts and subdomains of an allowlisted pattern', () => {
+    strictEqual(isHostAllowed('zai', 'api.z.ai'), true);
     strictEqual(isHostAllowed('zai', 'open.bigmodel.cn'), true);
+    strictEqual(isHostAllowed('zai', 'edge.api.z.ai'), true); // subdomain of a pattern
     strictEqual(isHostAllowed('openai', 'api.openai.com'), true);
   });
 
-  it('rejects lookalikes and unrelated hosts', () => {
+  it('rejects the retired apex and lookalikes', () => {
+    strictEqual(isHostAllowed('zai', 'bigmodel.cn'), false); // apex retired (AD-29)
     strictEqual(isHostAllowed('zai', 'evil.example.com'), false);
     strictEqual(isHostAllowed('zai', 'notbigmodel.cn'), false);
-    strictEqual(isHostAllowed('zai', 'bigmodel.cn.evil.com'), false);
+    strictEqual(isHostAllowed('zai', 'api.z.ai.evil.com'), false);
   });
 
   it('is scoped per provider: another provider’s host is not admitted', () => {
     strictEqual(isHostAllowed('zai', 'api.moonshot.cn'), false);
-    strictEqual(isHostAllowed('kimi', 'bigmodel.cn'), false);
+    strictEqual(isHostAllowed('kimi', 'open.bigmodel.cn'), false); // cross-provider monitor host
   });
 });

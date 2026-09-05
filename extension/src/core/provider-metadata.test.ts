@@ -7,7 +7,7 @@ import { PROVIDER_METADATA } from './provider-metadata';
 describe('PROVIDER_METADATA (AD-24)', () => {
   it('pins the AD-6 order zai, qwen, openai, kimi with credential types', () => {
     expect(PROVIDER_METADATA).toEqual([
-      { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'bearer' },
+      { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'raw' },
       { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
       { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
       { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },

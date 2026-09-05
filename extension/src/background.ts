@@ -9,14 +9,16 @@
 // Behavior (usage-badge spec):
 // - One-Minute Alarm Schedule: `usage-refresh` is registered with a 1-minute
 //   period on install and on startup WHEN ABSENT.
-// - Live refresh per tick: every alarm tick derives the whole UsageQuery from
-//   the injected Clock (buildTickQuery) and refreshes each keyed provider
-//   live; each success updates the badge (registry order, last result wins).
+// - Live refresh per tick: every alarm tick reads the ZAI platform
+//   preference (qd:pref:zai-platform), derives the whole UsageQuery from the
+//   injected Clock + platform (buildTickQuery) and refreshes each keyed
+//   provider live; each success updates the badge (registry order, last
+//   result wins).
 // - Error State + Taxonomy: a failed provider renders ERROR_BADGE_TEXT for
 //   every class; the cycle snapshot carries only its ErrorClass (AD-13/21).
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
-import { billingMonthsFor } from './core/tier-budget';
+import type { ZaiPlatform } from './core/zai-platforms';
 import { ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
 import { AllowlistNetworkClient } from './network/client';
 import { FetchTransport } from './network/fetch-transport';
@@ -26,8 +28,8 @@ import { createDefaultRegistry } from './providers';
 import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
-import { readTierLimits } from './storage/limit-store';
 import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
+import { readZaiPlatform } from './storage/zai-platform-store';
 
 /** The single alarm name the worker owns (usage-badge §One-Minute Alarm Schedule). */
 export const USAGE_REFRESH_ALARM = 'usage-refresh';
@@ -41,21 +43,20 @@ export const REFRESH_PERIOD_MINUTES = 1;
 const OPENAI_WINDOW_SECONDS = 24 * 3_600;
 
 /**
- * Derives the provider-agnostic tick query from the injected clock (spec §Live
- * refresh per tick — no wall-clock reads inside provider logic): the ZAI
- * billing months and window anchor come from +08:00 month arithmetic (AD-20),
- * the OpenAI window is the trailing 24h, and the tier-limit feed from the
- * limit store passes through verbatim.
+ * Derives the provider-agnostic tick query from the injected clock and the
+ * ZAI platform preference (spec §Live refresh per tick — no wall-clock reads
+ * inside provider logic): the selected platform determines the base URL of
+ * every ZAI monitor request (AD-28), and the OpenAI window is the trailing
+ * 24h. The query carries NO billing months and NO tier limits (hito-4).
  */
-export function buildTickQuery(clock: Clock, tierLimits: Readonly<Record<string, number>>): UsageQuery {
+export function buildTickQuery(clock: Clock, zaiPlatform: ZaiPlatform): UsageQuery {
   const now = clock.now();
   const endTime = Math.floor(now / 1000);
   return {
-    billingMonths: billingMonthsFor(now),
+    zaiPlatform,
     now,
     startTime: endTime - OPENAI_WINDOW_SECONDS,
     endTime,
-    tierLimits,
   };
 }
 
@@ -65,8 +66,6 @@ export interface WorkerOptions {
   readonly transport?: Transport;
   /** Defaults to SystemClock. */
   readonly clock?: Clock;
-  /** Jitter draw; defaults to Math.random inside the engine. */
-  readonly rng?: () => number;
 }
 
 /** Builds the production engine graph over the injected browser + options. */
@@ -76,21 +75,20 @@ export function createRefreshEngine(browser: BrowserApi, options: WorkerOptions 
     client: new AllowlistNetworkClient(options.transport ?? new FetchTransport()),
     keys: new KeyStore(browser.storage.local),
     clock: options.clock ?? new SystemClock(),
-    rng: options.rng,
   });
 }
 
 /**
- * One alarm tick: derive the live query from the clock and the tier-limit
- * store, refresh every keyed provider sequentially and render each outcome —
- * usage text per success, ERROR_BADGE_TEXT per failure (replaced by the next
- * success). After the cycle completes, its per-provider outcomes are persisted
- * as ONE `qd:snapshot` write for the popup (AD-13) — usage+budget on the ok
- * arm, the classified ErrorClass on the error arm.
+ * One alarm tick: read the ZAI platform preference, derive the live query
+ * from the clock + platform, refresh every keyed provider sequentially and
+ * render each outcome — usage text per success, ERROR_BADGE_TEXT per failure
+ * (replaced by the next success). After the cycle completes, its per-provider
+ * outcomes are persisted as ONE `qd:snapshot` write for the popup (AD-13) —
+ * usage+windows on the ok arm, the classified ErrorClass on the error arm.
  */
 export async function refreshTick(browser: BrowserApi, engine: RefreshEngine, clock: Clock): Promise<void> {
-  const tierLimits = await readTierLimits(browser.storage.local); // qd:tier-limits override (AD-20)
-  const query = buildTickQuery(clock, tierLimits);
+  const zaiPlatform = await readZaiPlatform(browser.storage.local); // qd:pref:zai-platform (AD-28)
+  const query = buildTickQuery(clock, zaiPlatform);
   const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {};
   await engine.refreshAll(query, {
     onUsage: (usage) => {

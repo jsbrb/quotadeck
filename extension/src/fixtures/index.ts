@@ -3,36 +3,38 @@
 // the unpacked worker without shipping loose files. Keys follow the recorded
 // naming convention `{provider}/{endpoint}--{case}`.
 //
-// NOTE on failure fixtures: ZAI reports failures in the HTTP-200 body (`code`
-// "200" as a string, or a non-200 code), so every recorded response below is
-// status 200 — providers decide success from the body, never the HTTP status.
+// NOTE on failure fixtures: the ZAI monitor API reports body-level failures
+// inside an HTTP-200 envelope (`code` as a string "200", or a non-200 code),
+// so those recorded responses are status 200 — providers decide success from
+// the body, never the HTTP status. Plain-text transport-level failures (401)
+// are recorded with their real status; classification is status-first (AD-30).
 //
-// O3: the ZAI `data.customerId` field and the billingNo epoch embedding are
-// pinned from community evidence; the maintainer live E2E confirms them. No
+// O3: the ZAI monitor payload shape (`data.level`, `TOKENS_LIMIT` unit/number
+// discriminators, `TIME_LIMIT` MCP fields) is pinned from community evidence
+// (zai-org/zai-coding-plugins, ecerutti/glm-usage-monitor,
+// guyinwonder168/opencode-glm-quota); the maintainer live E2E confirms it. No
 // test asserts live semantics beyond fixture-internal consistency.
 import type { TransportResponse } from '../network/transport';
 import kimiOk from './kimi/users-me-balance--ok.json';
 import openaiPage1 from './openai/costs--page-1.json';
 import openaiPage2Final from './openai/costs--page-2-final.json';
 import qwenOk from './qwen/query-account-balance--ok.json';
-import zaiCode500 from './zai/expense-bill-list--code-500.json';
-import zaiCodeString200 from './zai/expense-bill-list--code-string-200.json';
-import zaiPage1 from './zai/expense-bill-list--page-1.json';
-import zaiPage2 from './zai/expense-bill-list--page-2.json';
-import zaiPage3 from './zai/expense-bill-list--page-3.json';
-import zaiStraddleCurr from './zai/expense-bill-list--straddle-curr-month.json';
-import zaiStraddlePrev from './zai/expense-bill-list--straddle-prev-month.json';
-import zaiUnextractable from './zai/expense-bill-list--unextractable-epoch.json';
+import zaiCodeString200 from './zai/monitor--code-string-200.json';
+import zaiFallbackPosition from './zai/monitor--fallback-position.json';
+import zaiMcpOnly from './zai/monitor--mcp-only.json';
+import zaiNullPct from './zai/monitor--null-pct.json';
+import zaiOver100 from './zai/monitor--over-100.json';
+import zaiPlainText401 from './zai/monitor--plain-text-401.json';
+import zaiProPlan from './zai/monitor--pro-plan.json';
 
 const responses = {
-  'zai/expense-bill-list--page-1': { status: 200, body: zaiPage1 },
-  'zai/expense-bill-list--page-2': { status: 200, body: zaiPage2 },
-  'zai/expense-bill-list--page-3': { status: 200, body: zaiPage3 },
-  'zai/expense-bill-list--code-string-200': { status: 200, body: zaiCodeString200 },
-  'zai/expense-bill-list--code-500': { status: 200, body: zaiCode500 },
-  'zai/expense-bill-list--straddle-prev-month': { status: 200, body: zaiStraddlePrev },
-  'zai/expense-bill-list--straddle-curr-month': { status: 200, body: zaiStraddleCurr },
-  'zai/expense-bill-list--unextractable-epoch': { status: 200, body: zaiUnextractable },
+  'zai/monitor--pro-plan': { status: 200, body: zaiProPlan },
+  'zai/monitor--over-100': { status: 200, body: zaiOver100 },
+  'zai/monitor--null-pct': { status: 200, body: zaiNullPct },
+  'zai/monitor--mcp-only': { status: 200, body: zaiMcpOnly },
+  'zai/monitor--fallback-position': { status: 200, body: zaiFallbackPosition },
+  'zai/monitor--code-string-200': { status: 200, body: zaiCodeString200 },
+  'zai/monitor--plain-text-401': { status: 401, body: zaiPlainText401 },
   'qwen/query-account-balance--ok': { status: 200, body: qwenOk },
   'openai/costs--page-1': { status: 200, body: openaiPage1 },
   'openai/costs--page-2-final': { status: 200, body: openaiPage2Final },

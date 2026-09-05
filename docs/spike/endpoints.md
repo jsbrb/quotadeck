@@ -14,23 +14,43 @@ Verification levels:
 - `community` — verified against a community implementation (source cited); no official
   documentation exists for the endpoint.
 
-## ZAI (Zhipu AI Open Platform) — `bigmodel.cn` — verified-community
+## ZAI (Z.AI / Zhipu AI Open Platform) — `api.z.ai` + `open.bigmodel.cn` — verified-community
 
-- Endpoint: `GET https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=YYYY-MM&pageNum=N&pageSize=N`
-- Auth: Bearer token in `Authorization` header.
-- Success condition: **numeric** `code` 200 only. A string `"200"` in the `code` field
-  is a failure — parsing must reject it.
-- Pagination: driven by the `total` record count; collect pages until `total` records
-  are gathered. Community-documented politeness window: **500–2000 ms delay between
-  consecutive pages** (randomized).
-- Dedupe: records are deduplicated by `billingNo` (repeats across pages count once).
-- Cost math: per record `cost = costPrice / 1000 * deductUsage`; page cost is the sum.
-- Tier: label comes from `tokenResourceName`. **Tier limits are NOT exposed by this
-  API** — quota ceilings cannot be derived from this endpoint.
-- Domain: domestic platform `bigmodel.cn`. The international variant `api.z.ai` is
-  **unverified** and is deliberately excluded from the allowlist in this milestone.
-- Source: community project `pxvp2008/areYouOk` (MIT license) — endpoint behavior
-  verified against that implementation.
+- Endpoint: `GET /api/monitor/usage/quota/limit` — single shot: no pagination, no request
+  body, no query parameters.
+- Auth: the stored key verbatim in `Authorization` (NO `Bearer` prefix) plus an
+  `Accept-Language` header (value pinned `zh-CN`; presence is the contract, the value only
+  drives localization).
+- Platform binding: a ZAI credential targets exactly one platform — Z.AI (`api.z.ai`, the
+  default) or ZHIPU (`open.bigmodel.cn`). The selected platform determines the base URL of
+  EVERY monitor request, and keys are platform-bound: a key issued on one platform does not
+  authenticate against the other, so an auth failure on the selected platform surfaces
+  wrong-platform guidance rather than only a generic auth error.
+- Response semantics — success is a **numeric** `code` 200 only; a string `"200"` in the
+  `code` field is a failure (parsing must reject it):
+  - `data.level` — the plan level (e.g. `Pro`).
+  - `data.tokenLimits` entries of type `TOKENS_LIMIT`: the entry with `unit` 3 / `number` 5
+    is the 5-hour window; `unit` 6 / `number` 1 is the weekly window. Entries omitting the
+    discriminators fall back to position: `tokenLimits[0]` → 5h, `tokenLimits[1]` → weekly.
+  - The `TIME_LIMIT` entry is the monthly MCP window: `currentValue` (used), `usage`
+    (ceiling), `usageDetails` (per-tool map). MCP carries no `nextResetTime`, and no
+    percentage or countdown is synthesized for it.
+  - Per window: `percentage` passes through **uncapped** (137 stays 137); `null`/absent
+    percentage reports no percentage and no derived used; when percentage and `total` are
+    both present, used is derived client-side as `round(total × percentage / 100)`;
+    `nextResetTime` is epoch milliseconds carried verbatim as the reset instant (the
+    countdown renders from it at display time).
+  - Errors: 401/403 bodies are plain text — classification is status-first (HTTP status
+    before any body parse), so a plain-text error body can never cause a parse failure.
+- Removed surface: the legacy `bigmodel.cn/api/finance/expenseBill/expenseBillList` billing
+  pagination is dead. The apex `bigmodel.cn` host grant retired with it — a permission
+  grant with no caller violates least privilege.
+- Verification status: honestly **community** — no official documentation page exists for
+  the endpoint; one of the three sources is the vendor org's own repository, which is
+  strong evidence but still community under this doc's taxonomy.
+- Sources (triple, community-verified incl. the official org repo):
+  `zai-org/zai-coding-plugins` (the vendor org's own plugin), `ecerutti/glm-usage-monitor`,
+  `guyinwonder168/opencode-glm-quota`.
 
 ## Qwen (Alibaba Cloud BSS) — `business.aliyuncs.com` — verified-official
 
@@ -76,7 +96,7 @@ AD-5), scoped per provider. This block must stay structurally identical to
 ```json
 {
   "zai": {
-    "hosts": ["bigmodel.cn"],
+    "hosts": ["api.z.ai", "open.bigmodel.cn"],
     "verification": "community"
   },
   "qwen": {

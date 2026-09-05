@@ -1,10 +1,10 @@
 // Per-provider domain allowlist (network-allowlist spec §Per-Provider Domain
-// Allowlist, AD-4/AD-5).
+// Allowlist, AD-4/AD-5/AD-29).
 //
 // SINGLE SOURCE OF TRUTH: the fenced `json` block in `docs/spike/endpoints.md`.
 // This constant is the typed copy; `allowlist.source.test.ts` deep-strict-equals
-// the doc block against it, so any drift (e.g. someone re-adding the unverified
-// international `api.z.ai`) fails the build.
+// the doc block against it, so any drift (e.g. someone re-adding the retired
+// apex `bigmodel.cn`) fails the build.
 import type { ProviderId } from '../core/provider';
 
 /** How the endpoint evidence was verified (see docs/spike/endpoints.md). */
@@ -20,7 +20,7 @@ export type AllowlistConfig = Readonly<Record<ProviderId, AllowlistEntry>>;
 
 /** Typed copy of the doc allowlist — keep structurally identical to the doc block. */
 export const PROVIDER_ALLOWLIST: AllowlistConfig = {
-  zai: { hosts: ['bigmodel.cn'], verification: 'community' },
+  zai: { hosts: ['api.z.ai', 'open.bigmodel.cn'], verification: 'community' },
   qwen: { hosts: ['business.aliyuncs.com'], verification: 'official' },
   openai: { hosts: ['api.openai.com'], verification: 'official' },
   kimi: { hosts: ['api.moonshot.cn'], verification: 'official' },
@@ -28,8 +28,8 @@ export const PROVIDER_ALLOWLIST: AllowlistConfig = {
 
 /**
  * Host-suffix match scoped per provider (AD-5): the host equals a pattern or is
- * a subdomain of it (`open.bigmodel.cn` is admitted under `bigmodel.cn`;
- * `notbigmodel.cn` and `bigmodel.cn.evil.com` are not). A request is checked
+ * a subdomain of it (`edge.api.z.ai` is admitted under `api.z.ai`;
+ * `notbigmodel.cn` and `api.z.ai.evil.com` are not). A request is checked
  * only against its own provider's list, so another provider's allowlisted host
  * is still rejected.
  */

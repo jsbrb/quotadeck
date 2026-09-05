@@ -13,7 +13,7 @@ export interface ProviderMetadata {
 
 /** The four providers in the AD-6 order (refresh and badge order). */
 export const PROVIDER_METADATA: readonly ProviderMetadata[] = [
-  { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'bearer' },
+  { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'raw' },
   { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
   { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
   { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
