@@ -17,8 +17,10 @@ export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
  * - `ak-sk` — Alibaba Cloud AccessKeyId/AccessKeySecret (Qwen via BSS; DashScope
  *   `sk-` keys are rejected — see core/credentials.ts).
  * - `openai-admin-read` — OpenAI admin key with read scope (`sk-admin-...`).
+ * - `raw` — ZAI monitor key, attached verbatim (`Authorization: <key>`, no
+ *   Bearer prefix) on the ZAI monitor hosts only (AD-25).
  */
-export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read';
+export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read' | 'raw';
 
 /**
  * A concrete credential as stored and attached (AD-17). Token credentials
@@ -26,7 +28,7 @@ export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read';
  * feeds the BSS RPC signer — the secret never leaves the signing boundary.
  */
 export type Credential =
-  | { readonly type: 'bearer' | 'openai-admin-read'; readonly token: string }
+  | { readonly type: 'bearer' | 'openai-admin-read' | 'raw'; readonly token: string }
   | { readonly type: 'ak-sk'; readonly accessKeyId: string; readonly accessKeySecret: string };
 
 /**
@@ -50,6 +52,8 @@ export class ProviderApiError extends Error {
 export interface UsageQuery {
   /** Billing months for month-scoped endpoints (ZAI): `YYYY-MM`, oldest first (AD-23). */
   readonly billingMonths?: readonly string[];
+  /** ZAI monitor platform selection; absent → `'zai'` (AD-28). */
+  readonly zaiPlatform?: 'zai' | 'zhipu';
   /** Inclusive range start for cost-window endpoints (OpenAI), epoch seconds. */
   readonly startTime?: number;
   /** Exclusive range end for cost-window endpoints (OpenAI), epoch seconds. */

@@ -139,3 +139,31 @@ describe('KeyStore — qwen AK/SK pair (AD-17)', () => {
     });
   });
 });
+
+describe('KeyStore — raw credentials (monitor attach mode)', () => {
+  let browser: FakeBrowser;
+  let store: KeyStore;
+
+  beforeEach(() => {
+    browser = new FakeBrowser();
+    store = new KeyStore(browser.local);
+  });
+
+  it('round-trips a raw key as the plain-string token path under qd:key:{id}', async () => {
+    await store.saveCredential('zai', { type: 'raw', token: 'zai-raw-monitor-key-9999' });
+
+    expect(await store.readCredential('zai', 'raw')).toEqual({ type: 'raw', token: 'zai-raw-monitor-key-9999' });
+    expect(browser.local.snapshot()).toEqual({ [`${KEY_STORAGE_PREFIX}zai`]: 'zai-raw-monitor-key-9999' });
+  });
+
+  it('masked read treats a raw key like any token: at most 4 trailing characters', async () => {
+    await store.saveCredential('zai', { type: 'raw', token: 'zai-raw-monitor-key-9999' });
+
+    expect(await store.readMaskedCredential('zai', 'raw')).toEqual({ type: 'raw', maskedToken: '••••9999' });
+  });
+
+  it('refuses to store an empty raw key', async () => {
+    await expect(store.saveCredential('zai', { type: 'raw', token: '' })).rejects.toThrow(/empty/i);
+    expect(browser.local.snapshot()).toEqual({});
+  });
+});

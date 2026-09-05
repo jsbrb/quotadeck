@@ -20,8 +20,13 @@ describe('validateCredential', () => {
     expect(validateCredential('openai-admin-read', 'sk-admin-proj-readkey')).toEqual({ ok: true });
   });
 
+  it('accepts a non-empty raw monitor key (ZAI/ZHIPU, attached verbatim)', () => {
+    expect(validateCredential('raw', 'zai-monitor-key-1a2b3c')).toEqual({ ok: true });
+    expect(validateCredential('raw', '1919810123456789.abCdEfSecretPart')).toEqual({ ok: true });
+  });
+
   it('rejects empty or blank credentials for every type', () => {
-    for (const type of ['bearer', 'ak-sk', 'openai-admin-read'] as const) {
+    for (const type of ['bearer', 'ak-sk', 'openai-admin-read', 'raw'] as const) {
       expect(validateCredential(type, '').ok).toBe(false);
       expect(validateCredential(type, '   ').ok).toBe(false);
     }

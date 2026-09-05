@@ -13,6 +13,7 @@ import type { AllowlistNetworkClient } from '../network/client';
 export const TEST_CREDENTIALS: Readonly<Record<CredentialType, Credential>> = {
   bearer: { type: 'bearer', token: 'test-driver-credential' },
   'openai-admin-read': { type: 'openai-admin-read', token: 'test-driver-credential' },
+  raw: { type: 'raw', token: 'test-driver-credential' },
   'ak-sk': {
     type: 'ak-sk',
     accessKeyId: 'LTAI5tTestDriverAK000',

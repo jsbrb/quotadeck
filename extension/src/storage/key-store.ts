@@ -42,7 +42,7 @@ function mask(credential: string): string {
 
 /** Masked display form of a credential: every secret part masked independently. */
 export type MaskedCredential =
-  | { readonly type: 'bearer' | 'openai-admin-read'; readonly maskedToken: string }
+  | { readonly type: 'bearer' | 'openai-admin-read' | 'raw'; readonly maskedToken: string }
   | { readonly type: 'ak-sk'; readonly maskedAccessKeyId: string; readonly maskedAccessKeySecret: string };
 
 /** Stored shape of a qwen AK/SK pair: one JSON object, both parts, one key. */

@@ -6,7 +6,9 @@
 // credential type. The ak-sk type has TWO modes: a legacy single-string check
 // (token-shaped inputs, still used by the transitional popup forms) and the
 // pair mode introduced with live usage — pairs reject empty/missing parts and
-// DashScope `sk-` values in EITHER part.
+// DashScope `sk-` values in EITHER part. The raw type (AD-25, ZAI monitor
+// key) validates through the same string path as any token: non-empty is the
+// only constraint — the client attaches it verbatim on the ZAI monitor hosts.
 import type { CredentialType } from './provider';
 
 export type CredentialValidation =
