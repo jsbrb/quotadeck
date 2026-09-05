@@ -53,16 +53,26 @@ function isLineItem(value: unknown): value is LineItem {
   return typeof item.model === 'string' && typeof item.usageType === 'string' && typeof item.value === 'number';
 }
 
-/** AD-26 shape check: a monitor window requires numeric `total`; the rest is optional numeric. */
+/**
+ * AD-26 shape check (live-pinned 2026-09-05): a window requires at least one
+ * of percentage/total (a real plan-pro TOKENS_LIMIT carries percentage +
+ * resetAt with no total); `used` is valid only alongside both of them.
+ */
 function isUsageWindow(value: unknown): boolean {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
   const window = value as Record<string, unknown>;
+  const percentageValid = window.percentage === undefined || typeof window.percentage === 'number';
+  const totalValid = window.total === undefined || typeof window.total === 'number';
+  const usedValid =
+    window.used === undefined ||
+    (typeof window.used === 'number' && typeof window.percentage === 'number' && typeof window.total === 'number');
   return (
-    typeof window.total === 'number' &&
-    (window.percentage === undefined || typeof window.percentage === 'number') &&
-    (window.used === undefined || typeof window.used === 'number') &&
+    (typeof window.percentage === 'number' || typeof window.total === 'number') &&
+    percentageValid &&
+    totalValid &&
+    usedValid &&
     (window.resetAt === undefined || typeof window.resetAt === 'number')
   );
 }

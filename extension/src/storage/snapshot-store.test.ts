@@ -33,7 +33,8 @@ const zaiMonitorUsage: NormalizedUsage = {
   windows: {
     level: 'Pro',
     fiveHour: { percentage: 137, used: 16_440, total: 12_000, resetAt: FETCHED_AT + 3_600_000 },
-    weekly: { used: 5_040, total: 12_000 },
+    // used implies percentage (parser derives used only when both exist).
+    weekly: { percentage: 42, used: 5_040, total: 12_000 },
     mcp: { used: 3, ceiling: 60, tools: [{ name: 'web-search', used: 2 }, { name: 'code-execution', used: 1 }] },
   },
   fetchedAt: FETCHED_AT,
@@ -124,6 +125,27 @@ describe('SnapshotStore', () => {
     expect(await store.read()).toEqual(snapshot);
   });
 
+  it('a total-less live-shaped window round-trips (percentage-only is valid)', async () => {
+    // Live-pinned plan-pro shape (2026-09-05): a TOKENS_LIMIT window carries
+    // percentage + resetAt with NO total. Valid: at least one of
+    // percentage/total present; used requires both (absent here).
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: {
+            ...zaiMonitorUsage,
+            windows: { level: 'pro', fiveHour: { percentage: 32, resetAt: FETCHED_AT + 3_600_000 } },
+          },
+        },
+      },
+    };
+
+    await store.write(snapshot);
+
+    expect(await store.read()).toEqual(snapshot);
+  });
+
   it('a monitor usage alongside monetary results round-trips together', async () => {
     const snapshot: CycleSnapshot = {
       results: {
@@ -147,6 +169,10 @@ describe('SnapshotStore', () => {
     [
       'fiveHour total is not a number',
       { ...zaiMonitorUsage, value: 39, currency: 'CNY', windows: { ...zaiMonitorUsage.windows!, fiveHour: { total: '12000' } } },
+    ],
+    [
+      'fiveHour has neither percentage nor total',
+      { ...zaiMonitorUsage, value: 39, currency: 'CNY', windows: { ...zaiMonitorUsage.windows!, fiveHour: { resetAt: 1 } } },
     ],
     [
       'fiveHour percentage is not a number',

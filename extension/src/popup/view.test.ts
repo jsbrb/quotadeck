@@ -234,6 +234,27 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     expect(zai).toContain('Weekly: 130000 total');
   });
 
+  it('renders a total-less window (live plan-pro shape) as percentage + countdown only', () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', {
+            kind: 'cost',
+            value: undefined,
+            currency: undefined,
+            windows: { level: 'pro', fiveHour: { percentage: 32, resetAt: NOW_MS + 90 * 60_000 } },
+          }),
+        },
+      },
+    };
+    const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
+
+    expect(zai).toContain('Level: pro');
+    expect(zai).toContain('5h: 32% · Resets in 1h 30m'); // no used/total part — nothing to render
+    expect(zai).not.toContain('undefined'); // the absent total must not leak into text
+  });
+
   it('renders per-model rows for the provider with a breakdown, sorted by model then usageType', () => {
     const html = renderMain(popupState({ snapshot: fullSnapshot }));
     const openai = sectionFor(html, 'openai');

@@ -122,15 +122,20 @@ function compareStrings(a: string, b: string): number {
 /**
  * One monitor window line (AD-26): percentage uncapped (integer display —
  * the model keeps the exact value), used/total (bare total when used is
- * absent), countdown when `resetAt` is present. Absent parts are simply
- * omitted — nothing is synthesized.
+ * absent, nothing when total is absent too — the live plan-pro shape),
+ * countdown when `resetAt` is present. Absent parts are simply omitted —
+ * nothing is synthesized.
  */
 function windowLine(label: string, window: UsageWindow, state: PopupState): string {
   const parts: string[] = [];
   if (window.percentage !== undefined) {
     parts.push(`${Math.round(window.percentage)}%`);
   }
-  parts.push(window.used !== undefined ? `${window.used} / ${window.total}` : `${window.total} total`);
+  if (window.used !== undefined) {
+    parts.push(`${window.used} / ${window.total}`);
+  } else if (window.total !== undefined) {
+    parts.push(`${window.total} total`);
+  }
   if (window.resetAt !== undefined) {
     parts.push(`Resets in ${formatResetCountdown(window.resetAt, state.nowMs)}`);
   }
