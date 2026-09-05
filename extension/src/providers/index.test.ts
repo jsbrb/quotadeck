@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CredentialType, ProviderId } from '../core/provider';
+import { PROVIDER_METADATA } from '../core/provider-metadata';
 import { FIXTURE_RESPONSES } from '../fixtures';
 import { createDefaultRegistry } from './index';
 
@@ -17,6 +18,16 @@ const EXPECTED_CREDENTIALS: Readonly<Record<ProviderId, CredentialType>> = {
 describe('createDefaultRegistry (AD-6)', () => {
   it('registers exactly the four stubs in the fixed order zai, qwen, openai, kimi', () => {
     expect(createDefaultRegistry().ids()).toEqual(['zai', 'qwen', 'openai', 'kimi']);
+  });
+
+  it('is built from PROVIDER_METADATA: ids, displayNames and credential types all match', () => {
+    const registry = createDefaultRegistry();
+    expect(registry.ids()).toEqual(PROVIDER_METADATA.map((entry) => entry.id));
+    for (const entry of PROVIDER_METADATA) {
+      const provider = registry.get(entry.id);
+      expect(provider.displayName).toBe(entry.displayName);
+      expect(provider.credentialType).toBe(entry.credentialType);
+    }
   });
 
   it('resolves every provider id to a contract-compliant provider', () => {
