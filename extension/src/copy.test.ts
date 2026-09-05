@@ -32,4 +32,16 @@ describe('milestone copy (AD-24)', () => {
     expect(readme).toContain('Settings'); // gear-driven key management
     expect(readme).toMatch(/ERR/); // bad keys surface as an error state, honestly stated
   });
+
+  it('the README documents the ZAI monitor surface: windows, MCP, selector, raw auth (AD-26/28)', () => {
+    const readme = read('../../README.md');
+    expect(readme).toContain('monitor'); // the monitor endpoint is the stated ZAI surface
+    expect(readme).toContain('5h'); // the 5h window language
+    expect(readme).toContain('MCP'); // the monthly MCP window
+    expect(readme).toContain('ZHIPU'); // the platform selector
+    expect(readme).toContain('api.z.ai'); // monitor hosts named
+    expect(readme).toContain('open.bigmodel.cn');
+    expect(readme).toContain('five provider hosts'); // host surface grew 4 -> 5, stated honestly
+    expect(readme).toMatch(/raw key|verbatim/i); // raw-auth note: no Bearer on monitor hosts
+  });
 });
