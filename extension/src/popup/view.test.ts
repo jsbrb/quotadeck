@@ -38,6 +38,31 @@ const MONITOR_WINDOWS: MonitorWindows = {
   mcp: { used: 3, ceiling: 60, tools: [{ name: 'web-search', used: 2 }, { name: 'code-execution', used: 1 }] },
 };
 
+/** Last cycle with all four providers ok — the spec's full-render scenario. */
+const FULL_SNAPSHOT: CycleSnapshot = {
+  results: {
+    zai: {
+      status: 'ok',
+      usage: { providerId: 'zai', kind: 'cost', windows: MONITOR_WINDOWS, fetchedAt: NOW_MS },
+    },
+    qwen: { status: 'ok', usage: usage('qwen', { value: 100.28, tier: 'L2' }) },
+    openai: {
+      status: 'ok',
+      usage: usage('openai', {
+        kind: 'cost',
+        value: 20,
+        currency: 'usd',
+        breakdown: [
+          { model: 'gpt-5.3', usageType: 'output_tokens', value: 4.25 },
+          { model: 'gpt-5-mini', usageType: 'input_tokens', value: 3.25 },
+          { model: 'gpt-5.3', usageType: 'input_tokens', value: 12.5 },
+        ],
+      }),
+    },
+    kimi: { status: 'ok', usage: usage('kimi', { value: 88.88 }) },
+  },
+};
+
 function usage(providerId: ProviderId, overrides: Partial<NormalizedUsage> = {}): NormalizedUsage {
   return { providerId, kind: 'balance', value: 100, currency: 'CNY', fetchedAt: NOW_MS, ...overrides };
 }
@@ -133,29 +158,7 @@ describe('renderMain — Settings Gear Surface (popup-ui spec)', () => {
 });
 
 describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
-  const fullSnapshot: CycleSnapshot = {
-    results: {
-      zai: {
-        status: 'ok',
-        usage: { providerId: 'zai', kind: 'cost', windows: MONITOR_WINDOWS, fetchedAt: NOW_MS },
-      },
-      qwen: { status: 'ok', usage: usage('qwen', { value: 100.28, tier: 'L2' }) },
-      openai: {
-        status: 'ok',
-        usage: usage('openai', {
-          kind: 'cost',
-          value: 20,
-          currency: 'usd',
-          breakdown: [
-            { model: 'gpt-5.3', usageType: 'output_tokens', value: 4.25 },
-            { model: 'gpt-5-mini', usageType: 'input_tokens', value: 3.25 },
-            { model: 'gpt-5.3', usageType: 'input_tokens', value: 12.5 },
-          ],
-        }),
-      },
-      kimi: { status: 'ok', usage: usage('kimi', { value: 88.88 }) },
-    },
-  };
+  const fullSnapshot = FULL_SNAPSHOT;
 
   it('renders every provider; monetary providers with value and currency; tier only for the result including one', () => {
     const html = renderMain(popupState({ snapshot: fullSnapshot }));
@@ -177,8 +180,9 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(html, 'zai');
 
     expect(zai).toContain('Level: Pro');
-    expect(zai).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // 137 stays 137 — uncapped
-    expect(zai).toContain('Weekly: 42% · 5040 / 12000');
+    // combined textContent (the countdown span splits the raw string)
+    expect(stripTags(zai)).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // 137 stays 137 — uncapped
+    expect(stripTags(zai)).toContain('Weekly: 42% · 5040 / 12000');
     expect(zai).toContain('MCP: 3 / 60');
     // Per-tool rows sorted by name for determinism (AD-27 ordering, view-side too).
     const codeExecution = zai.indexOf('code-execution · 1');
@@ -255,7 +259,7 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
     expect(zai).toContain('Level: pro');
-    expect(zai).toContain('5h: 32% · Resets in 1h 30m'); // no used/total part — nothing to render
+    expect(stripTags(zai)).toContain('5h: 32% · Resets in 1h 30m'); // no used/total part — nothing to render
     expect(zai).not.toContain('undefined'); // the absent total must not leak into text
   });
 
@@ -326,6 +330,21 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
 
     strictEqual(renderMain(state), renderMain(state));
     strictEqual(renderSettings({ ...state, view: 'settings' }), renderSettings({ ...state, view: 'settings' }));
+  });
+
+  it('renders bars and guidance deterministically — repeated renders stay byte-identical', () => {
+    const state = popupState({
+      snapshot: fullSnapshot, // bars via the monitor windows
+      guidance: { kimi: 'Credential must not be empty.' },
+      keyStates: { qwen: { type: 'ak-sk', maskedAccessKeyId: '••••AK00', maskedAccessKeySecret: '••••0000' } },
+    });
+    const mainA = renderMain(state);
+    const settingsA = renderSettings({ ...state, view: 'settings' });
+
+    strictEqual(mainA, renderMain(state));
+    strictEqual(settingsA, renderSettings({ ...state, view: 'settings' }));
+    expect(mainA).toContain('class="bar '); // the compared output actually carries bars…
+    expect(settingsA).toContain('Credential must not be empty.'); // …and guidance
   });
 });
 
@@ -551,5 +570,48 @@ describe('renderMain — MCP bar from used/ceiling (popup-ui spec)', () => {
     expect(zai).toContain(
       '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>',
     );
+  });
+});
+
+describe('renderMain — provider cards (popup-ui spec)', () => {
+  it('wraps every provider section in the same card structure', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    for (const provider of PROVIDERS) {
+      expect(html).toContain(`<section class="provider card" data-provider="${provider.id}">`);
+    }
+  });
+
+  it('settings sections share the card structure for the same visual language', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+
+    expect(html).toContain('<section class="provider card" data-provider="kimi">');
+  });
+
+  it('renders a failed provider as an error card in the same wrapper (structurally consistent)', () => {
+    const snapshot: CycleSnapshot = { results: { qwen: { status: 'error', errorClass: 'auth' } } };
+    const html = renderMain(popupState({ snapshot }));
+
+    expect(html).toContain('<section class="provider card" data-provider="qwen">');
+    const qwen = sectionFor(html, 'qwen');
+    expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)</h2>');
+    expect(qwen).toContain('Auth failed'); // per-class label inside the card
+  });
+});
+
+describe('renderMain — ZAI budget block (popup-ui spec)', () => {
+  it('renders level, uncapped percentage with used/total, a distinct countdown element, weekly bar and MCP rows', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+
+    expect(zai).toContain('Level: Pro');
+    // Combined textContent is byte-preserved…
+    expect(stripTags(zai)).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // 137 stays 137 — uncapped
+    // …while the countdown renders as a distinct, prominent element.
+    expect(zai).toContain('Resets in <span class="countdown">1h 30m</span>');
+    // One bar per window: 5h 137% → red (fill capped), weekly 42% → green.
+    expect(zai).toContain('<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>');
+    expect(zai).toContain('<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div></div>');
+    expect(zai).toContain('MCP: 3 / 60');
+    expect(zai).toContain('web-search · 2'); // per-tool rows
   });
 });

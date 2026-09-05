@@ -164,7 +164,10 @@ function windowLine(label: string, window: UsageWindow, state: PopupState): stri
     parts.push(`${window.total} total`);
   }
   if (window.resetAt !== undefined) {
-    parts.push(`Resets in ${formatResetCountdown(window.resetAt, state.nowMs)}`);
+    // Prominent countdown (popup-ui §Provider List Rendering): a distinct
+    // inline element inside the line — the combined textContent of the <p>
+    // is unchanged, so pinned combined-text assertions keep holding.
+    parts.push(`Resets in <span class="countdown">${formatResetCountdown(window.resetAt, state.nowMs)}</span>`);
   }
   const line = `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
   return window.percentage === undefined ? line : line + bar(thresholdBand(window.percentage), window.percentage);
@@ -215,7 +218,9 @@ function modelRows(usage: NormalizedUsage): string {
 
 function providerMainSection(provider: PopupProvider, state: PopupState): string {
   const entry = state.snapshot?.results[provider.id];
-  const parts: string[] = [`<section class="provider" data-provider="${provider.id}">`];
+  // Card wrapper (popup-ui §Provider List Rendering): one card per provider —
+  // ok results and error cards share the same structure.
+  const parts: string[] = [`<section class="provider card" data-provider="${provider.id}">`];
   parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}</h2>`);
   if (entry === undefined) {
     parts.push('<p class="no-cycle">No cycle data yet</p>');
@@ -294,7 +299,7 @@ function platformSelector(state: PopupState): string {
 function providerSettingsSection(provider: PopupProvider, state: PopupState): string {
   const masked = state.keyStates[provider.id];
   const guidance = state.guidance[provider.id];
-  const parts: string[] = [`<section class="provider" data-provider="${provider.id}">`];
+  const parts: string[] = [`<section class="provider card" data-provider="${provider.id}">`];
   parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}</h2>`);
   if (masked !== undefined) {
     parts.push(...maskedLines(masked));
