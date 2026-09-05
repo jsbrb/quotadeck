@@ -1,16 +1,21 @@
 // Transport port + fixture-backed implementation (network-allowlist spec
 // §Injectable Transport; AD-8).
 //
-// The Transport is the single I/O seam of the whole extension: tests and the
-// shipped worker both use fixture-backed transports in this milestone, and the
-// future live milestone is a transport swap — no other layer changes.
+// The Transport is the single I/O seam of the whole extension: the production
+// worker binds `FetchTransport` (network/fetch-transport.ts, real `fetch`);
+// `FixtureTransport` below is a TEST DOUBLE — the hermetic suites and the
+// unpacked-load E2E use it to replay recorded responses with no network path.
+//
+// Note on headers (AD-19): `AuthorizedRequest.headers` is set exclusively by
+// `AllowlistNetworkClient` and may be `{}` — the qwen ak-sk path carries auth
+// as the signed BSS query, not as a header.
 
 /** A request after `AllowlistNetworkClient` attached the Authorization header. */
 export interface AuthorizedRequest {
   readonly method: 'GET' | 'POST';
   /** Full URL including encoded query string. */
   readonly url: string;
-  /** Set exclusively by AllowlistNetworkClient — exactly `Authorization`. */
+  /** Set exclusively by AllowlistNetworkClient — exactly `Authorization`, or `{}` for the signed qwen path. */
   readonly headers: Readonly<Record<string, string>>;
   readonly body?: string;
 }
