@@ -9,21 +9,32 @@
 //   (all key management). The header of each carries the switch — a
 //   `data-action="open-settings"` gear on main, `data-action="back"` on
 //   settings — wired by the controller's click delegation.
-// - Main view: one <section> per provider in PopupState.providers order
+// - Main view: one provider CARD per provider in PopupState.providers order
 //   (PROVIDER_METADATA order in production, AD-6). ZAI renders its monitor
 //   block from `usage.windows` (plan level, 5h/weekly windows with the
 //   percentage uncapped, used/total, countdown via the pure
-//   `formatResetCountdown` from `windows.*.resetAt`, and the monthly MCP
-//   window with per-tool rows); OpenAI renders per-model rows from
-//   `usage.breakdown` sorted by (model, usageType) for determinism; failed
-//   providers render a per-class error label (AD-21), and a ZAI auth failure
-//   additionally surfaces the static wrong-platform guidance (AD-27 —
-//   derived here from (provider, class), never transported in the snapshot).
-//   NO key forms appear in the main view — key state and forms live in
-//   settings only.
-// - Settings view: the ZAI section carries the platform selector (AD-28),
-//   rendered from the pure ZAI_PLATFORMS table with unmasked labels and the
-//   current preference marked `selected`; the controller owns persistence.
+//   `formatResetCountdown` from `windows.*.resetAt` rendered as a distinct
+//   `.countdown` element, and the monthly MCP window with per-tool rows);
+//   every percentage-bearing window and the MCP window carry a
+//   threshold-colored bar (`band-green|band-amber|band-red`, contiguous
+//   bands from the rounded displayed percentage; visual fill caps at 100
+//   while percentage text stays uncapped; MCP fill derives from
+//   used/ceiling — presentation only, never a synthesized percentage);
+//   OpenAI renders per-model rows from `usage.breakdown` sorted by
+//   (model, usageType) for determinism; failed providers render a
+//   per-class error label inside the same card structure (AD-21), and a ZAI
+//   auth failure additionally surfaces the static wrong-platform guidance
+//   (AD-27 — derived here from (provider, class), never transported in the
+//   snapshot). NO key forms appear in the main view — key state and forms
+//   live in settings only.
+// - Settings view: each provider section renders its static SETTINGS_GUIDANCE
+//   copy (popup-ui §Settings Guidance) before its input(s) — key-independent
+//   and distinct from validation errors. The ZAI section carries the
+//   platform selector (AD-28), rendered from the pure ZAI_PLATFORMS table
+//   with unmasked labels and the current preference marked `selected`; the
+//   controller owns persistence.
+// - Both views end with the shared branding footer (popup-ui §Branding
+//   Footer): "Built by The North Code" → https://www.thenorthcode.es/.
 // - Every dynamic string is escaped (AD-3 spirit): provider-sourced levels,
 //   tool names, model names, guidance messages and masked keys all pass
 //   escapeHtml.
@@ -52,6 +63,19 @@ export interface PopupProvider {
 export const ZAI_WRONG_PLATFORM_GUIDANCE =
   'This key may belong to the other platform — check the Z.AI/ZHIPU selection in Settings.';
 
+/**
+ * Static per-provider settings guidance (popup-ui spec §Settings Guidance):
+ * rendered BEFORE each provider's input(s), always present — key-independent
+ * — and distinct from validation errors (`state.guidance`, role="alert").
+ * English copy is normative per the spec table.
+ */
+export const SETTINGS_GUIDANCE: Readonly<Record<ProviderId, string>> = {
+  qwen: 'Use an Alibaba Cloud AccessKey pair — Access Key ID and Access Key Secret — created in the Alibaba Cloud Console under RAM → AccessKey pair. The account needs the RAM permission bss:DescribeAcccount. DashScope sk- keys do not work here.',
+  openai: 'Use an admin API key (sk-admin-, read scope) from your organization settings; regular project keys are rejected.',
+  kimi: 'Use an API key from the Kimi console; CN and international keys are not interchangeable.',
+  zai: 'Use your coding-plan API key — the same key your coding tools use. The platform selector chooses Z.AI (international) or ZHIPU (bigmodel.cn); keys are platform-bound.',
+};
+
 /** Everything a render needs — the controller assembles it from stores. */
 export interface PopupState {
   /** Active view: main consumption view or the settings (gear) surface. */
@@ -77,6 +101,13 @@ const ERROR_CLASS_LABELS: Readonly<Record<ErrorClass, string>> = {
   network: 'Network error',
   unknown: 'Refresh failed',
 };
+
+/**
+ * Branding footer (popup-ui §Branding Footer): shared markup at the end of
+ * both views — a plain anchor suffices per spec.
+ */
+const BRANDING_FOOTER =
+  '<footer class="popup-footer">Built by <a href="https://www.thenorthcode.es/" target="_blank" rel="noreferrer">The North Code</a></footer>';
 
 /** Escapes the HTML-significant characters; defense-in-depth for provider-sourced text. */
 export function escapeHtml(text: string): string {
@@ -253,7 +284,7 @@ export function renderMain(state: PopupState): string {
   const header =
     '<header class="popup-header"><h1>quotadeck</h1>' +
     '<button type="button" class="header-action" data-action="open-settings">Settings</button></header>';
-  return `${header}\n${sections}`;
+  return `${header}\n${sections}\n${BRANDING_FOOTER}`;
 }
 
 /** Masked display lines: one per secret part — both parts for the qwen pair (AD-17). */
@@ -304,6 +335,9 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
   if (masked !== undefined) {
     parts.push(...maskedLines(masked));
   }
+  // Static settings guidance (popup-ui §Settings Guidance): ALWAYS rendered
+  // before the inputs — key-independent — and distinct from validation errors.
+  parts.push(`<p class="settings-guidance">${escapeHtml(SETTINGS_GUIDANCE[provider.id])}</p>`);
   parts.push(
     `<form class="key-form" data-provider="${provider.id}">` +
       credentialInputs(provider) +
@@ -327,5 +361,5 @@ export function renderSettings(state: PopupState): string {
   const header =
     '<header class="popup-header"><h1>Settings</h1>' +
     '<button type="button" class="header-action" data-action="back">Back</button></header>';
-  return `${header}\n${sections}`;
+  return `${header}\n${sections}\n${BRANDING_FOOTER}`;
 }

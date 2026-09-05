@@ -16,6 +16,7 @@ import {
   type PopupState,
   renderMain,
   renderSettings,
+  SETTINGS_GUIDANCE,
   thresholdBand,
   ZAI_WRONG_PLATFORM_GUIDANCE,
 } from './view';
@@ -596,6 +597,100 @@ describe('renderMain — provider cards (popup-ui spec)', () => {
     const qwen = sectionFor(html, 'qwen');
     expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)</h2>');
     expect(qwen).toContain('Auth failed'); // per-class label inside the card
+  });
+});
+
+describe('renderSettings — SETTINGS_GUIDANCE (popup-ui spec §Settings Guidance)', () => {
+  it('exports verbatim per-provider copy covering every element of the spec table', () => {
+    // Qwen: both fields, Alibaba Cloud Console → RAM → AccessKey pair, the
+    // RAM permission, and the DashScope rejection.
+    const qwen = SETTINGS_GUIDANCE.qwen;
+    expect(qwen).toContain('Access Key ID');
+    expect(qwen).toContain('Access Key Secret');
+    expect(qwen).toContain('Alibaba Cloud Console');
+    expect(qwen).toContain('RAM');
+    expect(qwen).toContain('bss:DescribeAcccount');
+    expect(qwen).toContain('DashScope sk- keys do not work');
+
+    // OpenAI: admin key, sk-admin- prefix, read scope, org settings, rejection.
+    const openai = SETTINGS_GUIDANCE.openai;
+    expect(openai).toContain('sk-admin-');
+    expect(openai).toContain('read scope');
+    expect(openai).toContain('organization settings');
+    expect(openai).toContain('project keys are rejected');
+
+    // Kimi: console key; CN and international not interchangeable.
+    const kimi = SETTINGS_GUIDANCE.kimi;
+    expect(kimi).toContain('Kimi console');
+    expect(kimi).toContain('CN');
+    expect(kimi).toContain('international');
+    expect(kimi).toContain('not interchangeable');
+
+    // ZAI: coding-plan key, same as coding tools, selector, platform-bound.
+    const zai = SETTINGS_GUIDANCE.zai;
+    expect(zai).toContain('coding-plan');
+    expect(zai).toContain('coding tools');
+    expect(zai).toContain('Z.AI');
+    expect(zai).toContain('ZHIPU');
+    expect(zai).toContain('bigmodel.cn');
+    expect(zai).toContain('platform-bound');
+  });
+
+  it("renders each provider's FULL guidance copy before its input(s), with or without a stored key", () => {
+    // qwen has NO stored key; openai HAS one — guidance appears in both.
+    const html = renderSettings(
+      popupState({
+        view: 'settings',
+        keyStates: { openai: { type: 'openai-admin-read', maskedToken: '••••1234' } },
+      }),
+    );
+
+    for (const provider of PROVIDERS) {
+      const section = sectionFor(html, provider.id);
+      const guidanceAt = section.indexOf(SETTINGS_GUIDANCE[provider.id]);
+      const formAt = section.indexOf('<form');
+      expect(guidanceAt).toBeGreaterThan(-1); // the full copy renders…
+      expect(guidanceAt).toBeLessThan(formAt); // …before the inputs — key-independent
+    }
+    // Reading order: masked key state first, then the guidance, then the form.
+    const openai = sectionFor(html, 'openai');
+    expect(openai.indexOf('Stored key:')).toBeLessThan(openai.indexOf(SETTINGS_GUIDANCE.openai));
+  });
+
+  it('keeps static guidance and validation errors as separate content (kimi invalid key)', () => {
+    const message = 'Credential must not be empty.';
+    const html = renderSettings(popupState({ view: 'settings', guidance: { kimi: message } }));
+    const kimi = sectionFor(html, 'kimi');
+
+    expect(kimi).toContain('<p class="settings-guidance">'); // static guidance…
+    expect(kimi).toContain(SETTINGS_GUIDANCE.kimi); // …full copy
+    expect(kimi).toContain(`<p class="guidance" role="alert">${message}</p>`); // …and the validation error, separate
+  });
+});
+
+describe('Branding footer (popup-ui spec §Branding Footer)', () => {
+  const EXPECTED_FOOTER =
+    '<footer class="popup-footer">Built by <a href="https://www.thenorthcode.es/" target="_blank" rel="noreferrer">The North Code</a></footer>';
+
+  const extractFooter = (html: string): string =>
+    html.slice(html.indexOf('<footer'), html.indexOf('</footer>') + '</footer>'.length);
+
+  it('ends both views with the credit: Built by The North Code → thenorthcode.es', () => {
+    for (const html of [renderMain(popupState()), renderSettings(popupState({ view: 'settings' }))]) {
+      expect(html).toContain('Built by <a href="https://www.thenorthcode.es/"');
+      expect(html).toContain('>The North Code</a>');
+    }
+  });
+
+  it('renders an identical footer across renders and views of the same state', () => {
+    const mainA = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+    const mainB = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    strictEqual(mainA, mainB); // determinism carries the footer
+    expect(extractFooter(mainA)).toBe(EXPECTED_FOOTER);
+    expect(extractFooter(renderSettings(popupState({ view: 'settings', snapshot: FULL_SNAPSHOT })))).toBe(
+      EXPECTED_FOOTER,
+    );
   });
 });
 
