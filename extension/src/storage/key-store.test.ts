@@ -68,3 +68,87 @@ describe('KeyStore', () => {
     expect(browser.local.snapshot()).toEqual({});
   });
 });
+
+describe('KeyStore — credential-aware surface (AD-17)', () => {
+  let browser: FakeBrowser;
+  let store: KeyStore;
+
+  beforeEach(() => {
+    browser = new FakeBrowser();
+    store = new KeyStore(browser.local);
+  });
+
+  const PAIR = { type: 'ak-sk', accessKeyId: 'LTAI5tRoundTripAK00', accessKeySecret: 'RoundTripSecret0000000000000' } as const;
+
+  it('round-trips a qwen AK/SK pair as one JSON object under qd:key:qwen', async () => {
+    await store.saveCredential('qwen', PAIR);
+
+    expect(await store.readCredential('qwen', 'ak-sk')).toEqual(PAIR);
+    expect(browser.local.snapshot()).toEqual({
+      [`${KEY_STORAGE_PREFIX}qwen`]: { accessKeyId: 'LTAI5tRoundTripAK00', accessKeySecret: 'RoundTripSecret0000000000000' },
+    });
+  });
+
+  it('masks each pair part independently, revealing at most 4 suffix characters per part', async () => {
+    await store.saveCredential('qwen', PAIR);
+
+    const masked = await store.readMaskedCredential('qwen', 'ak-sk');
+    expect(masked).toEqual({
+      type: 'ak-sk',
+      maskedAccessKeyId: '••••AK00',
+      maskedAccessKeySecret: '••••0000',
+    });
+    const rendered = JSON.stringify(masked);
+    expect(rendered).not.toContain(PAIR.accessKeyId);
+    expect(rendered).not.toContain(PAIR.accessKeySecret);
+  });
+
+  it('revoking the qwen credential removes both parts atomically; other providers stay readable', async () => {
+    await store.saveCredential('qwen', PAIR);
+    await store.saveCredential('kimi', { type: 'bearer', token: 'kimi-token-abcdef' });
+
+    await store.revokeCredential('qwen');
+
+    expect(await store.readCredential('qwen', 'ak-sk')).toBeUndefined();
+    expect(await store.readMaskedCredential('qwen', 'ak-sk')).toBeUndefined();
+    expect(await store.readCredential('kimi', 'bearer')).toEqual({ type: 'bearer', token: 'kimi-token-abcdef' });
+  });
+
+  it('a legacy hito-2 plain string under qd:key:qwen reads as no credential (AD-17 migration)', async () => {
+    await browser.local.set({ [`${KEY_STORAGE_PREFIX}qwen`]: 'legacy-hito2-string-key' });
+
+    expect(await store.readCredential('qwen', 'ak-sk')).toBeUndefined();
+    expect(await store.readMaskedCredential('qwen', 'ak-sk')).toBeUndefined();
+  });
+
+  it('token providers keep plain-string bytes — save/read round-trip is byte-identical', async () => {
+    await store.saveCredential('zai', { type: 'bearer', token: 'zai-bytes-token-1234' });
+    await store.saveCredential('openai', { type: 'openai-admin-read', token: 'sk-admin-bytes-5678' });
+
+    expect(browser.local.snapshot()).toEqual({
+      [`${KEY_STORAGE_PREFIX}zai`]: 'zai-bytes-token-1234',
+      [`${KEY_STORAGE_PREFIX}openai`]: 'sk-admin-bytes-5678',
+    });
+    expect(await store.readCredential('zai', 'bearer')).toEqual({ type: 'bearer', token: 'zai-bytes-token-1234' });
+    expect(await store.readCredential('openai', 'openai-admin-read')).toEqual({
+      type: 'openai-admin-read',
+      token: 'sk-admin-bytes-5678',
+    });
+  });
+
+  it('masks token credentials on the display path like the legacy surface', async () => {
+    await store.saveCredential('kimi', { type: 'bearer', token: 'kimi-mask-me-9999xyz' });
+    expect(await store.readMaskedCredential('kimi', 'bearer')).toEqual({
+      type: 'bearer',
+      maskedToken: '••••9xyz',
+    });
+  });
+
+  it('refuses to store an empty token or empty pair parts', async () => {
+    await expect(store.saveCredential('zai', { type: 'bearer', token: '' })).rejects.toThrow(/empty/i);
+    await expect(
+      store.saveCredential('qwen', { type: 'ak-sk', accessKeyId: '', accessKeySecret: 'x' }),
+    ).rejects.toThrow(/empty/i);
+    expect(browser.local.snapshot()).toEqual({});
+  });
+});

@@ -13,7 +13,7 @@
 //
 // The area is injected (AD-1): in production `platform/browser-api.ts` passes
 // `chrome.storage.local`; tests pass the in-memory fake from src/testing/.
-import type { ProviderId } from '../core/provider';
+import type { Credential, CredentialType, ProviderId } from '../core/provider';
 
 /**
  * Minimal structural port over a `chrome.storage` area (promise-based, MV3
@@ -38,6 +38,25 @@ function mask(credential: string): string {
     return '••••';
   }
   return `••••${credential.slice(-MASK_SUFFIX_LENGTH)}`;
+}
+
+/** Masked display form of a credential: every secret part masked independently. */
+export type MaskedCredential =
+  | { readonly type: 'bearer' | 'openai-admin-read'; readonly maskedToken: string }
+  | { readonly type: 'ak-sk'; readonly maskedAccessKeyId: string; readonly maskedAccessKeySecret: string };
+
+/** Stored shape of a qwen AK/SK pair: one JSON object, both parts, one key. */
+interface StoredPair {
+  readonly accessKeyId: string;
+  readonly accessKeySecret: string;
+}
+
+function isStoredPair(value: unknown): value is StoredPair {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const pair = value as Record<string, unknown>;
+  return typeof pair.accessKeyId === 'string' && typeof pair.accessKeySecret === 'string';
 }
 
 export class KeyStore {
@@ -74,6 +93,66 @@ export class KeyStore {
 
   /** Removes the stored key; subsequent reads report absence. */
   async revokeKey(providerId: ProviderId): Promise<void> {
+    await this.local.remove(this.storageKey(providerId));
+  }
+
+  // --- Credential-aware surface (AD-17) -----------------------------------
+  // Token credentials keep today's plain-string bytes; the qwen pair persists
+  // as ONE JSON object under the SAME qd:key:qwen key, so revoking the single
+  // key removes both parts atomically. The legacy string surface above stays
+  // only for the transitional popup forms and leaves with the settings view.
+
+  /** Persists a typed credential; refuses empty token or empty pair parts. */
+  async saveCredential(providerId: ProviderId, credential: Credential): Promise<void> {
+    const empty = credential.type === 'ak-sk'
+      ? credential.accessKeyId.length === 0 || credential.accessKeySecret.length === 0
+      : credential.token.length === 0;
+    if (empty) {
+      throw new Error(`Refusing to store an empty credential for provider ${providerId}`);
+    }
+    const value = credential.type === 'ak-sk'
+      ? { accessKeyId: credential.accessKeyId, accessKeySecret: credential.accessKeySecret }
+      : credential.token;
+    await this.local.set({ [this.storageKey(providerId)]: value });
+  }
+
+  /**
+   * Type-aware read for the authentication path. A legacy plain string under
+   * `qd:key:qwen` (hito-2) is NOT a pair — it reads as `undefined` and the
+   * user re-enters the credential; no unparseable value reaches the signer.
+   */
+  async readCredential(providerId: ProviderId, type: CredentialType): Promise<Credential | undefined> {
+    const key = this.storageKey(providerId);
+    const value = (await this.local.get(key))[key];
+    if (type === 'ak-sk') {
+      return isStoredPair(value)
+        ? { type: 'ak-sk', accessKeyId: value.accessKeyId, accessKeySecret: value.accessKeySecret }
+        : undefined;
+    }
+    return typeof value === 'string' ? { type, token: value } : undefined;
+  }
+
+  /**
+   * Masked display read over the Credential union: each secret part is masked
+   * independently (`••••` + at most 4 trailing characters, MASK_SUFFIX_LENGTH);
+   * the full pair is never exposed through any display path.
+   */
+  async readMaskedCredential(providerId: ProviderId, type: CredentialType): Promise<MaskedCredential | undefined> {
+    const credential = await this.readCredential(providerId, type);
+    if (credential === undefined) {
+      return undefined;
+    }
+    return credential.type === 'ak-sk'
+      ? {
+          type: 'ak-sk',
+          maskedAccessKeyId: mask(credential.accessKeyId),
+          maskedAccessKeySecret: mask(credential.accessKeySecret),
+        }
+      : { type: credential.type, maskedToken: mask(credential.token) };
+  }
+
+  /** Removes the stored credential — for a pair, both parts atomically. */
+  async revokeCredential(providerId: ProviderId): Promise<void> {
     await this.local.remove(this.storageKey(providerId));
   }
 }
