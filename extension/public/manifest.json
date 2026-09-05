@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "description": "Provider usage and balance badge (fixture-only milestone)",
   "action": {
-    "default_title": "quotadeck"
+    "default_title": "quotadeck",
+    "default_popup": "popup.html"
   },
   "background": {
     "service_worker": "background.js"

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>quotadeck</title>
+    <!--
+      Static shell (AD-14): MV3 extension-page CSP (script-src 'self') forbids
+      inline scripts and inline event-handler attributes, so ALL behavior lives
+      in the bundled popup.js below; the inline <style> element is CSP-legal.
+    -->
+    <style>
+      body {
+        font: 13px system-ui, sans-serif;
+        margin: 12px;
+        min-width: 300px;
+      }
+      h1 {
+        font-size: 15px;
+        margin: 0 0 8px;
+      }
+      .provider {
+        border-top: 1px solid #e0e0e0;
+        padding: 8px 0 4px;
+      }
+      .provider-name {
+        font-size: 13px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .usage {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 4px;
+      }
+      .refresh-error,
+      .guidance {
+        color: #c62828;
+        margin: 0 0 4px;
+      }
+      .tier,
+      .no-cycle,
+      .key-state {
+        color: #555;
+        margin: 0 0 4px;
+      }
+      .key-form {
+        display: flex;
+        gap: 4px;
+        margin: 4px 0;
+      }
+      .key-form input {
+        flex: 1;
+        min-width: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script src="popup.js"></script>
+  </body>
+</html>
