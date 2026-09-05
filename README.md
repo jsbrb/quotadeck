@@ -116,3 +116,7 @@ Run from the repository root:
 - [`openspec/`](openspec/) — specifications, change proposals, designs and
   task ledgers (spec-driven workflow).
 - [`LICENSE`](LICENSE) — MIT.
+
+---
+
+Built by [The North Code](https://www.thenorthcode.es/).
