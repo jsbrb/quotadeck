@@ -9,7 +9,8 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": ["chrome", "node"]
   },
   "include": ["src", "vitest.config.ts"]
 }
