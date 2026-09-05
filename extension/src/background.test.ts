@@ -8,7 +8,9 @@ import {
   USAGE_REFRESH_ALARM,
 } from './background';
 import type { Credential, ProviderId } from './core/provider';
+import { cstEpoch } from './core/tier-budget';
 import { FIXTURE_RESPONSES } from './fixtures';
+import { HttpStatusError } from './network/fetch-transport';
 import type { AuthorizedRequest, Transport, TransportResponse } from './network/transport';
 import { FixtureTransport } from './network/transport';
 import type { BrowserApi } from './platform/browser-api';
@@ -247,6 +249,53 @@ describe('background — No Live Calls in Milestone (usage-badge spec)', () => {
   });
 });
 
+describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
+  /** Transport double failing every dispatch with a configured error. */
+  class FailingTransport implements Transport {
+    constructor(private readonly error: Error) {}
+
+    async fetch(_request: AuthorizedRequest): Promise<TransportResponse> {
+      throw this.error;
+    }
+  }
+
+  it.each([
+    ['auth', () => new HttpStatusError(401)],
+    ['rate-limit', () => new HttpStatusError(429)],
+    ['server', () => new HttpStatusError(500)],
+    ['network', () => new TypeError('Failed to fetch')],
+    ['unknown', () => new Error('unmapped failure')],
+  ] as const)('classifies %s: badge ERR and the snapshot entry carries the class', async (expected, makeError) => {
+    const h = makeApi();
+    await saveKeys(h.local, ['kimi']);
+    const engine = createRefreshEngine(h.api, {
+      transport: new FailingTransport(makeError()),
+      clock: new FakeClock(),
+    });
+
+    await refreshTick(h.api, engine);
+
+    expect(h.action.badgeTexts).toEqual(['ERR']); // every class renders the marker
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.kimi).toEqual({ status: 'error', errorClass: expected });
+  });
+
+  it('a body-level provider failure (ZAI numeric code 500) classifies as server', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    const engine = createRefreshEngine(h.api, {
+      transport: new FixtureTransport({ [ZAI_PAGE_1_URL]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'] }),
+      clock: new FakeClock(),
+    });
+
+    await refreshTick(h.api, engine);
+
+    expect(h.action.badgeTexts).toEqual(['ERR']);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.zai).toEqual({ status: 'error', errorClass: 'server' });
+  });
+});
+
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
   it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage, badge texts unchanged', async () => {
     const h = makeApi();
@@ -276,6 +325,14 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
         value: 39,
         currency: 'CNY',
         tier: 'Lite',
+        // The single cycle write carries the ZAI budget report verbatim (AD-22).
+        budget: {
+          used: 2400,
+          limit: 2400,
+          percent: 100,
+          tier: 'Lite',
+          resetAt: cstEpoch(2026, 8, 30, 17, 0, 0),
+        },
       }),
     });
     expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 100.28, currency: 'CNY' }) });
@@ -314,7 +371,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
 
     expect(h.action.badgeTexts).toEqual(['ERR', '¥89']); // usage-badge behavior, byte-identical
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    expect(stored.results.zai).toEqual({ status: 'error' }); // no payload (AD-13)
+    expect(stored.results.zai).toEqual({ status: 'error', errorClass: 'server' }); // class only (AD-13/21)
     expect(stored.results.kimi).toMatchObject({ status: 'ok' });
   });
 });

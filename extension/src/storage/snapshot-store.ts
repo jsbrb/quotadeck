@@ -6,18 +6,23 @@
 //   in the injected `chrome.storage.local` area under the single key
 //   `qd:snapshot`. One `write` per completed cycle keeps cycle semantics
 //   atomic — a reader never observes half a cycle (AD-10).
-// - Error entries carry NO payload (AD-13): the worker drops the thrown value,
-//   and nothing here can reintroduce it.
+// - Error entries carry ONLY their taxonomy class (AD-13/21): the worker
+//   drops the thrown value, and nothing here can reintroduce it.
 // - The snapshot types contain no credential field (AD-15) — key material has
 //   exactly one home (KeyStore, `qd:key:{id}`), so it cannot leak through
 //   this wrapper.
 // - `read` shape-validates stored bytes: anything that is not a CycleSnapshot
 //   reads as `undefined` ("no cycle yet"), never as garbage for the popup.
+//   Error entries require a valid `errorClass` (AD-21) and ok entries have
+//   their `budget` validated when present (AD-22) — a pre-hitó-3 error entry
+//   without a class therefore reads as "no cycle yet" until the next tick
+//   (≤1 min) rewrites it (transient by design).
 //
 // The area is injected (AD-1/AD-12): production passes `BrowserApi.storage.local`
 // (platform/browser-api.ts); tests pass the in-memory fake from src/testing/.
 import type { ProviderId } from '../core/provider';
-import type { LineItem, NormalizedUsage } from '../core/usage';
+import type { ErrorClass } from '../refresh/error-taxonomy';
+import type { BudgetReport, LineItem, NormalizedUsage } from '../core/usage';
 import type { StorageArea } from './key-store';
 
 /** Storage key for the last completed cycle snapshot. */
@@ -26,7 +31,7 @@ export const SNAPSHOT_STORAGE_KEY = 'qd:snapshot';
 /** One provider's outcome in the last completed cycle. */
 export type ProviderSnapshotEntry =
   | { readonly status: 'ok'; readonly usage: NormalizedUsage }
-  | { readonly status: 'error' }; // no payload by design (AD-13)
+  | { readonly status: 'error'; readonly errorClass: ErrorClass }; // class only (AD-13/21)
 
 /**
  * The last completed refresh cycle: one entry per provider that had a stored
@@ -37,12 +42,28 @@ export interface CycleSnapshot {
   readonly results: Readonly<Partial<Record<ProviderId, ProviderSnapshotEntry>>>;
 }
 
+const ERROR_CLASSES: readonly ErrorClass[] = ['auth', 'rate-limit', 'server', 'network', 'unknown'];
+
 function isLineItem(value: unknown): value is LineItem {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
   const item = value as Record<string, unknown>;
   return typeof item.model === 'string' && typeof item.usageType === 'string' && typeof item.value === 'number';
+}
+
+function isBudgetReport(value: unknown): value is BudgetReport {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const report = value as Record<string, unknown>;
+  return (
+    typeof report.used === 'number' &&
+    (report.limit === undefined || typeof report.limit === 'number') &&
+    (report.percent === undefined || typeof report.percent === 'number') &&
+    (report.tier === undefined || typeof report.tier === 'string') &&
+    (report.resetAt === undefined || typeof report.resetAt === 'number')
+  );
 }
 
 function isNormalizedUsage(value: unknown): value is NormalizedUsage {
@@ -57,6 +78,7 @@ function isNormalizedUsage(value: unknown): value is NormalizedUsage {
     typeof usage.currency === 'string' &&
     (usage.tier === undefined || typeof usage.tier === 'string') &&
     (usage.breakdown === undefined || (Array.isArray(usage.breakdown) && usage.breakdown.every(isLineItem))) &&
+    (usage.budget === undefined || isBudgetReport(usage.budget)) &&
     typeof usage.fetchedAt === 'number'
   );
 }
@@ -67,7 +89,7 @@ function isProviderSnapshotEntry(value: unknown): value is ProviderSnapshotEntry
   }
   const entry = value as Record<string, unknown>;
   if (entry.status === 'error') {
-    return true;
+    return typeof entry.errorClass === 'string' && ERROR_CLASSES.includes(entry.errorClass as ErrorClass);
   }
   return entry.status === 'ok' && isNormalizedUsage(entry.usage);
 }

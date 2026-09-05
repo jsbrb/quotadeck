@@ -24,6 +24,7 @@ import { AllowlistNetworkClient } from './network/client';
 import { FixtureTransport, type Transport, type TransportResponse } from './network/transport';
 import { ChromeBrowserApi, type BrowserApi } from './platform/browser-api';
 import { createDefaultRegistry } from './providers';
+import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
 import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
@@ -110,9 +111,10 @@ export async function refreshTick(browser: BrowserApi, engine: RefreshEngine): P
       results[usage.providerId] = { status: 'ok', usage };
       browser.action.setBadgeText({ text: formatBadgeText(usage) });
     },
-    onError: (providerId, _error) => {
-      // AD-13: the thrown value is dropped — error entries carry no payload.
-      results[providerId] = { status: 'error' };
+    onError: (providerId, error) => {
+      // AD-13/21: the thrown value is dropped — only its taxonomy class
+      // survives into the snapshot, and the badge shows ERR for every class.
+      results[providerId] = { status: 'error', errorClass: classifyRefreshError(error) };
       browser.action.setBadgeText({ text: ERROR_BADGE_TEXT });
     },
   });

@@ -61,7 +61,7 @@ const LAST_CYCLE: CycleSnapshot = {
       status: 'ok',
       usage: { providerId: 'zai', kind: 'cost', value: 39, currency: 'CNY', tier: 'GLM-4.5-Air', fetchedAt: 1_754_000_000_000 },
     },
-    qwen: { status: 'error' },
+    qwen: { status: 'error', errorClass: 'auth' },
     openai: {
       status: 'ok',
       usage: { providerId: 'openai', kind: 'cost', value: 20, currency: 'usd', fetchedAt: 1_754_000_000_000 },
