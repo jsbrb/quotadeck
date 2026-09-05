@@ -13,9 +13,11 @@ import { QWEN_AK_SK_GUIDANCE } from '../core/credentials';
 import type { ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
+import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
 import { type CycleSnapshot, SnapshotStore } from '../storage/snapshot-store';
 import { FakeBrowser, type FakeStorageArea } from '../testing/fake-browser';
 import { startPopup } from './controller';
+import { ZAI_WRONG_PLATFORM_GUIDANCE } from './view';
 
 const storageKey = (id: ProviderId): string => `${KEY_STORAGE_PREFIX}${id}`;
 
@@ -275,6 +277,91 @@ describe('controller — Key Addition with Validation, inside the gear (popup-ui
       accessKeyId: 'LTAI5tEnterAccessKeyId',
       accessKeySecret: 'EnterPairSecret00000000000000000',
     });
+  });
+});
+
+describe('controller — ZAI Platform Selector (popup-ui spec §ZAI Platform Selector; AD-28)', () => {
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#zai-platform-select')).not.toBeNull());
+  }
+
+  it('defaults to Z.AI with the unmasked label when no preference is stored', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#zai-platform-select')!;
+    expect(select.value).toBe('zai');
+    expect(select.selectedOptions[0]!.textContent).toBe('Z.AI'); // label rendered unmasked
+  });
+
+  it('selecting ZHIPU persists the preference and re-renders the selector on it', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#zai-platform-select')!;
+    select.value = 'zhipu';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(h.local.snapshot()[ZAI_PLATFORM_STORAGE_KEY]).toBe('zhipu'));
+    const reRendered = document.querySelector<HTMLSelectElement>('#zai-platform-select')!;
+    expect(reRendered.value).toBe('zhipu'); // the re-render reflects the persisted platform
+  });
+
+  it('reads the stored preference on load — ZHIPU shows selected after reopening the popup', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [ZAI_PLATFORM_STORAGE_KEY]: 'zhipu' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#zai-platform-select')!.value).toBe('zhipu');
+  });
+
+  it('an invalid stored preference defaults the selector to Z.AI (read-on-load contract)', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [ZAI_PLATFORM_STORAGE_KEY]: 'bigmodel' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#zai-platform-select')!.value).toBe('zai');
+  });
+
+  it('a platform switch never touches the credential namespace', async () => {
+    const h = makePopupHarness();
+    await seedKey(h.local, 'kimi', 'sk-kimi-bbbb2222');
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#zai-platform-select')!;
+    select.value = 'zhipu';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(h.local.snapshot()[ZAI_PLATFORM_STORAGE_KEY]).toBe('zhipu'));
+
+    expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222'); // keys untouched
+    expect(document.body.textContent).toContain('••••2222'); // masked state intact
+  });
+});
+
+describe('controller — wrong-platform guidance (AD-27; popup-ui spec)', () => {
+  it('a ZAI auth-error snapshot surfaces the wrong-platform guidance in the main view', async () => {
+    const h = makePopupHarness();
+    await seedSnapshot(h.local, { results: { zai: { status: 'error', errorClass: 'auth' } } });
+    mountApp();
+    await openPopup(h);
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Auth failed'); // per-class label (AD-21/22)
+    expect(text).toContain(ZAI_WRONG_PLATFORM_GUIDANCE); // static derivation, no payload change (AD-13)
+  });
+
+  it('a ZAI rate-limit error shows the class label only — no guidance', async () => {
+    const h = makePopupHarness();
+    await seedSnapshot(h.local, { results: { zai: { status: 'error', errorClass: 'rate-limit' } } });
+    mountApp();
+    await openPopup(h);
+
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Rate limited');
+    expect(text).not.toContain(ZAI_WRONG_PLATFORM_GUIDANCE);
   });
 });
 

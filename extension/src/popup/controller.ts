@@ -26,6 +26,7 @@ import type { BrowserApi } from '../platform/browser-api';
 import { KeyStore } from '../storage/key-store';
 import type { MaskedCredential } from '../storage/key-store';
 import { SnapshotStore, type CycleSnapshot } from '../storage/snapshot-store';
+import { readZaiPlatform, writeZaiPlatform } from '../storage/zai-platform-store';
 import { renderMain, renderSettings, type PopupProvider, type PopupState } from './view';
 
 export interface PopupDeps {
@@ -52,7 +53,7 @@ export function startPopup(deps: PopupDeps): void {
     snapshot: CycleSnapshot | undefined;
     keyStates: Partial<Record<ProviderId, MaskedCredential | undefined>>;
     guidance: Partial<Record<ProviderId, string>>;
-    /** Selected ZAI monitor platform; rendered by the selector (store wiring lands with it). */
+    /** Selected ZAI monitor platform; read from and persisted to `qd:pref:zai-platform`. */
     zaiPlatform: ZaiPlatform;
   } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {}, zaiPlatform: 'zai' };
 
@@ -177,9 +178,30 @@ export function startPopup(deps: PopupDeps): void {
     }
   });
 
-  // Initial load: last completed cycle + masked key states, then first render.
+  // Platform selector (AD-28): a change-delegated handler on the same root —
+  // the select only exists in the settings view, and persistence goes through
+  // the non-secret `qd:pref:zai-platform` wrapper, never the key namespace.
+  root.addEventListener('change', (event) => {
+    const target = event.target as HTMLElement | null;
+    if (target === null || target.id !== 'zai-platform-select') {
+      return;
+    }
+    const platform = (target as HTMLSelectElement).value;
+    if (platform !== 'zai' && platform !== 'zhipu') {
+      return; // the select offers exactly the union; anything else is ignored
+    }
+    void (async (): Promise<void> => {
+      await writeZaiPlatform(deps.browser.storage.local, platform);
+      state.zaiPlatform = platform;
+      render();
+    })();
+  });
+
+  // Initial load: last completed cycle + masked key states + the platform
+  // preference, then first render.
   void (async (): Promise<void> => {
     state.snapshot = await snapshots.read();
+    state.zaiPlatform = await readZaiPlatform(deps.browser.storage.local);
     for (const { id, credentialType } of providers) {
       state.keyStates[id] = await keys.readMaskedCredential(id, credentialType);
     }
