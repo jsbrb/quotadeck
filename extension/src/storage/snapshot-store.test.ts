@@ -32,6 +32,18 @@ const zaiBudgetUsage: NormalizedUsage = {
   budget: { used: 2400, limit: 2400, percent: 100, tier: 'Lite', resetAt: FETCHED_AT + 3_600_000 },
 };
 
+const zaiMonitorUsage: NormalizedUsage = {
+  providerId: 'zai',
+  kind: 'cost',
+  windows: {
+    level: 'Pro',
+    fiveHour: { percentage: 137, used: 16_440, total: 12_000, resetAt: FETCHED_AT + 3_600_000 },
+    weekly: { used: 5_040, total: 12_000 },
+    mcp: { used: 3, ceiling: 60, tools: [{ name: 'web-search', used: 2 }, { name: 'code-execution', used: 1 }] },
+  },
+  fetchedAt: FETCHED_AT,
+};
+
 const openaiUsage: NormalizedUsage = {
   providerId: 'openai',
   kind: 'cost',
@@ -95,6 +107,106 @@ describe('SnapshotStore', () => {
   it('returns undefined when no snapshot exists yet', async () => {
     expect(await store.read()).toBeUndefined();
     expect(SNAPSHOT_STORAGE_KEY in browser.local.snapshot()).toBe(false);
+  });
+
+  it('a monitor usage without value/currency round-trips (n1: optional since AD-26)', async () => {
+    const snapshot: CycleSnapshot = { results: { zai: { status: 'ok', usage: zaiMonitorUsage } } };
+
+    await store.write(snapshot);
+
+    expect(await store.read()).toEqual(snapshot);
+  });
+
+  it('a monitor usage alongside monetary results round-trips together', async () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: { status: 'ok', usage: zaiMonitorUsage },
+        openai: { status: 'ok', usage: openaiUsage },
+        qwen: { status: 'error', errorClass: 'auth' },
+      },
+    };
+
+    await store.write(snapshot);
+
+    expect(await store.read()).toEqual(snapshot);
+  });
+
+  it.each([
+    ['windows is not an object', { ...zaiMonitorUsage, value: 39, currency: 'CNY', windows: 'full' }],
+    [
+      'level is not a string',
+      { ...zaiMonitorUsage, value: 39, currency: 'CNY', windows: { ...zaiMonitorUsage.windows!, level: 7 } },
+    ],
+    [
+      'fiveHour total is not a number',
+      { ...zaiMonitorUsage, value: 39, currency: 'CNY', windows: { ...zaiMonitorUsage.windows!, fiveHour: { total: '12000' } } },
+    ],
+    [
+      'fiveHour percentage is not a number',
+      {
+        ...zaiMonitorUsage,
+        value: 39,
+        currency: 'CNY',
+        windows: { ...zaiMonitorUsage.windows!, fiveHour: { percentage: '137', total: 12_000 } },
+      },
+    ],
+    [
+      'fiveHour resetAt is not a number',
+      {
+        ...zaiMonitorUsage,
+        value: 39,
+        currency: 'CNY',
+        windows: { ...zaiMonitorUsage.windows!, fiveHour: { total: 1, resetAt: 'soon' } },
+      },
+    ],
+    [
+      'weekly is not an object',
+      { ...zaiMonitorUsage, value: 39, currency: 'CNY', windows: { ...zaiMonitorUsage.windows!, weekly: 5 } },
+    ],
+    [
+      'mcp used is not a number',
+      {
+        ...zaiMonitorUsage,
+        value: 39,
+        currency: 'CNY',
+        windows: { ...zaiMonitorUsage.windows!, mcp: { used: '3', ceiling: 60, tools: [] } },
+      },
+    ],
+    [
+      'mcp ceiling is not a number',
+      {
+        ...zaiMonitorUsage,
+        value: 39,
+        currency: 'CNY',
+        windows: { ...zaiMonitorUsage.windows!, mcp: { used: 3, ceiling: null, tools: [] } },
+      },
+    ],
+    [
+      'mcp tools is not an array',
+      {
+        ...zaiMonitorUsage,
+        value: 39,
+        currency: 'CNY',
+        windows: { ...zaiMonitorUsage.windows!, mcp: { used: 3, ceiling: 60, tools: 'none' } },
+      },
+    ],
+    [
+      'a mcp tool entry is malformed',
+      {
+        ...zaiMonitorUsage,
+        value: 39,
+        currency: 'CNY',
+        windows: { ...zaiMonitorUsage.windows!, mcp: { used: 3, ceiling: 60, tools: [{ name: 'web-search' }] } },
+      },
+    ],
+  ])('a malformed windows report reads as undefined: %s', async (_label, storedUsage) => {
+    // value/currency stay present so ONLY the windows field can invalidate
+    // the entry — the reject proof belongs to isMonitorWindows alone.
+    await browser.local.set({
+      [SNAPSHOT_STORAGE_KEY]: { results: { zai: { status: 'ok', usage: storedUsage } } },
+    });
+
+    expect(await store.read()).toBeUndefined();
   });
 
   it.each([

@@ -22,7 +22,7 @@
 // (platform/browser-api.ts); tests pass the in-memory fake from src/testing/.
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import type { BudgetReport, LineItem, NormalizedUsage } from '../core/usage';
+import type { BudgetReport, LineItem, MonitorWindows, NormalizedUsage } from '../core/usage';
 import type { StorageArea } from './key-store';
 
 /** Storage key for the last completed cycle snapshot. */
@@ -66,6 +66,55 @@ function isBudgetReport(value: unknown): value is BudgetReport {
   );
 }
 
+/** AD-26 shape check: a monitor window requires numeric `total`; the rest is optional numeric. */
+function isUsageWindow(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const window = value as Record<string, unknown>;
+  return (
+    typeof window.total === 'number' &&
+    (window.percentage === undefined || typeof window.percentage === 'number') &&
+    (window.used === undefined || typeof window.used === 'number') &&
+    (window.resetAt === undefined || typeof window.resetAt === 'number')
+  );
+}
+
+/** AD-26 shape check for the ZAI monitor windows on a stored usage. */
+function isMonitorWindows(value: unknown): value is MonitorWindows {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const windows = value as Record<string, unknown>;
+  if (
+    windows.level !== undefined && typeof windows.level !== 'string' ||
+    windows.fiveHour !== undefined && !isUsageWindow(windows.fiveHour) ||
+    windows.weekly !== undefined && !isUsageWindow(windows.weekly)
+  ) {
+    return false;
+  }
+  const mcp = windows.mcp;
+  if (mcp === undefined) {
+    return true;
+  }
+  if (typeof mcp !== 'object' || mcp === null) {
+    return false;
+  }
+  const mcpWindow = mcp as Record<string, unknown>;
+  return (
+    typeof mcpWindow.used === 'number' &&
+    typeof mcpWindow.ceiling === 'number' &&
+    Array.isArray(mcpWindow.tools) &&
+    mcpWindow.tools.every(
+      (tool) =>
+        typeof tool === 'object' &&
+        tool !== null &&
+        typeof (tool as Record<string, unknown>).name === 'string' &&
+        typeof (tool as Record<string, unknown>).used === 'number',
+    )
+  );
+}
+
 function isNormalizedUsage(value: unknown): value is NormalizedUsage {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -74,11 +123,14 @@ function isNormalizedUsage(value: unknown): value is NormalizedUsage {
   return (
     typeof usage.providerId === 'string' &&
     (usage.kind === 'balance' || usage.kind === 'cost') &&
-    typeof usage.value === 'number' &&
-    typeof usage.currency === 'string' &&
+    // n1 (AD-26): value/currency relaxed to optional — monitor results carry
+    // windows instead of a monetary figure.
+    (usage.value === undefined || typeof usage.value === 'number') &&
+    (usage.currency === undefined || typeof usage.currency === 'string') &&
     (usage.tier === undefined || typeof usage.tier === 'string') &&
     (usage.breakdown === undefined || (Array.isArray(usage.breakdown) && usage.breakdown.every(isLineItem))) &&
     (usage.budget === undefined || isBudgetReport(usage.budget)) &&
+    (usage.windows === undefined || isMonitorWindows(usage.windows)) &&
     typeof usage.fetchedAt === 'number'
   );
 }
