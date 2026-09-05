@@ -6,76 +6,123 @@
     <!--
       Static shell (AD-14): MV3 extension-page CSP (script-src 'self') forbids
       inline scripts and inline event-handler attributes, so ALL behavior lives
-      in the bundled popup.js below; the inline <style> element is CSP-legal.
+      in the bundled popup.js below; the inline <style> element is CSP-legal
+      (MV3 default CSP permits style elements and generated style attributes).
       Styles cover both popup views (AD-22): the consumption main view and the
-      gear-driven settings view.
+      gear-driven settings view — minimal claro (hito-5): light surface, white
+      cards, threshold-colored bars, prominent countdown.
     -->
     <style>
       body {
+        background: #f6f7f9;
+        color: #1f2328;
         font: 13px system-ui, sans-serif;
         margin: 12px;
-        min-width: 300px;
+        min-width: 320px;
       }
       .popup-header {
         align-items: center;
         display: flex;
         justify-content: space-between;
-        margin: 0 0 8px;
+        margin: 0 0 10px;
       }
       .popup-header h1 {
         font-size: 15px;
         margin: 0;
       }
       .header-action {
-        background: none;
-        border: 1px solid #e0e0e0;
-        border-radius: 4px;
+        background: #ffffff;
+        border: 1px solid #d0d7de;
+        border-radius: 999px;
+        color: #1f2328;
         cursor: pointer;
         font: inherit;
-        padding: 2px 8px;
+        padding: 3px 12px;
       }
-      .provider {
-        border-top: 1px solid #e0e0e0;
-        padding: 8px 0 4px;
+      .header-action:hover {
+        border-color: #2563eb;
+        color: #2563eb;
+      }
+      .card {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        box-shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
+        margin: 0 0 10px;
+        padding: 10px 12px;
       }
       .provider-name {
         font-size: 13px;
         font-weight: 600;
-        margin: 0 0 4px;
+        margin: 0 0 6px;
       }
       .usage {
-        font-size: 16px;
-        font-weight: 600;
+        font-size: 18px;
+        font-weight: 700;
         margin: 0 0 4px;
       }
       .refresh-error,
       .guidance {
-        color: #c62828;
+        color: #dc2626;
         margin: 0 0 4px;
+      }
+      .settings-guidance {
+        background: #f6f7f9;
+        border-radius: 8px;
+        color: #57606a;
+        margin: 0 0 6px;
+        padding: 6px 10px;
       }
       .tier,
       .no-cycle,
       .key-state {
-        color: #555;
+        color: #57606a;
         margin: 0 0 4px;
       }
       .monitor {
-        border-left: 3px solid #e0e0e0;
+        background: #f6f7f9;
+        border-radius: 8px;
         margin: 0 0 4px;
-        padding-left: 8px;
+        padding: 8px 10px;
       }
       .monitor-level {
         font-weight: 600;
-        margin: 0 0 2px;
+        margin: 0 0 4px;
       }
       .monitor-window,
       .monitor-mcp {
         margin: 0 0 2px;
       }
+      .countdown {
+        background: #eef2ff;
+        border-radius: 999px;
+        color: #3730a3;
+        font-weight: 600;
+        padding: 0 6px;
+      }
+      .bar {
+        background: #e6e8eb;
+        border-radius: 999px;
+        height: 6px;
+        margin: 2px 0 6px;
+        overflow: hidden;
+      }
+      .bar-fill {
+        height: 100%;
+      }
+      .band-green .bar-fill {
+        background: #2e9e5b;
+      }
+      .band-amber .bar-fill {
+        background: #d97706;
+      }
+      .band-red .bar-fill {
+        background: #dc2626;
+      }
       .mcp-tools {
-        color: #555;
+        color: #57606a;
         list-style: none;
-        margin: 0 0 2px;
+        margin: 2px 0 0;
         padding: 0;
       }
       .mcp-tool {
@@ -85,10 +132,13 @@
         align-items: center;
         display: flex;
         gap: 6px;
-        margin: 4px 0;
+        margin: 6px 0 2px;
+      }
+      .platform-field label {
+        color: #57606a;
       }
       .model-rows {
-        color: #555;
+        color: #57606a;
         list-style: none;
         margin: 0 0 4px;
         padding: 0;
@@ -102,9 +152,41 @@
         gap: 4px;
         margin: 4px 0;
       }
+      .key-form input,
+      .platform-field select {
+        background: #ffffff;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        font: inherit;
+        padding: 4px 8px;
+      }
       .key-form input {
         flex: 1;
         min-width: 0;
+      }
+      .key-form button {
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font: inherit;
+        padding: 4px 12px;
+      }
+      .key-form button[type='submit'] {
+        background: #2563eb;
+        color: #ffffff;
+      }
+      .key-form button.revoke {
+        background: #fef2f2;
+        color: #dc2626;
+      }
+      .popup-footer {
+        color: #57606a;
+        font-size: 12px;
+        margin-top: 2px;
+        text-align: center;
+      }
+      .popup-footer a {
+        color: inherit;
       }
     </style>
   </head>
