@@ -21,6 +21,7 @@
 import { validateCredential } from '../core/credentials';
 import type { Credential, CredentialType, ProviderId } from '../core/provider';
 import { PROVIDER_METADATA } from '../core/provider-metadata';
+import type { ZaiPlatform } from '../core/zai-platforms';
 import type { BrowserApi } from '../platform/browser-api';
 import { KeyStore } from '../storage/key-store';
 import type { MaskedCredential } from '../storage/key-store';
@@ -51,7 +52,9 @@ export function startPopup(deps: PopupDeps): void {
     snapshot: CycleSnapshot | undefined;
     keyStates: Partial<Record<ProviderId, MaskedCredential | undefined>>;
     guidance: Partial<Record<ProviderId, string>>;
-  } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {} };
+    /** Selected ZAI monitor platform; rendered by the selector (store wiring lands with it). */
+    zaiPlatform: ZaiPlatform;
+  } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {}, zaiPlatform: 'zai' };
 
   const app = (): HTMLElement => deps.document.getElementById('app') as HTMLElement;
   const inputById = (inputId: string): HTMLInputElement => deps.document.getElementById(inputId) as HTMLInputElement;
@@ -72,6 +75,7 @@ export function startPopup(deps: PopupDeps): void {
       snapshot: state.snapshot,
       keyStates: state.keyStates,
       guidance: state.guidance,
+      zaiPlatform: state.zaiPlatform,
       nowMs: now(),
     };
     app().innerHTML = state.view === 'main' ? renderMain(popupState) : renderSettings(popupState);

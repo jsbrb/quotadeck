@@ -1,12 +1,12 @@
 // Popup view tests (popup-ui spec §Settings Gear Surface, §Per-Model
-// Consumption View; AD-22) — node environment by design (AD-11): the view is
-// a pure string-producing module, so determinism is plain strict string
-// equality.
+// Consumption View, §ZAI Platform Selector; AD-22/26/27/28) — node
+// environment by design (AD-11): the view is a pure string-producing module,
+// so determinism is plain strict string equality.
 import { strictEqual } from 'node:assert/strict';
 import { describe, expect, it } from 'vitest';
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type NormalizedUsage } from '../core/usage';
+import { currencySymbol, type MonitorWindows, type NormalizedUsage } from '../core/usage';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 import {
   escapeHtml,
@@ -16,17 +16,26 @@ import {
   type PopupState,
   renderMain,
   renderSettings,
+  ZAI_WRONG_PLATFORM_GUIDANCE,
 } from './view';
 
 /** Registry metadata as production supplies it (PROVIDER_METADATA, AD-6/24 order). */
 const PROVIDERS: readonly PopupProvider[] = [
-  { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'bearer' },
+  { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'raw' },
   { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
   { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
   { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
 ];
 
 const NOW_MS = 1_754_000_000_000;
+
+/** Full monitor payload (AD-26/27): level, both windows, MCP with two tools. */
+const MONITOR_WINDOWS: MonitorWindows = {
+  level: 'Pro',
+  fiveHour: { percentage: 137, used: 16_440, total: 12_000, resetAt: NOW_MS + 90 * 60_000 },
+  weekly: { percentage: 42, used: 5_040, total: 12_000 },
+  mcp: { used: 3, ceiling: 60, tools: [{ name: 'web-search', used: 2 }, { name: 'code-execution', used: 1 }] },
+};
 
 function usage(providerId: ProviderId, overrides: Partial<NormalizedUsage> = {}): NormalizedUsage {
   return { providerId, kind: 'balance', value: 100, currency: 'CNY', fetchedAt: NOW_MS, ...overrides };
@@ -40,6 +49,7 @@ function popupState(overrides: Partial<PopupState> = {}): PopupState {
     keyStates: {},
     guidance: {},
     nowMs: NOW_MS,
+    zaiPlatform: 'zai',
     ...overrides,
   };
 }
@@ -73,6 +83,16 @@ describe('formatUsageText', () => {
   it('falls back to the ISO code when no symbol is known', () => {
     expect(formatUsageText(usage('qwen', { value: 5.5, currency: 'XYZ' }))).toBe('XYZ5.50');
   });
+
+  it('renders an empty string for a monitor result without a monetary value (AD-26)', () => {
+    const monitor = usage('zai', {
+      kind: 'cost',
+      value: undefined,
+      currency: undefined,
+      windows: MONITOR_WINDOWS,
+    });
+    expect(formatUsageText(monitor)).toBe('');
+  });
 });
 
 describe('formatResetCountdown — pure reset countdown (AD-22)', () => {
@@ -90,12 +110,13 @@ describe('formatResetCountdown — pure reset countdown (AD-22)', () => {
 });
 
 describe('renderMain — Settings Gear Surface (popup-ui spec)', () => {
-  it('renders the settings gear in the header and NO key forms or inputs in the main view', () => {
+  it('renders the settings gear in the header and NO key forms, inputs or selects in the main view', () => {
     const html = renderMain(popupState());
 
     expect(html).toContain('data-action="open-settings"');
     expect(html).not.toContain('<form');
     expect(html).not.toContain('<input');
+    expect(html).not.toContain('<select'); // the platform selector lives in settings only
   });
 
   it('keeps masked key material out of the main view — key state renders in settings only', () => {
@@ -112,13 +133,9 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     results: {
       zai: {
         status: 'ok',
-        usage: usage('zai', {
-          kind: 'cost',
-          value: 39,
-          tier: 'Lite',
-          budget: { used: 2400, limit: 2400, percent: 100, tier: 'Lite', resetAt: NOW_MS + 90 * 60_000 },
-        }),
+        usage: { providerId: 'zai', kind: 'cost', windows: MONITOR_WINDOWS, fetchedAt: NOW_MS },
       },
+      qwen: { status: 'ok', usage: usage('qwen', { value: 100.28, tier: 'L2' }) },
       openai: {
         status: 'ok',
         usage: usage('openai', {
@@ -136,47 +153,85 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     },
   };
 
-  it('renders every provider with its usage value and currency; tier only for the result including one', () => {
+  it('renders every provider; monetary providers with value and currency; tier only for the result including one', () => {
     const html = renderMain(popupState({ snapshot: fullSnapshot }));
 
     for (const provider of PROVIDERS) {
       expect(html).toContain(`data-provider="${provider.id}"`);
       expect(html).toContain(provider.displayName);
     }
-    expect(sectionFor(html, 'zai')).toContain('¥39.00');
-    expect(sectionFor(html, 'zai')).toContain('Tier: Lite');
+    expect(sectionFor(html, 'zai')).not.toContain('¥'); // monitor result: no monetary line
+    expect(sectionFor(html, 'qwen')).toContain('¥100.28');
+    expect(sectionFor(html, 'qwen')).toContain('Tier: L2');
     expect(sectionFor(html, 'openai')).toContain('$20.00');
     expect(sectionFor(html, 'kimi')).toContain('¥88.88');
     expect(sectionFor(html, 'kimi')).not.toContain('Tier:');
   });
 
-  it('renders the ZAI budget block: percent, used/limit, tier and countdown', () => {
+  it('renders the ZAI monitor block: level, uncapped 5h with used/total/countdown, weekly, MCP rows', () => {
     const html = renderMain(popupState({ snapshot: fullSnapshot }));
     const zai = sectionFor(html, 'zai');
 
-    expect(zai).toContain('Budget: 100% of 2400 (2400 used)');
-    expect(zai).toContain('Resets in 1h 30m');
-    expect(zai).toContain('Tier: Lite');
+    expect(zai).toContain('Level: Pro');
+    expect(zai).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // 137 stays 137 — uncapped
+    expect(zai).toContain('Weekly: 42% · 5040 / 12000');
+    expect(zai).toContain('MCP: 3 / 60');
+    // Per-tool rows sorted by name for determinism (AD-27 ordering, view-side too).
+    const codeExecution = zai.indexOf('code-execution · 1');
+    const webSearch = zai.indexOf('web-search · 2');
+    expect(codeExecution).toBeGreaterThan(-1);
+    expect(webSearch).toBeGreaterThan(codeExecution);
   });
 
-  it('omits the countdown when resetAt is absent and degrades the summary when the tier has no limit', () => {
+  it('omits absent windows, window parts and the countdown — nothing synthesized (AD-26/27)', () => {
     const snapshot: CycleSnapshot = {
       results: {
         zai: {
           status: 'ok',
           usage: usage('zai', {
             kind: 'cost',
-            value: 0.5,
-            budget: { used: 700, limit: undefined, percent: undefined, tier: undefined, resetAt: undefined },
+            value: undefined,
+            currency: undefined,
+            windows: {
+              fiveHour: { used: 700, total: 12_000 },
+              mcp: { used: 1, ceiling: 5, tools: [] },
+            },
           }),
         },
       },
     };
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
-    expect(zai).toContain('Budget: 700 used');
-    expect(zai).not.toContain('Resets in');
-    expect(zai).not.toContain('Tier:');
+    expect(zai).toContain('5h: 700 / 12000'); // no percentage part when the API omitted it
+    expect(zai).not.toContain('%'); // no synthesized percentage anywhere
+    expect(zai).not.toContain('Resets in'); // resetAt absent → no countdown line
+    expect(zai).not.toContain('Weekly:'); // absent window not rendered
+    expect(zai).not.toContain('Level:'); // level absent → line omitted
+    expect(zai).toContain('MCP: 1 / 5');
+    expect(zai).not.toContain('mcp-tool'); // empty tools list → no rows
+  });
+
+  it('renders a window whose used is absent as the bare total; rounds fractional percentages for display', () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', {
+            kind: 'cost',
+            value: undefined,
+            currency: undefined,
+            windows: {
+              fiveHour: { percentage: 42.6, total: 12_000 },
+              weekly: { total: 130_000 },
+            },
+          }),
+        },
+      },
+    };
+    const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
+
+    expect(zai).toContain('5h: 43% · 12000 total'); // Math.round(42.6) for display; no used part
+    expect(zai).toContain('Weekly: 130000 total');
   });
 
   it('renders per-model rows for the provider with a breakdown, sorted by model then usageType', () => {
@@ -209,6 +264,25 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     }
   });
 
+  it('surfaces the wrong-platform guidance on a ZAI auth failure (AD-27; popup-ui spec)', () => {
+    const html = renderMain(popupState({ snapshot: { results: { zai: { status: 'error', errorClass: 'auth' } } } }));
+    const zai = sectionFor(html, 'zai');
+
+    expect(zai).toContain('Auth failed'); // the per-class label stays
+    expect(zai).toContain(ZAI_WRONG_PLATFORM_GUIDANCE); // …plus the static guidance
+  });
+
+  it('keeps the guidance zai+auth specific — other classes, providers and ok results render none', () => {
+    const rateLimit = renderMain(popupState({ snapshot: { results: { zai: { status: 'error', errorClass: 'rate-limit' } } } }));
+    expect(sectionFor(rateLimit, 'zai')).not.toContain(ZAI_WRONG_PLATFORM_GUIDANCE);
+
+    const kimiAuth = renderMain(popupState({ snapshot: { results: { kimi: { status: 'error', errorClass: 'auth' } } } }));
+    expect(sectionFor(kimiAuth, 'kimi')).not.toContain(ZAI_WRONG_PLATFORM_GUIDANCE);
+
+    const ok = renderMain(popupState({ snapshot: fullSnapshot }));
+    expect(sectionFor(ok, 'zai')).not.toContain(ZAI_WRONG_PLATFORM_GUIDANCE);
+  });
+
   it('renders a no-cycle note for providers absent from the snapshot', () => {
     const html = renderMain(popupState({ snapshot: { results: { kimi: fullSnapshot.results.kimi! } } }));
 
@@ -220,6 +294,7 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
   it('is deterministic: identical state renders identical output in both views', () => {
     const state = popupState({
       snapshot: fullSnapshot,
+      zaiPlatform: 'zhipu',
       keyStates: { kimi: { type: 'bearer', maskedToken: '••••cdef' } },
       guidance: { qwen: 'Use an Alibaba AK/SK pair.' },
     });
@@ -278,6 +353,28 @@ describe('renderSettings — key management inside the gear (popup-ui spec)', ()
   });
 });
 
+describe('renderSettings — ZAI Platform Selector (popup-ui spec §ZAI Platform Selector; AD-28)', () => {
+  it('renders the selector in the ZAI section only, with unmasked Z.AI/ZHIPU labels', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+    const zai = sectionFor(html, 'zai');
+
+    expect(zai).toContain('id="zai-platform-select"');
+    expect(zai).toContain('>Z.AI</option>');
+    expect(zai).toContain('>ZHIPU</option>');
+    expect(sectionFor(html, 'kimi')).not.toContain('zai-platform-select'); // zai only
+  });
+
+  it('marks the current platform selected — Z.AI by default, ZHIPU when the preference says so', () => {
+    const byDefault = sectionFor(renderSettings(popupState({ view: 'settings' })), 'zai');
+    expect(byDefault).toContain('<option value="zai" selected>');
+    expect(byDefault).not.toContain('<option value="zhipu" selected>');
+
+    const zhipu = sectionFor(renderSettings(popupState({ view: 'settings', zaiPlatform: 'zhipu' })), 'zai');
+    expect(zhipu).toContain('<option value="zhipu" selected>');
+    expect(zhipu).not.toContain('<option value="zai" selected>');
+  });
+});
+
 describe('escapeHtml', () => {
   it('escapes the HTML-significant characters', () => {
     expect(escapeHtml('<img src=x>&"\'`')).toBe('&lt;img src=x&gt;&amp;&quot;&#39;&#96;');
@@ -297,5 +394,29 @@ describe('escapeHtml', () => {
 
     expect(html).not.toContain(hostile);
     expect(html).toContain('&lt;script&gt;');
+  });
+
+  it('escapes provider-sourced level and tool names in the monitor block', () => {
+    const hostile = '<script>alert(1)</script>';
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', {
+            kind: 'cost',
+            value: undefined,
+            currency: undefined,
+            windows: {
+              level: hostile,
+              mcp: { used: 1, ceiling: 5, tools: [{ name: hostile, used: 1 }] },
+            },
+          }),
+        },
+      },
+    };
+    const html = renderMain(popupState({ snapshot }));
+
+    expect(html).not.toContain(`>${hostile}<`);
+    expect((html.match(/&lt;script&gt;alert\(1\)&lt;\/script&gt;/g) ?? []).length).toBeGreaterThanOrEqual(2);
   });
 });

@@ -1,28 +1,38 @@
 // Popup view (popup-ui spec §Settings Gear Surface, §Per-Model Consumption
-// View; AD-11/AD-22) — pure string-producing functions only. No DOM, no I/O,
-// and no imports beyond core/storage types and the usage helpers, so
-// node-environment tests pin determinism with strict string equality.
+// View, §ZAI Platform Selector; AD-11/22/26/27/28) — pure string-producing
+// functions only. No DOM, no I/O, and no imports beyond core/storage types,
+// the usage helpers and the popup-safe platform table, so node-environment
+// tests pin determinism with strict string equality.
 //
-// Rendering contract (AD-22):
+// Rendering contract (AD-22/26):
 // - Two views: `renderMain` (default consumption view) and `renderSettings`
 //   (all key management). The header of each carries the switch — a
 //   `data-action="open-settings"` gear on main, `data-action="back"` on
 //   settings — wired by the controller's click delegation.
 // - Main view: one <section> per provider in PopupState.providers order
-//   (PROVIDER_METADATA order in production, AD-6). ZAI renders its budget
-//   block (percent, used/limit, tier, countdown via the pure
-//   `formatResetCountdown` — the countdown line is simply omitted when the
-//   report has no resetAt); OpenAI renders per-model rows from
+//   (PROVIDER_METADATA order in production, AD-6). ZAI renders its monitor
+//   block from `usage.windows` (plan level, 5h/weekly windows with the
+//   percentage uncapped, used/total, countdown via the pure
+//   `formatResetCountdown` from `windows.*.resetAt`, and the monthly MCP
+//   window with per-tool rows); OpenAI renders per-model rows from
 //   `usage.breakdown` sorted by (model, usageType) for determinism; failed
-//   providers render a per-class error label (AD-21). NO key forms appear in
-//   the main view — key state and forms live in settings only.
-// - Every dynamic string is escaped (AD-3 spirit): provider-sourced tiers,
-//   model names, guidance messages and masked keys all pass escapeHtml.
+//   providers render a per-class error label (AD-21), and a ZAI auth failure
+//   additionally surfaces the static wrong-platform guidance (AD-27 —
+//   derived here from (provider, class), never transported in the snapshot).
+//   NO key forms appear in the main view — key state and forms live in
+//   settings only.
+// - Settings view: the ZAI section carries the platform selector (AD-28),
+//   rendered from the pure ZAI_PLATFORMS table with unmasked labels and the
+//   current preference marked `selected`; the controller owns persistence.
+// - Every dynamic string is escaped (AD-3 spirit): provider-sourced levels,
+//   tool names, model names, guidance messages and masked keys all pass
+//   escapeHtml.
 // - The view renders exactly the masked forms it is given; full keys never
 //   reach this module (AD-15).
 import type { CredentialType, ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type LineItem, type NormalizedUsage } from '../core/usage';
+import { currencySymbol, type LineItem, type NormalizedUsage, type UsageWindow } from '../core/usage';
+import { ZAI_PLATFORMS, type ZaiPlatform } from '../core/zai-platforms';
 import type { MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 
@@ -32,6 +42,15 @@ export interface PopupProvider {
   readonly displayName: string;
   readonly credentialType: CredentialType;
 }
+
+/**
+ * Static wrong-platform guidance (AD-27; zai-monitor §Platform Binding):
+ * derived at render time from (provider = zai, class = auth) — the snapshot
+ * error arm carries the class only, so this text lives here, never in the
+ * persisted payload (AD-13 intact).
+ */
+export const ZAI_WRONG_PLATFORM_GUIDANCE =
+  'This key may belong to the other platform — check the Z.AI/ZHIPU selection in Settings.';
 
 /** Everything a render needs — the controller assembles it from stores. */
 export interface PopupState {
@@ -44,6 +63,8 @@ export interface PopupState {
   readonly keyStates: Readonly<Partial<Record<ProviderId, MaskedCredential | undefined>>>;
   /** Last validation message per provider, rendered verbatim. */
   readonly guidance: Readonly<Partial<Record<ProviderId, string>>>;
+  /** Selected ZAI monitor platform (`qd:pref:zai-platform`); the controller reads/persists it. */
+  readonly zaiPlatform: ZaiPlatform;
   /** Render instant (epoch ms) feeding countdowns — supplied by the controller. */
   readonly nowMs: number;
 }
@@ -70,8 +91,8 @@ export function escapeHtml(text: string): string {
 
 /** Full-precision popup rendering of one normalized result (no badge budget). */
 export function formatUsageText(usage: NormalizedUsage): string {
-  // Optional-value guard (AD-26): monitor results carry no monetary figure;
-  // the dedicated monitor block arrives with the popup slice.
+  // Optional-value guard (AD-26): monitor results carry no monetary figure —
+  // their popup surface is the dedicated monitor block, not this line.
   if (usage.value === undefined) {
     return '';
   }
@@ -98,18 +119,47 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** ZAI budget block: percent + used/limit summary, countdown when present (AD-22). */
-function budgetBlock(usage: NormalizedUsage, state: PopupState): string {
-  const budget = usage.budget!;
-  const summary =
-    budget.percent !== undefined && budget.limit !== undefined
-      ? `Budget: ${budget.percent}% of ${budget.limit} (${budget.used} used)`
-      : `Budget: ${budget.used} used`;
-  const parts = [`<p class="budget-summary">${summary}</p>`];
-  if (budget.resetAt !== undefined) {
-    parts.push(`<p class="budget-reset">Resets in ${formatResetCountdown(budget.resetAt, state.nowMs)}</p>`);
+/**
+ * One monitor window line (AD-26): percentage uncapped (integer display —
+ * the model keeps the exact value), used/total (bare total when used is
+ * absent), countdown when `resetAt` is present. Absent parts are simply
+ * omitted — nothing is synthesized.
+ */
+function windowLine(label: string, window: UsageWindow, state: PopupState): string {
+  const parts: string[] = [];
+  if (window.percentage !== undefined) {
+    parts.push(`${Math.round(window.percentage)}%`);
   }
-  return `<div class="budget">${parts.join('')}</div>`;
+  parts.push(window.used !== undefined ? `${window.used} / ${window.total}` : `${window.total} total`);
+  if (window.resetAt !== undefined) {
+    parts.push(`Resets in ${formatResetCountdown(window.resetAt, state.nowMs)}`);
+  }
+  return `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
+}
+
+/** ZAI monitor block: level, 5h/weekly windows, monthly MCP + per-tool rows (AD-26/27). */
+function monitorBlock(usage: NormalizedUsage, state: PopupState): string {
+  const windows = usage.windows!;
+  const parts: string[] = ['<div class="monitor">'];
+  if (windows.level !== undefined) {
+    parts.push(`<p class="monitor-level">Level: ${escapeHtml(windows.level)}</p>`);
+  }
+  if (windows.fiveHour !== undefined) {
+    parts.push(windowLine('5h', windows.fiveHour, state));
+  }
+  if (windows.weekly !== undefined) {
+    parts.push(windowLine('Weekly', windows.weekly, state));
+  }
+  if (windows.mcp !== undefined) {
+    parts.push(`<p class="monitor-mcp">MCP: ${windows.mcp.used} / ${windows.mcp.ceiling}</p>`);
+    if (windows.mcp.tools.length > 0) {
+      const tools = [...windows.mcp.tools].sort((a, b) => compareStrings(a.name, b.name));
+      const rows = tools.map((tool) => `<li class="mcp-tool">${escapeHtml(tool.name)} · ${tool.used}</li>`);
+      parts.push(`<ul class="mcp-tools">${rows.join('')}</ul>`);
+    }
+  }
+  parts.push('</div>');
+  return parts.join('');
 }
 
 /** OpenAI per-model rows, sorted by (model, usageType) for determinism (AD-22). */
@@ -133,13 +183,18 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
     parts.push('<p class="no-cycle">No cycle data yet</p>');
   } else if (entry.status === 'error') {
     parts.push(`<p class="refresh-error" role="status">${ERROR_CLASS_LABELS[entry.errorClass]}</p>`);
+    // Wrong-platform guidance (AD-27): static, derived from (zai, auth) at
+    // render time — the snapshot carries the class only.
+    if (provider.id === 'zai' && entry.errorClass === 'auth') {
+      parts.push(`<p class="guidance" role="alert">${escapeHtml(ZAI_WRONG_PLATFORM_GUIDANCE)}</p>`);
+    }
   } else {
     parts.push(`<p class="usage">${formatUsageText(entry.usage)}</p>`);
     if (entry.usage.tier !== undefined) {
       parts.push(`<p class="tier">Tier: ${escapeHtml(entry.usage.tier)}</p>`);
     }
-    if (entry.usage.budget !== undefined) {
-      parts.push(budgetBlock(entry.usage, state));
+    if (entry.usage.windows !== undefined) {
+      parts.push(monitorBlock(entry.usage, state));
     }
     if (entry.usage.breakdown !== undefined && entry.usage.breakdown.length > 0) {
       parts.push(modelRows(entry.usage));
@@ -179,6 +234,25 @@ function credentialInputs(provider: PopupProvider): string {
   return `<input type="password" autocomplete="off" id="key-input-${provider.id}" name="credential" placeholder="Credential" />`;
 }
 
+/**
+ * ZAI platform selector (AD-28; popup-ui §ZAI Platform Selector): rendered
+ * from the pure ZAI_PLATFORMS table — labels are display strings, never
+ * secret material, so they render unmasked. The current preference carries
+ * the `selected` attribute; the controller persists changes.
+ */
+function platformSelector(state: PopupState): string {
+  const options = ZAI_PLATFORMS.map(
+    (platform) =>
+      `<option value="${platform.id}"${platform.id === state.zaiPlatform ? ' selected' : ''}>${escapeHtml(platform.label)}</option>`,
+  ).join('');
+  return (
+    '<div class="platform-field">' +
+    '<label for="zai-platform-select">Platform</label>' +
+    `<select id="zai-platform-select" data-action="zai-platform">${options}</select>` +
+    '</div>'
+  );
+}
+
 function providerSettingsSection(provider: PopupProvider, state: PopupState): string {
   const masked = state.keyStates[provider.id];
   const guidance = state.guidance[provider.id];
@@ -194,6 +268,9 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
       `<button type="button" class="revoke" id="key-revoke-${provider.id}" data-revoke="${provider.id}">Revoke</button>` +
       '</form>',
   );
+  if (provider.id === 'zai') {
+    parts.push(platformSelector(state));
+  }
   if (guidance !== undefined) {
     parts.push(`<p class="guidance" role="alert">${escapeHtml(guidance)}</p>`);
   }

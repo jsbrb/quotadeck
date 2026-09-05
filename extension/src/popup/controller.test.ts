@@ -58,7 +58,7 @@ async function openPopup(h: { api: BrowserApi }): Promise<void> {
   });
 }
 
-/** The consumption view assembles per spec: cycle data + budget + one error. */
+/** The consumption view assembles per spec: cycle data + monitor block + one error. */
 const LAST_CYCLE: CycleSnapshot = {
   results: {
     zai: {
@@ -66,10 +66,19 @@ const LAST_CYCLE: CycleSnapshot = {
       usage: {
         providerId: 'zai',
         kind: 'cost',
-        value: 39,
-        currency: 'CNY',
-        tier: 'Lite',
-        budget: { used: 2400, limit: 2400, percent: 100, tier: 'Lite', resetAt: NOW_MS + 90 * 60_000 },
+        windows: {
+          level: 'Pro',
+          fiveHour: { percentage: 137, used: 16_440, total: 12_000, resetAt: NOW_MS + 90 * 60_000 },
+          weekly: { percentage: 42, used: 5_040, total: 12_000 },
+          mcp: {
+            used: 3,
+            ceiling: 60,
+            tools: [
+              { name: 'web-search', used: 2 },
+              { name: 'code-execution', used: 1 },
+            ],
+          },
+        },
         fetchedAt: NOW_MS,
       },
     },
@@ -93,7 +102,7 @@ const LAST_CYCLE: CycleSnapshot = {
 };
 
 describe('controller — Current Cycle Data on Open, main view (popup-ui spec)', () => {
-  it('opens on the main view: usage, ZAI budget block, tier, per-class error label', async () => {
+  it('opens on the main view: usage, ZAI monitor block, per-class error label', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, LAST_CYCLE);
     mountApp();
@@ -101,10 +110,10 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     await openPopup(h);
 
     const text = document.body.textContent ?? '';
-    expect(text).toContain('¥39.00');
-    expect(text).toContain('Budget: 100% of 2400 (2400 used)');
-    expect(text).toContain('Resets in 1h 30m'); // countdown from the injected now
-    expect(text).toContain('Tier: Lite');
+    expect(text).toContain('Level: Pro');
+    expect(text).toContain('5h: 137% · 16440 / 12000 · Resets in 1h 30m'); // countdown from the injected now
+    expect(text).toContain('Weekly: 42% · 5040 / 12000');
+    expect(text).toContain('MCP: 3 / 60');
     expect(text).toContain('$20.00');
     expect(text).toContain('¥88.88');
     expect(text).toContain('Auth failed'); // qwen error entry, per class (AD-21/22)
