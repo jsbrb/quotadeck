@@ -69,7 +69,7 @@ describe('ZaiProvider — pagination across the recorded 3-page flow', () => {
     expect(usage.value).toBe(39);
     expect(usage.kind).toBe('cost');
     expect(usage.currency).toBe('CNY');
-    expect(usage.tier).toBe('GLM-4.5-Air'); // tokenResourceName of the final record
+    expect(usage.tier).toBe('Lite'); // tokenResourceName of the final record (community-shape fixtures)
     expect(usage.providerId).toBe('zai');
   });
 

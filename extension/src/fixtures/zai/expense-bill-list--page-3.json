@@ -3,31 +3,32 @@
   "msg": "success",
   "success": true,
   "data": {
+    "customerId": "10997756",
     "pageNum": 3,
     "pageSize": 2,
     "total": 5,
     "list": [
       {
-        "billingNo": "BL202608010004",
+        "billingNo": "BL109977561788056100000",
         "billingMonth": "2026-08",
         "modelCode": "glm-4.5-air",
-        "tokenResourceName": "GLM-4.5-Air",
+        "tokenResourceName": "Pro",
+        "apiUsage": 500,
         "costPrice": 2,
         "deductUsage": 500,
-        "usageCount": 500,
         "currency": "CNY",
-        "timeWindow": "2026-08-04 00:00:00 - 2026-08-05 00:00:00"
+        "timeWindow": "2026-08-30 10:15:00~2026-08-30 15:15:00"
       },
       {
-        "billingNo": "BL202608010005",
+        "billingNo": "BL109977561788061500000",
         "billingMonth": "2026-08",
         "modelCode": "glm-4.5-air",
-        "tokenResourceName": "GLM-4.5-Air",
+        "tokenResourceName": "Lite",
+        "apiUsage": 400,
         "costPrice": 4,
         "deductUsage": 250,
-        "usageCount": 250,
         "currency": "CNY",
-        "timeWindow": "2026-08-05 00:00:00 - 2026-08-06 00:00:00"
+        "timeWindow": "2026-08-30 12:00:00~2026-08-30 17:00:00"
       }
     ]
   }

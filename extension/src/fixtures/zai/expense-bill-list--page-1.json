@@ -3,31 +3,32 @@
   "msg": "success",
   "success": true,
   "data": {
+    "customerId": "10997756",
     "pageNum": 1,
     "pageSize": 2,
     "total": 5,
     "list": [
       {
-        "billingNo": "BL202608010001",
+        "billingNo": "BL109977561788048000000",
         "billingMonth": "2026-08",
         "modelCode": "glm-4.7-flash",
-        "tokenResourceName": "GLM-4.7-Flash",
+        "tokenResourceName": "Pro",
+        "apiUsage": 900,
         "costPrice": 10,
         "deductUsage": 2000,
-        "usageCount": 2000,
         "currency": "CNY",
-        "timeWindow": "2026-08-01 00:00:00 - 2026-08-02 00:00:00"
+        "timeWindow": "2026-08-30 08:00:00~2026-08-30 13:00:00"
       },
       {
-        "billingNo": "BL202608010002",
+        "billingNo": "BL109977561788053400000",
         "billingMonth": "2026-08",
         "modelCode": "glm-4.7",
-        "tokenResourceName": "GLM-4.7",
+        "tokenResourceName": "Lite",
+        "apiUsage": 600,
         "costPrice": 5,
         "deductUsage": 1000,
-        "usageCount": 1000,
         "currency": "CNY",
-        "timeWindow": "2026-08-02 00:00:00 - 2026-08-03 00:00:00"
+        "timeWindow": "2026-08-30 09:30:00~2026-08-30 14:30:00"
       }
     ]
   }

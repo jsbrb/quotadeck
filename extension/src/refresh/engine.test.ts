@@ -96,7 +96,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
     expect(usage.kind).toBe('cost');
     expect(usage.value).toBe(39); // Σ costPrice/1000×deductUsage over the deduped 3-page flow
     expect(usage.currency).toBe('CNY');
-    expect(usage.tier).toBe('GLM-4.5-Air');
+    expect(usage.tier).toBe('Lite'); // tokenResourceName of the final record (community-shape fixtures)
     expect(transport.requests).toHaveLength(3); // firstRequest + two PageParse.next dispatches
   });
 

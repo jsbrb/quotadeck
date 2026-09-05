@@ -6,6 +6,10 @@
 // NOTE on failure fixtures: ZAI reports failures in the HTTP-200 body (`code`
 // "200" as a string, or a non-200 code), so every recorded response below is
 // status 200 — providers decide success from the body, never the HTTP status.
+//
+// O3: the ZAI `data.customerId` field and the billingNo epoch embedding are
+// pinned from community evidence; the maintainer live E2E confirms them. No
+// test asserts live semantics beyond fixture-internal consistency.
 import type { TransportResponse } from '../network/transport';
 import kimiOk from './kimi/users-me-balance--ok.json';
 import openaiPage1 from './openai/costs--page-1.json';
@@ -16,6 +20,9 @@ import zaiCodeString200 from './zai/expense-bill-list--code-string-200.json';
 import zaiPage1 from './zai/expense-bill-list--page-1.json';
 import zaiPage2 from './zai/expense-bill-list--page-2.json';
 import zaiPage3 from './zai/expense-bill-list--page-3.json';
+import zaiStraddleCurr from './zai/expense-bill-list--straddle-curr-month.json';
+import zaiStraddlePrev from './zai/expense-bill-list--straddle-prev-month.json';
+import zaiUnextractable from './zai/expense-bill-list--unextractable-epoch.json';
 
 const responses = {
   'zai/expense-bill-list--page-1': { status: 200, body: zaiPage1 },
@@ -23,6 +30,9 @@ const responses = {
   'zai/expense-bill-list--page-3': { status: 200, body: zaiPage3 },
   'zai/expense-bill-list--code-string-200': { status: 200, body: zaiCodeString200 },
   'zai/expense-bill-list--code-500': { status: 200, body: zaiCode500 },
+  'zai/expense-bill-list--straddle-prev-month': { status: 200, body: zaiStraddlePrev },
+  'zai/expense-bill-list--straddle-curr-month': { status: 200, body: zaiStraddleCurr },
+  'zai/expense-bill-list--unextractable-epoch': { status: 200, body: zaiUnextractable },
   'qwen/query-account-balance--ok': { status: 200, body: qwenOk },
   'openai/costs--page-1': { status: 200, body: openaiPage1 },
   'openai/costs--page-2-final': { status: 200, body: openaiPage2Final },

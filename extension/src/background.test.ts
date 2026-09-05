@@ -275,7 +275,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
         kind: 'cost',
         value: 39,
         currency: 'CNY',
-        tier: 'GLM-4.5-Air',
+        tier: 'Lite',
       }),
     });
     expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 100.28, currency: 'CNY' }) });
