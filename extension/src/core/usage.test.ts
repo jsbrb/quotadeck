@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { ERROR_BADGE_TEXT, formatBadgeText, type NormalizedUsage } from './usage';
+import {
+  ERROR_BADGE_TEXT,
+  formatBadgeText,
+  type BudgetReport,
+  type NormalizedUsage,
+} from './usage';
 
 function usage(overrides: Partial<NormalizedUsage> = {}): NormalizedUsage {
   return {
@@ -11,6 +16,26 @@ function usage(overrides: Partial<NormalizedUsage> = {}): NormalizedUsage {
     ...overrides,
   };
 }
+
+describe('NormalizedUsage.budget (AD-22)', () => {
+  const budget: BudgetReport = {
+    used: 2400,
+    limit: 2400,
+    percent: 100,
+    tier: 'Lite',
+    resetAt: 1_788_080_400_000,
+  };
+
+  it('carries an optional budget report alongside the cost value', () => {
+    const withBudget = usage({ budget });
+    expect(withBudget.budget).toEqual(budget);
+  });
+
+  it('budget presence never changes badge rendering — the badge stays cost-based', () => {
+    expect(formatBadgeText(usage({ value: 12.34, budget }))).toBe('¥12');
+    expect(formatBadgeText(usage({ value: 12.34 }))).toBe(formatBadgeText(usage({ value: 12.34, budget })));
+  });
+});
 
 describe('formatBadgeText', () => {
   it('renders symbol + integer at 10 and above', () => {

@@ -15,6 +15,23 @@ export interface LineItem {
   readonly value: number;
 }
 
+/**
+ * ZAI window-budget report (AD-20/22): trailing-5h usage vs the tier limit.
+ * Every field that cannot be derived is absent (`undefined`), never an error.
+ */
+export interface BudgetReport {
+  /** Σ apiUsage over records inside the trailing 5h window. */
+  readonly used: number;
+  /** Effective limit for the derived tier; absent when the tier has none. */
+  readonly limit: number | undefined;
+  /** min(round(used / limit × 100), 100); absent when the limit is. */
+  readonly percent: number | undefined;
+  /** tokenResourceName of the latest in-window record. */
+  readonly tier: string | undefined;
+  /** Latest in-window record's timeWindow end (epoch ms); absent when unparseable. */
+  readonly resetAt: number | undefined;
+}
+
 /** The single result shape every provider folds into. */
 export interface NormalizedUsage {
   readonly providerId: ProviderId;
@@ -24,10 +41,12 @@ export interface NormalizedUsage {
   readonly value: number;
   /** ISO currency code from the response (Qwen `Data.Currency`, Kimi `CNY`, OpenAI `amount.currency`, ZAI `CNY`). */
   readonly currency: string;
-  /** ZAI only: tier label from `tokenResourceName`. */
+  /** ZAI only: tier label — the latest in-window `tokenResourceName` (AD-23). */
   readonly tier?: string;
   /** OpenAI only: per (model, usage_type) bucket totals. */
   readonly breakdown?: readonly LineItem[];
+  /** ZAI only: trailing-5h tier budget (AD-22); absent on non-ZAI results. */
+  readonly budget?: BudgetReport;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */
   readonly fetchedAt: number;
 }
