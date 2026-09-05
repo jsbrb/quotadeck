@@ -139,6 +139,65 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
   });
 });
 
+describe('AllowlistNetworkClient — raw attach (AD-25, ZAI monitor hosts only)', () => {
+  // S1 interim pin: bigmodel.cn is the CURRENT zai allowlist host; slice 2
+  // re-pins these contract tests to api.z.ai when the allowlist swaps.
+  const RAW_CREDENTIAL = { type: 'raw', token: 'zai-monitor-key-7f3d' } as const;
+
+  it('attaches raw credentials verbatim (no Bearer) with Accept-Language on the zai host', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    const response = await client.send('zai', zaiRequest('https://bigmodel.cn/api/monitor/usage/quota/limit'), RAW_CREDENTIAL);
+
+    expect(response).toBe(okResponse);
+    expect(transport.requests).toHaveLength(1);
+    const sent = transport.requests[0]!;
+    // Verbatim: the raw key IS the Authorization value — no Bearer prefix.
+    expect(sent.headers.Authorization).toBe('zai-monitor-key-7f3d');
+    expect(sent.headers.Authorization).not.toContain('Bearer');
+    expect(sent.headers['Accept-Language']).toBe('zh-CN');
+  });
+
+  it('rejects raw attach off the ZAI monitor hosts — zero transport I/O', async () => {
+    const transport = new RecordingTransport(); // empty queue: any fetch would throw
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(
+      client.send('kimi', zaiRequest('https://api.moonshot.cn/v1/users/me/balance'), RAW_CREDENTIAL),
+    ).rejects.toMatchObject({
+      name: 'NetworkRejectionError',
+      reason: 'credential-placement',
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects raw attach to a host outside every allowlist before any I/O', async () => {
+    const transport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(
+      client.send('zai', zaiRequest('https://evil.example.com/api/monitor/usage/quota/limit'), RAW_CREDENTIAL),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'host-not-allowed' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('a raw key smuggled outside the Authorization header is rejected (raw joins the token scan arm)', async () => {
+    const transport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(transport);
+    const smuggled: ProviderRequest = {
+      method: 'GET',
+      url: 'https://bigmodel.cn/api/monitor/usage/quota/limit',
+      query: { apikey: RAW_CREDENTIAL.token },
+    };
+
+    await expect(client.send('zai', smuggled, RAW_CREDENTIAL)).rejects.toMatchObject({
+      reason: 'credential-placement',
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+});
+
 describe('AllowlistNetworkClient — ak-sk attach (AD-19, qwen only)', () => {
   it('signs the qwen BSS query and dispatches with NO Authorization header', async () => {
     const transport = new RecordingTransport([okResponse]);

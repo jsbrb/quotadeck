@@ -9,9 +9,11 @@
 // headers but no cookie jar.
 //
 // Credential material therefore has exactly one legal path per kind — the
-// Authorization header for tokens, the derived BSS query signature for ak-sk —
-// and the scan below enforces it dynamically as defense in depth:
-// - token credentials: the token must not appear in url/query/body;
+// Authorization header for tokens (bearer, openai-admin-read, and raw, which
+// the client attaches verbatim on the ZAI monitor hosts; AD-25), the derived
+// BSS query signature for ak-sk — and the scan below enforces it dynamically
+// as defense in depth:
+// - token credentials (incl. raw): the token must not appear in url/query/body;
 // - ak-sk (AD-19 sanctioned exception, scoped): the AccessKeySecret must not
 //   appear ANYWHERE; the AccessKeyId may appear ONLY as a query parameter and
 //   ONLY on the Qwen BSS host (business.aliyuncs.com) — anything else is

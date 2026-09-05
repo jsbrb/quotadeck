@@ -78,17 +78,35 @@ export class AllowlistNetworkClient {
         `Host ${host} is not on the allowlist for provider ${providerId}.`,
       );
     }
+    // Raw credentials are ZAI-monitor-only (AD-25), exactly as ak-sk signing
+    // is qwen-only: the target must pass the ZAI allowlist or nothing is
+    // attached — rejected before any transport I/O.
+    if (credential.type === 'raw' && !isHostAllowed('zai', host)) {
+      throw new NetworkRejectionError(
+        'credential-placement',
+        `Raw credentials are only valid on the ZAI monitor hosts, not ${host}.`,
+      );
+    }
     assertNoCredentialMaterial(dispatched, credential, url);
 
     const authorized: AuthorizedRequest =
       credential.type === 'ak-sk'
         ? { method: dispatched.method, url, headers: {}, ...(dispatched.body !== undefined ? { body: dispatched.body } : {}) }
-        : {
-            method: dispatched.method,
-            url,
-            headers: { Authorization: `Bearer ${credential.token}` },
-            ...(request.body !== undefined ? { body: request.body } : {}),
-          };
+        : credential.type === 'raw'
+          ? {
+              // Verbatim key, no Bearer prefix, plus the localization header
+              // (AD-25: presence is the contract; the value is cosmetic).
+              method: dispatched.method,
+              url,
+              headers: { Authorization: credential.token, 'Accept-Language': 'zh-CN' },
+              ...(request.body !== undefined ? { body: request.body } : {}),
+            }
+          : {
+              method: dispatched.method,
+              url,
+              headers: { Authorization: `Bearer ${credential.token}` },
+              ...(request.body !== undefined ? { body: request.body } : {}),
+            };
     return this.transport.fetch(authorized);
   }
 
