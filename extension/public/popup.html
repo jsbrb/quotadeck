@@ -7,6 +7,8 @@
       Static shell (AD-14): MV3 extension-page CSP (script-src 'self') forbids
       inline scripts and inline event-handler attributes, so ALL behavior lives
       in the bundled popup.js below; the inline <style> element is CSP-legal.
+      Styles cover both popup views (AD-22): the consumption main view and the
+      gear-driven settings view.
     -->
     <style>
       body {
@@ -14,9 +16,23 @@
         margin: 12px;
         min-width: 300px;
       }
-      h1 {
-        font-size: 15px;
+      .popup-header {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
         margin: 0 0 8px;
+      }
+      .popup-header h1 {
+        font-size: 15px;
+        margin: 0;
+      }
+      .header-action {
+        background: none;
+        border: 1px solid #e0e0e0;
+        border-radius: 4px;
+        cursor: pointer;
+        font: inherit;
+        padding: 2px 8px;
       }
       .provider {
         border-top: 1px solid #e0e0e0;
@@ -43,8 +59,31 @@
         color: #555;
         margin: 0 0 4px;
       }
+      .budget {
+        border-left: 3px solid #e0e0e0;
+        margin: 0 0 4px;
+        padding-left: 8px;
+      }
+      .budget-summary {
+        font-weight: 600;
+        margin: 0 0 2px;
+      }
+      .budget-reset {
+        color: #555;
+        margin: 0 0 2px;
+      }
+      .model-rows {
+        color: #555;
+        list-style: none;
+        margin: 0 0 4px;
+        padding: 0;
+      }
+      .model-row {
+        margin: 0 0 2px;
+      }
       .key-form {
         display: flex;
+        flex-wrap: wrap;
         gap: 4px;
         margin: 4px 0;
       }

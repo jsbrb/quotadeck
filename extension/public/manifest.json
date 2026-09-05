@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "quotadeck",
   "version": "0.1.0",
-  "description": "Provider usage and balance badge (fixture-only milestone)",
+  "description": "Provider usage and balance badge",
   "action": {
     "default_title": "quotadeck",
     "default_popup": "popup.html"

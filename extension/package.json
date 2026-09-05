@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "quotadeck browser extension — provider usage badge (MV3, fixture-only milestone)",
+  "description": "quotadeck browser extension — provider usage badge (MV3, live usage)",
   "scripts": {
     "build": "node build.mjs",
     "test": "vitest run",
