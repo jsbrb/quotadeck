@@ -9,6 +9,8 @@
 // Behavior (usage-badge spec):
 // - One-Minute Alarm Schedule: `usage-refresh` is registered with a 1-minute
 //   period on install and on startup WHEN ABSENT.
+// - One-Shot Refresh Alarm: `refresh-now` (created by the popup) drives the
+//   SAME refresh tick; the periodic registration and cadence stay untouched.
 // - Live refresh per tick: every alarm tick reads the ZAI platform
 //   preference (qd:pref:zai-platform), derives the whole UsageQuery from the
 //   injected Clock + platform (buildTickQuery) and refreshes each keyed
@@ -31,8 +33,15 @@ import { KeyStore } from './storage/key-store';
 import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
 import { readZaiPlatform } from './storage/zai-platform-store';
 
-/** The single alarm name the worker owns (usage-badge §One-Minute Alarm Schedule). */
+/** The single periodic alarm name the worker owns (usage-badge §One-Minute Alarm Schedule). */
 export const USAGE_REFRESH_ALARM = 'usage-refresh';
+/**
+ * One-shot manual refresh alarm (usage-badge §One-Shot Refresh Alarm): fired
+ * by the popup, handled by the SAME refresh tick as the periodic alarm. The
+ * popup defines its own module-local copy of this name (AD-24: it must not
+ * import this module), so the two literals are pinned equal by tests.
+ */
+export const REFRESH_NOW_ALARM = 'refresh-now';
 /** Spec-pinned refresh period. */
 export const REFRESH_PERIOD_MINUTES = 1;
 
@@ -125,7 +134,9 @@ export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): v
   });
 
   browser.alarms.onAlarm.listen((alarm) => {
-    if (alarm.name !== USAGE_REFRESH_ALARM) {
+    // Both names drive the SAME tick (usage-badge §One-Shot Refresh Alarm);
+    // handling refresh-now never touches the periodic registration above.
+    if (alarm.name !== USAGE_REFRESH_ALARM && alarm.name !== REFRESH_NOW_ALARM) {
       return;
     }
     void refreshTick(browser, engine, clock).catch((error) => {

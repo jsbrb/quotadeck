@@ -3,6 +3,7 @@ import {
   buildTickQuery,
   createRefreshEngine,
   refreshTick,
+  REFRESH_NOW_ALARM,
   REFRESH_PERIOD_MINUTES,
   startWorker,
   USAGE_REFRESH_ALARM,
@@ -212,6 +213,57 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
 
     expect(h.alarms.creates).toEqual([USAGE_REFRESH_ALARM]); // only the pre-existing one
     expect((await h.alarms.get(USAGE_REFRESH_ALARM))?.periodInMinutes).toBe(5);
+  });
+});
+
+describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
+  it('firing refresh-now runs the shared refresh tick: badges render and exactly one snapshot write lands', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ALL_KEYS);
+    startWorker(h.api, {
+      clock: new FixedClock(),
+      transport: new SignedQwenRouteTransport(liveRoutes()),
+    });
+    h.fireInstalled();
+    await flushTasks();
+
+    h.alarms.fire(REFRESH_NOW_ALARM);
+    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
+
+    expect(h.action.badgeTexts).toEqual(['32%', '¥100', '$20', '¥89']); // identical to a periodic tick
+    expect(h.alarms.creates).toEqual([USAGE_REFRESH_ALARM]); // the worker registers ONLY the periodic alarm
+    await expect(h.alarms.get(REFRESH_NOW_ALARM)).resolves.toBeUndefined();
+  });
+
+  it('leaves the periodic schedule unchanged after a refresh-now fire: still registered, period 1, no duplicate create', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['kimi']);
+    startWorker(h.api, { clock: new FixedClock(), transport: new FixtureTransport(liveRoutes()) });
+    h.fireInstalled();
+    await flushTasks();
+
+    h.alarms.fire(REFRESH_NOW_ALARM);
+    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
+
+    expect(await h.alarms.get(USAGE_REFRESH_ALARM)).toMatchObject({
+      name: USAGE_REFRESH_ALARM,
+      periodInMinutes: REFRESH_PERIOD_MINUTES,
+    });
+    expect(h.alarms.creates).toEqual([USAGE_REFRESH_ALARM]); // no re-create, no duplicate
+  });
+
+  it('ignores unknown alarm names: no badge writes, no snapshot write', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ALL_KEYS);
+    startWorker(h.api, { clock: new FixedClock(), transport: new FixtureTransport(liveRoutes()) });
+    h.fireInstalled();
+    await flushTasks();
+
+    h.alarms.fire('not-a-quotadeck-alarm');
+    await flushTasks();
+
+    expect(h.action.badgeTexts).toEqual([]);
+    expect(snapshotWrites(h.local)).toBe(0);
   });
 });
 
