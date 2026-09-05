@@ -119,12 +119,39 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/** Threshold band classes (popup-ui §Provider List Rendering). */
+export type ThresholdBand = 'band-green' | 'band-amber' | 'band-red';
+
+/**
+ * Maps a percentage to its threshold band via the ROUNDED displayed value
+ * (popup-ui spec — contiguous bands): green below 70, amber at or above 70,
+ * red at or above 90. Rounding first means the band can never disagree with
+ * the displayed text at .5 boundaries (69.5 displays as 70% → amber).
+ */
+export function thresholdBand(percentage: number): ThresholdBand {
+  const rounded = Math.round(percentage);
+  if (rounded < 70) {
+    return 'band-green';
+  }
+  return rounded < 90 ? 'band-amber' : 'band-red';
+}
+
+/**
+ * Threshold-colored progress bar (popup-ui spec — Fill capped, text
+ * uncapped): the visual fill caps at 100; width is presentation only.
+ */
+function bar(band: ThresholdBand, fillPercent: number): string {
+  const width = Math.min(Math.round(fillPercent), 100);
+  return `<div class="bar ${band}"><div class="bar-fill" style="width: ${width}%"></div></div>`;
+}
+
 /**
  * One monitor window line (AD-26): percentage uncapped (integer display —
  * the model keeps the exact value), used/total (bare total when used is
  * absent, nothing when total is absent too — the live plan-pro shape),
  * countdown when `resetAt` is present. Absent parts are simply omitted —
- * nothing is synthesized.
+ * nothing is synthesized. Percentage-bearing lines carry a threshold bar
+ * (popup-ui §Threshold bands); windows without one render the line only.
  */
 function windowLine(label: string, window: UsageWindow, state: PopupState): string {
   const parts: string[] = [];
@@ -139,7 +166,8 @@ function windowLine(label: string, window: UsageWindow, state: PopupState): stri
   if (window.resetAt !== undefined) {
     parts.push(`Resets in ${formatResetCountdown(window.resetAt, state.nowMs)}`);
   }
-  return `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
+  const line = `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
+  return window.percentage === undefined ? line : line + bar(thresholdBand(window.percentage), window.percentage);
 }
 
 /** ZAI monitor block: level, 5h/weekly windows, monthly MCP + per-tool rows (AD-26/27). */
@@ -157,6 +185,11 @@ function monitorBlock(usage: NormalizedUsage, state: PopupState): string {
   }
   if (windows.mcp !== undefined) {
     parts.push(`<p class="monitor-mcp">MCP: ${windows.mcp.used} / ${windows.mcp.ceiling}</p>`);
+    // MCP fill derives from used/ceiling at render time (popup-ui spec —
+    // MCP bar from used/ceiling): presentation only, NO percentage is
+    // synthesized for the window itself.
+    const fill = (windows.mcp.used / windows.mcp.ceiling) * 100;
+    parts.push(bar(thresholdBand(fill), fill));
     if (windows.mcp.tools.length > 0) {
       const tools = [...windows.mcp.tools].sort((a, b) => compareStrings(a.name, b.name));
       const rows = tools.map((tool) => `<li class="mcp-tool">${escapeHtml(tool.name)} · ${tool.used}</li>`);

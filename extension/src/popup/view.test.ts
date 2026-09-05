@@ -6,7 +6,7 @@ import { strictEqual } from 'node:assert/strict';
 import { describe, expect, it } from 'vitest';
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type MonitorWindows, type NormalizedUsage } from '../core/usage';
+import { currencySymbol, type McpWindow, type MonitorWindows, type NormalizedUsage } from '../core/usage';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 import {
   escapeHtml,
@@ -16,6 +16,7 @@ import {
   type PopupState,
   renderMain,
   renderSettings,
+  thresholdBand,
   ZAI_WRONG_PLATFORM_GUIDANCE,
 } from './view';
 
@@ -63,6 +64,9 @@ function sectionFor(html: string, id: ProviderId): string {
   const end = html.indexOf('<section', start);
   return html.slice(start, end === -1 ? undefined : end);
 }
+
+/** Strips tags so combined-text assertions survive nested elements (countdown span, bar divs). */
+const stripTags = (html: string): string => html.replace(/<[^>]*>/g, '');
 
 describe('currencySymbol — core/usage export reused by popup display', () => {
   it('maps known ISO codes case-insensitively and falls back to empty for unknown ones', () => {
@@ -203,7 +207,7 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
     expect(zai).toContain('5h: 700 / 12000'); // no percentage part when the API omitted it
-    expect(zai).not.toContain('%'); // no synthesized percentage anywhere
+    expect(stripTags(zai)).not.toContain('%'); // no synthesized percentage text (bar widths are attributes)
     expect(zai).not.toContain('Resets in'); // resetAt absent → no countdown line
     expect(zai).not.toContain('Weekly:'); // absent window not rendered
     expect(zai).not.toContain('Level:'); // level absent → line omitted
@@ -439,5 +443,113 @@ describe('escapeHtml', () => {
 
     expect(html).not.toContain(`>${hostile}<`);
     expect((html.match(/&lt;script&gt;alert\(1\)&lt;\/script&gt;/g) ?? []).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('thresholdBand — contiguous bands from the rounded displayed percentage', () => {
+  it('maps 55 to green, 70 to amber, 90 to red and 137 to red (popup-ui §Threshold bands)', () => {
+    expect(thresholdBand(55)).toBe('band-green');
+    expect(thresholdBand(70)).toBe('band-amber');
+    expect(thresholdBand(90)).toBe('band-red');
+    expect(thresholdBand(137)).toBe('band-red'); // no percentage unmapped
+  });
+
+  it('bands follow the ROUNDED displayed percentage — band and text can never disagree at .5 boundaries', () => {
+    expect(thresholdBand(69.4)).toBe('band-green'); // displays as 69%
+    expect(thresholdBand(69.5)).toBe('band-amber'); // displays as 70%
+    expect(thresholdBand(89.4)).toBe('band-amber'); // displays as 89%
+    expect(thresholdBand(89.5)).toBe('band-red'); // displays as 90%
+  });
+});
+
+describe('renderMain — Threshold bands + capped fill (popup-ui spec)', () => {
+  /** Renders the ZAI section for a 5h window carrying only a percentage. */
+  function renderFiveHour(percentage: number): string {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', {
+            kind: 'cost',
+            value: undefined,
+            currency: undefined,
+            windows: { fiveHour: { percentage } },
+          }),
+        },
+      },
+    };
+    return sectionFor(renderMain(popupState({ snapshot })), 'zai');
+  }
+
+  it('renders a threshold-colored bar after each percentage-bearing window line', () => {
+    expect(renderFiveHour(55)).toContain(
+      '<div class="bar band-green"><div class="bar-fill" style="width: 55%"></div></div>',
+    );
+    expect(renderFiveHour(70)).toContain(
+      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div></div>',
+    );
+    expect(renderFiveHour(90)).toContain(
+      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div></div>',
+    );
+    expect(renderFiveHour(137)).toContain(
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>',
+    );
+  });
+
+  it('caps the visual fill at 100 while the percentage text stays uncapped at 137', () => {
+    const zai = renderFiveHour(137);
+
+    expect(zai).toContain('style="width: 100%"'); // fill capped…
+    expect(stripTags(zai)).toContain('5h: 137%'); // …text uncapped
+  });
+});
+
+describe('renderMain — MCP bar from used/ceiling (popup-ui spec)', () => {
+  /** Renders the ZAI section for a monitor payload carrying only the MCP window. */
+  function renderMcp(mcp: McpWindow): string {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', { kind: 'cost', value: undefined, currency: undefined, windows: { mcp } }),
+        },
+      },
+    };
+    return sectionFor(renderMain(popupState({ snapshot })), 'zai');
+  }
+
+  it('derives the fill from used/ceiling — 0/1000 renders a 0% green bar and NO percentage text', () => {
+    const zai = renderMcp({ used: 0, ceiling: 1000, tools: [] });
+
+    expect(zai).toContain(
+      '<div class="bar band-green"><div class="bar-fill" style="width: 0%"></div></div>',
+    );
+    expect(stripTags(zai)).not.toContain('%'); // the view must not synthesize a percentage
+    expect(zai).toContain('MCP: 0 / 1000'); // the line itself stays a plain used/ceiling line
+  });
+
+  it('54/60 fills 90% and lands on the red band — MCP bands follow the spec thresholds (≥90 red)', () => {
+    const zai = renderMcp({ used: 54, ceiling: 60, tools: [] });
+
+    expect(zai).toContain(
+      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div></div>',
+    );
+    expect(zai).toContain('MCP: 54 / 60');
+  });
+
+  it('42/60 fills exactly 70% and lands on the amber band (≥70 amber, MCP same bands)', () => {
+    const zai = renderMcp({ used: 42, ceiling: 60, tools: [] });
+
+    expect(zai).toContain(
+      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div></div>',
+    );
+  });
+
+  it('caps an over-ceiling MCP fill at 100 with the red band', () => {
+    const zai = renderMcp({ used: 90, ceiling: 60, tools: [{ name: 'web-search', used: 90 }] });
+
+    expect(zai).toContain(
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>',
+    );
   });
 });
