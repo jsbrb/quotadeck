@@ -2,26 +2,35 @@
 //
 // Pipeline per request, in order, with ZERO transport I/O before every check
 // passes (network-allowlist spec):
-//   1. Build the full URL (encoded query) and resolve the host.
+//   1. Build the full URL (encoded query) and resolve the host. For ak-sk the
+//      query is the SIGNED BSS query (AD-18) built first — the scan sees the
+//      exact material that would leave the extension.
 //   2. Host check: suffix match against THIS provider's allowlist entry.
-//   3. Credential-placement scan over url / query / body (defense in depth on
-//      top of the structural guarantee — see network/request.ts: ProviderRequest
-//      has no header or cookie field, and no cookie jar exists anywhere).
-//   4. Attach `Authorization` here — callers never see the header.
+//   3. Credential-kind-aware placement scan (network/request.ts): tokens are
+//      confined to the Authorization header; the AccessKeySecret never
+//      appears anywhere; AccessKeyId may appear in the query only on the Qwen
+//      BSS host (AD-19 sanctioned exception).
+//   4. Attach here — callers never see headers. Bearer/admin → Authorization
+//      header; ak-sk → NO header at all, auth travels as the signed query.
 //   5. Delegate to the injected Transport.
-//
-// Note on Qwen: this fixture-only milestone attaches a Bearer-style
-// Authorization value for every provider because nothing is actually
-// authenticated live; the Alibaba AK/SK HMAC signing scheme lands with the
-// live-transport milestone and will be implemented behind this same seam.
-import type { ProviderId } from '../core/provider';
+import { SystemClock, type Clock } from '../core/clock';
+import type { Credential, ProviderId } from '../core/provider';
 import { isHostAllowed } from './allowlist';
 import {
   assertNoCredentialMaterial,
   NetworkRejectionError,
   type ProviderRequest,
 } from './request';
+import { signBssQuery } from './rpc-signer';
 import type { AuthorizedRequest, Transport, TransportResponse } from './transport';
+
+/** Injectable sources for the BSS signature inputs (AD-19: no ambient time). */
+export interface NetworkClientDeps {
+  /** Timestamp source (epoch ms → ISO-8601 UTC). Defaults to SystemClock. */
+  readonly clock?: Clock;
+  /** SignatureNonce source. Defaults to crypto.randomUUID(). */
+  readonly nonce?: () => string;
+}
 
 function buildUrl(request: ProviderRequest): string {
   if (request.query === undefined) {
@@ -39,14 +48,28 @@ function buildUrl(request: ProviderRequest): string {
 }
 
 export class AllowlistNetworkClient {
-  constructor(private readonly transport: Transport) {}
+  private readonly clock: Clock;
+  private readonly nonce: () => string;
+
+  constructor(
+    private readonly transport: Transport,
+    deps: NetworkClientDeps = {},
+  ) {
+    this.clock = deps.clock ?? new SystemClock();
+    this.nonce = deps.nonce ?? (() => crypto.randomUUID());
+  }
 
   async send(
     providerId: ProviderId,
     request: ProviderRequest,
-    credential: string,
+    credential: Credential,
   ): Promise<TransportResponse> {
-    const url = buildUrl(request);
+    // ak-sk: the signed query IS the credential attachment — build it first so
+    // the scan validates the dispatchable material (AD-19).
+    const dispatched: ProviderRequest = credential.type === 'ak-sk'
+      ? await this.signedRequest(providerId, request, credential)
+      : request;
+    const url = buildUrl(dispatched);
     const host = new URL(url).hostname;
 
     if (!isHostAllowed(providerId, host)) {
@@ -55,14 +78,45 @@ export class AllowlistNetworkClient {
         `Host ${host} is not on the allowlist for provider ${providerId}.`,
       );
     }
-    assertNoCredentialMaterial(request, credential, url);
+    assertNoCredentialMaterial(dispatched, credential, url);
 
-    const authorized: AuthorizedRequest = {
-      method: request.method,
-      url,
-      headers: { Authorization: `Bearer ${credential}` },
-      ...(request.body !== undefined ? { body: request.body } : {}),
-    };
+    const authorized: AuthorizedRequest =
+      credential.type === 'ak-sk'
+        ? { method: dispatched.method, url, headers: {}, ...(dispatched.body !== undefined ? { body: dispatched.body } : {}) }
+        : {
+            method: dispatched.method,
+            url,
+            headers: { Authorization: `Bearer ${credential.token}` },
+            ...(request.body !== undefined ? { body: request.body } : {}),
+          };
     return this.transport.fetch(authorized);
+  }
+
+  /**
+   * Builds the signed BSS query (AD-18): provider query params + AccessKeyId +
+   * common params, signed with the injected clock timestamp and rng nonce.
+   * ak-sk credentials are qwen-only — anything else is a placement violation.
+   */
+  private async signedRequest(
+    providerId: ProviderId,
+    request: ProviderRequest,
+    credential: Extract<Credential, { type: 'ak-sk' }>,
+  ): Promise<ProviderRequest> {
+    if (providerId !== 'qwen') {
+      throw new NetworkRejectionError(
+        'credential-placement',
+        `ak-sk credentials are only valid for qwen (Alibaba BSS), not ${providerId}.`,
+      );
+    }
+    const base: Record<string, string> = {};
+    for (const [key, value] of Object.entries(request.query ?? {})) {
+      base[key] = String(value);
+    }
+    base.AccessKeyId = credential.accessKeyId;
+    const { query, signature } = await signBssQuery(base, credential.accessKeySecret, {
+      timestamp: new Date(this.clock.now()).toISOString(),
+      nonce: this.nonce(),
+    });
+    return { method: request.method, url: request.url, query: { ...query, Signature: signature } };
   }
 }

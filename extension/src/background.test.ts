@@ -7,8 +7,9 @@ import {
   startWorker,
   USAGE_REFRESH_ALARM,
 } from './background';
-import type { ProviderId } from './core/provider';
+import type { Credential, ProviderId } from './core/provider';
 import { FIXTURE_RESPONSES } from './fixtures';
+import type { AuthorizedRequest, Transport, TransportResponse } from './network/transport';
 import { FixtureTransport } from './network/transport';
 import type { BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
@@ -70,10 +71,40 @@ function makeApi(): Harness {
   };
 }
 
+/** Typed credentials per provider — qwen keys as an AK/SK pair (AD-17). */
+const TEST_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
+  zai: { type: 'bearer', token: 'fixture-milestone-key' },
+  qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tFixtureAccessKey', accessKeySecret: 'fixture-milestone-secret' },
+  openai: { type: 'openai-admin-read', token: 'fixture-milestone-key' },
+  kimi: { type: 'bearer', token: 'fixture-milestone-key' },
+};
+
 async function saveKeys(local: FakeStorageArea, ids: readonly ProviderId[]): Promise<void> {
   const keys = new KeyStore(local);
   for (const id of ids) {
-    await keys.saveKey(id, 'fixture-milestone-key');
+    await keys.saveCredential(id, TEST_CREDENTIALS[id]);
+  }
+}
+
+/**
+ * FixtureTransport wrapper for the qwen leg: the live client now dispatches a
+ * SIGNED query (timestamp/nonce vary per run), so exact-URL routing cannot
+ * match. This double normalizes any business.aliyuncs.com dispatch to the
+ * recorded route key — proving the signed request still targets the BSS host —
+ * and leaves every other route byte-exact.
+ */
+class SignedQwenRouteTransport implements Transport {
+  private readonly routes: FixtureTransport;
+
+  constructor(routes: Readonly<Record<string, TransportResponse>>) {
+    this.routes = new FixtureTransport(routes);
+  }
+
+  async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+    const url = request.url.startsWith('https://business.aliyuncs.com/')
+      ? 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14'
+      : request.url;
+    return this.routes.fetch({ ...request, url });
   }
 }
 
@@ -130,7 +161,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
   it('updates the badge on every tick: one deterministic text per keyed provider, last result wins, stable across repeated ticks', async () => {
     const h = makeApi();
     await saveKeys(h.local, ALL_KEYS);
-    startWorker(h.api, { clock: new FakeClock(), rng: () => 0 });
+    startWorker(h.api, { clock: new FakeClock(), rng: () => 0, transport: new SignedQwenRouteTransport(FIXTURE_ROUTES) });
     h.fireInstalled();
     await flushTasks();
 
@@ -202,7 +233,11 @@ describe('background — No Live Calls in Milestone (usage-badge spec)', () => {
     });
 
     try {
-      const engine = createRefreshEngine(h.api, { clock: new FakeClock(), rng: () => 0 });
+      const engine = createRefreshEngine(h.api, {
+        clock: new FakeClock(),
+        rng: () => 0,
+        transport: new SignedQwenRouteTransport(FIXTURE_ROUTES),
+      });
       await refreshTick(h.api, engine);
     } finally {
       vi.unstubAllGlobals();
@@ -216,7 +251,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
   it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage, badge texts unchanged', async () => {
     const h = makeApi();
     await saveKeys(h.local, ALL_KEYS);
-    startWorker(h.api, { clock: new FakeClock(), rng: () => 0 });
+    startWorker(h.api, { clock: new FakeClock(), rng: () => 0, transport: new SignedQwenRouteTransport(FIXTURE_ROUTES) });
     h.fireInstalled();
     await flushTasks();
 

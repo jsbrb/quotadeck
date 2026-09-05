@@ -5,12 +5,20 @@
 // RecordingTransport, draws the declared inter-page delay window from the
 // injected Clock (deterministic via the `rng` seam), and stamps `fetchedAt`.
 import type { Clock } from '../core/clock';
-import type { Provider, UsageQuery } from '../core/provider';
+import type { Credential, CredentialType, Provider, UsageQuery } from '../core/provider';
 import type { NormalizedUsage } from '../core/usage';
 import type { AllowlistNetworkClient } from '../network/client';
 
-/** Opaque credential for driver runs; never appears in any request surface. */
-export const TEST_CREDENTIAL = 'test-driver-credential';
+/** Typed test credentials per CredentialType; never appear in any request surface they do not belong to. */
+export const TEST_CREDENTIALS: Readonly<Record<CredentialType, Credential>> = {
+  bearer: { type: 'bearer', token: 'test-driver-credential' },
+  'openai-admin-read': { type: 'openai-admin-read', token: 'test-driver-credential' },
+  'ak-sk': {
+    type: 'ak-sk',
+    accessKeyId: 'LTAI5tTestDriverAK000',
+    accessKeySecret: 'TestDriverSecret0000000000000000',
+  },
+};
 
 export async function driveRefresh(
   provider: Provider,
@@ -19,8 +27,9 @@ export async function driveRefresh(
   clock: Clock,
   rng: () => number = Math.random,
 ): Promise<NormalizedUsage> {
+  const credential = TEST_CREDENTIALS[provider.credentialType];
   let parse = provider.parsePage(
-    (await client.send(provider.id, provider.firstRequest(query), TEST_CREDENTIAL)).body,
+    (await client.send(provider.id, provider.firstRequest(query), credential)).body,
     null,
   );
   while (!parse.done) {
@@ -29,7 +38,7 @@ export async function driveRefresh(
       await clock.sleep(Math.round(min + rng() * (max - min)));
     }
     parse = provider.parsePage(
-      (await client.send(provider.id, parse.next, TEST_CREDENTIAL)).body,
+      (await client.send(provider.id, parse.next, credential)).body,
       parse.state,
     );
   }

@@ -1,14 +1,23 @@
-// Provider-authored request shape + credential-placement guard (AD-3).
+// Provider-authored request shape + credential-placement guard (AD-3, AD-19).
 //
 // STRUCTURAL NO-COOKIE / NO-CALLER-HEADER GUARANTEE (network-allowlist spec
 // §Credentials Only in Authorization Header): `ProviderRequest` deliberately has
 // NO `headers` field and NO `cookies` field — a provider cannot set arbitrary
 // headers or attach cookies even if it wanted to. The only component that
-// produces headers is `AllowlistNetworkClient`, which sets exactly one:
-// `Authorization`. The downstream `Transport` type carries headers but no cookie
-// jar. Credential material therefore has exactly one legal path — the
-// Authorization header — and the scan below enforces it dynamically as defense
-// in depth (a key smuggled into the URL, query, or body is rejected).
+// produces headers is `AllowlistNetworkClient`, which sets at most one:
+// `Authorization` (token credentials). The downstream `Transport` type carries
+// headers but no cookie jar.
+//
+// Credential material therefore has exactly one legal path per kind — the
+// Authorization header for tokens, the derived BSS query signature for ak-sk —
+// and the scan below enforces it dynamically as defense in depth:
+// - token credentials: the token must not appear in url/query/body;
+// - ak-sk (AD-19 sanctioned exception, scoped): the AccessKeySecret must not
+//   appear ANYWHERE; the AccessKeyId may appear ONLY as a query parameter and
+//   ONLY on the Qwen BSS host (business.aliyuncs.com) — anything else is
+//   rejected before any transport I/O.
+import type { Credential } from '../core/provider';
+import { isHostAllowed } from './allowlist';
 
 /** A request as built by a provider, BEFORE credentials are attached. */
 export interface ProviderRequest {
@@ -23,7 +32,7 @@ export interface ProviderRequest {
 export type NetworkRejectionReason =
   /** The target host is not on the requesting provider's allowlist. */
   | 'host-not-allowed'
-  /** Credential material appeared outside the Authorization header. */
+  /** Credential material appeared outside its sanctioned placement. */
   | 'credential-placement';
 
 /** Explicit error thrown when the network layer refuses to dispatch a request. */
@@ -38,27 +47,61 @@ export class NetworkRejectionError extends Error {
 }
 
 /**
- * Credential-placement guard: rejects when the credential (or its URL-encoded
- * form in the fully built URL) appears anywhere in the URL, query values, or
- * body. `AllowlistNetworkClient` runs this BEFORE any transport I/O, so a
- * violating request never leaves the extension (spec §Non-header key suppressed).
+ * Credential-kind-aware placement guard (AD-19). `AllowlistNetworkClient` runs
+ * this BEFORE any transport I/O over the fully built request, so a violating
+ * request never leaves the extension (spec §Non-header key suppressed and
+ * §Signed-style credentials rejected off the Qwen host).
  */
 export function assertNoCredentialMaterial(
   request: ProviderRequest,
-  credential: string,
+  credential: Credential,
   fullUrl: string,
 ): void {
-  if (credential.length === 0) {
+  const querySurfaces: readonly string[] = Object.entries(request.query ?? {}).map(
+    ([key, value]) => `${key}=${value}`,
+  );
+  const bodySurfaces: readonly string[] = request.body !== undefined ? [request.body] : [];
+
+  if (credential.type === 'ak-sk') {
+    if (credential.accessKeyId.length === 0 || credential.accessKeySecret.length === 0) {
+      throw new NetworkRejectionError('credential-placement', 'Missing credential: nothing to attach.');
+    }
+    // The secret is never transmitted — no surface, no exception, no host.
+    for (const surface of [request.url, fullUrl, ...querySurfaces, ...bodySurfaces]) {
+      if (surface.includes(credential.accessKeySecret)) {
+        throw new NetworkRejectionError(
+          'credential-placement',
+          'AccessKeySecret must never appear in the url, query, body, headers, or cookies.',
+        );
+      }
+    }
+    // AccessKeyId: query-only, and only on the Qwen BSS host.
+    if (!isHostAllowed('qwen', new URL(fullUrl).hostname)) {
+      for (const surface of [...querySurfaces, fullUrl]) {
+        if (surface.includes(credential.accessKeyId)) {
+          throw new NetworkRejectionError(
+            'credential-placement',
+            'AccessKeyId in the query is allowed only on the Qwen BSS host (business.aliyuncs.com).',
+          );
+        }
+      }
+    }
+    for (const surface of [request.url, ...bodySurfaces]) {
+      if (surface.includes(credential.accessKeyId)) {
+        throw new NetworkRejectionError(
+          'credential-placement',
+          'AccessKeyId must not appear in the url path or body.',
+        );
+      }
+    }
+    return;
+  }
+
+  if (credential.token.length === 0) {
     throw new NetworkRejectionError('credential-placement', 'Missing credential: nothing to attach.');
   }
-  const surfaces: readonly string[] = [
-    request.url,
-    fullUrl,
-    ...Object.entries(request.query ?? {}).map(([key, value]) => `${key}=${value}`),
-    ...(request.body !== undefined ? [request.body] : []),
-  ];
-  for (const surface of surfaces) {
-    if (surface.includes(credential)) {
+  for (const surface of [request.url, fullUrl, ...querySurfaces, ...bodySurfaces]) {
+    if (surface.includes(credential.token)) {
       throw new NetworkRejectionError(
         'credential-placement',
         'Credential material found outside the Authorization header (url/query/body).',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProviderId, UsageQuery } from '../core/provider';
+import type { Credential, ProviderId, UsageQuery } from '../core/provider';
 import type { NormalizedUsage } from '../core/usage';
 import { ProviderRegistry } from '../core/registry';
 import { FIXTURE_RESPONSES } from '../fixtures';
@@ -49,6 +49,14 @@ function recorder(): RefreshCallbacks & {
   };
 }
 
+/** Typed test credentials per provider (saveCredential is type-aware). */
+const TEST_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
+  zai: { type: 'bearer', token: 'engine-test-credential' },
+  qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tEngineTestAK00', accessKeySecret: 'EngineTestSecret000000000000' },
+  openai: { type: 'openai-admin-read', token: 'engine-test-credential' },
+  kimi: { type: 'bearer', token: 'engine-test-credential' },
+};
+
 async function makeEngine(
   options: { transport?: RecordingTransport; rng?: () => number; keyed?: readonly ProviderId[] } = {},
 ): Promise<{ engine: RefreshEngine; registry: ProviderRegistry; transport: RecordingTransport; clock: FakeClock }> {
@@ -58,7 +66,7 @@ async function makeEngine(
   const clock = new FakeClock();
   const keys = new KeyStore(new FakeBrowser().local);
   for (const id of keyed) {
-    await keys.saveKey(id, 'engine-test-credential');
+    await keys.saveCredential(id, TEST_CREDENTIALS[id]);
   }
   const engine = new RefreshEngine({
     registry,
@@ -82,7 +90,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
   it('threads opaque pagination state across pages and folds the final usage', async () => {
     const { engine, registry, transport } = await makeEngine({ rng: () => 0 });
 
-    const usage = await engine.refresh(registry.get('zai'), QUERY, 'cred');
+    const usage = await engine.refresh(registry.get('zai'), QUERY, { type: 'bearer', token: 'cred' });
 
     expect(usage.providerId).toBe('zai');
     expect(usage.kind).toBe('cost');
@@ -95,7 +103,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
   it('stamps fetchedAt from the injected Clock — providers emit 0 by contract', async () => {
     const { engine, registry, clock } = await makeEngine({ rng: () => 0 });
 
-    const usage = await engine.refresh(registry.get('zai'), QUERY, 'cred');
+    const usage = await engine.refresh(registry.get('zai'), QUERY, { type: 'bearer', token: 'cred' });
 
     // FakeClock start 1_700_000_000_000 plus two 500 ms sleeps → fold time.
     expect(usage.fetchedAt).toBe(1_700_000_001_000);
@@ -105,11 +113,11 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
 
   it('sleeps exactly N−1 times on the injected Clock, each draw inside [500, 2000] ms', async () => {
     const min = await makeEngine({ rng: () => 0 });
-    await min.engine.refresh(min.registry.get('zai'), QUERY, 'cred');
+    await min.engine.refresh(min.registry.get('zai'), QUERY, { type: 'bearer', token: 'cred' });
     expect(min.clock.sleeps).toEqual([500, 500]); // 3 pages → 2 sleeps, rng 0 → window minimum
 
     const max = await makeEngine({ rng: () => 1 });
-    await max.engine.refresh(max.registry.get('zai'), QUERY, 'cred');
+    await max.engine.refresh(max.registry.get('zai'), QUERY, { type: 'bearer', token: 'cred' });
     expect(max.clock.sleeps).toEqual([2000, 2000]); // rng 1 → window maximum
 
     for (const sleep of [...min.clock.sleeps, ...max.clock.sleeps]) {
@@ -126,7 +134,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
       ]),
     });
 
-    const usage = await engine.refresh(registry.get('openai'), QUERY, 'cred');
+    const usage = await engine.refresh(registry.get('openai'), QUERY, { type: 'bearer', token: 'cred' });
 
     expect(usage.value).toBe(20);
     expect(usage.providerId).toBe('openai');
@@ -138,7 +146,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
       transport: new RecordingTransport([FIXTURE_RESPONSES['zai/expense-bill-list--code-500']]),
     });
 
-    await expect(engine.refresh(registry.get('zai'), QUERY, 'cred')).rejects.toThrow(
+    await expect(engine.refresh(registry.get('zai'), QUERY, { type: 'bearer', token: 'cred' })).rejects.toThrow(
       /numeric code 200.*got number 500/i,
     );
   });
@@ -146,7 +154,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
   it('propagates transport failures to the caller — no silent fallback', async () => {
     const { engine, registry } = await makeEngine({ transport: new RecordingTransport() }); // empty queue
 
-    await expect(engine.refresh(registry.get('zai'), QUERY, 'cred')).rejects.toThrow(/unexpected fetch/i);
+    await expect(engine.refresh(registry.get('zai'), QUERY, { type: 'bearer', token: 'cred' })).rejects.toThrow(/unexpected fetch/i);
   });
 });
 
@@ -202,6 +210,58 @@ describe('RefreshEngine — refreshAll (sequential, keyed-only, error marker fee
     await engine.refreshAll(QUERY, calls);
 
     expect(transport.requests).toEqual([]);
+    expect(calls.usages).toEqual([]);
+    expect(calls.errors).toEqual([]);
+  });
+});
+
+describe('RefreshEngine — credential threading (AD-17/19)', () => {
+  const QWEN_PAIR: Credential = {
+    type: 'ak-sk',
+    accessKeyId: 'LTAI5tEnginePairAK000',
+    accessKeySecret: 'EnginePairSecret000000000000000000',
+  };
+
+  it('refreshAll reads the qwen pair via readCredential(id, type) and threads it to send as a signed query', async () => {
+    const registry = new ProviderRegistry().register(createDefaultRegistry().get('qwen'));
+    const transport = new RecordingTransport([FIXTURE_RESPONSES['qwen/query-account-balance--ok']]);
+    const keys = new KeyStore(new FakeBrowser().local);
+    await keys.saveCredential('qwen', QWEN_PAIR);
+    const engine = new RefreshEngine({
+      registry,
+      client: new AllowlistNetworkClient(transport, { clock: new FakeClock(), nonce: () => 'engine-nonce-1' }),
+      keys,
+      clock: new FakeClock(),
+    });
+    const calls = recorder();
+
+    await engine.refreshAll(QUERY, calls);
+
+    expect(transport.requests).toHaveLength(1);
+    const sent = transport.requests[0]!;
+    expect(sent.headers).toEqual({}); // ak-sk: no Authorization header, signed query carries auth
+    expect(sent.url).toContain('AccessKeyId=LTAI5tEnginePairAK000');
+    expect(sent.url).toContain('Signature=');
+    expect(calls.usages.map((usage) => usage.value)).toEqual([100.28]); // qwen balance fixture folds
+    expect(calls.errors).toEqual([]);
+  });
+
+  it('skips qwen when only a legacy plain string is stored — zero dispatch, zero errors', async () => {
+    const registry = new ProviderRegistry().register(createDefaultRegistry().get('qwen'));
+    const transport = new RecordingTransport(); // empty queue: any dispatch would throw
+    const browser = new FakeBrowser();
+    await browser.local.set({ 'qd:key:qwen': 'legacy-hito2-string-key' }); // pre-Credential shape
+    const engine = new RefreshEngine({
+      registry,
+      client: new AllowlistNetworkClient(transport),
+      keys: new KeyStore(browser.local),
+      clock: new FakeClock(),
+    });
+    const calls = recorder();
+
+    await engine.refreshAll(QUERY, calls);
+
+    expect(transport.requests).toHaveLength(0);
     expect(calls.usages).toEqual([]);
     expect(calls.errors).toEqual([]);
   });

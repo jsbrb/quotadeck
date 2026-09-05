@@ -15,7 +15,7 @@
 // sequential `refreshAll` loop then CONTINUES with the next provider, so a
 // later success in the same tick (or a later tick) replaces the marker.
 import type { Clock } from '../core/clock';
-import type { Provider, ProviderId, UsageQuery } from '../core/provider';
+import type { Credential, Provider, ProviderId, UsageQuery } from '../core/provider';
 import type { ProviderRegistry } from '../core/registry';
 import type { NormalizedUsage } from '../core/usage';
 import type { AllowlistNetworkClient } from '../network/client';
@@ -52,9 +52,10 @@ export class RefreshEngine {
   /**
    * Runs ONE provider's full pagination cycle to the folded result. Throws on
    * any failure (invalid query, allowlist rejection, transport error, parse
-   * error) — the caller renders the error marker.
+   * error) — the caller renders the error marker. The credential is threaded
+   * to every dispatch untouched; only the network client attaches it.
    */
-  async refresh(provider: Provider, query: UsageQuery, credential: string): Promise<NormalizedUsage> {
+  async refresh(provider: Provider, query: UsageQuery, credential: Credential): Promise<NormalizedUsage> {
     let parse = provider.parsePage(
       (await this.deps.client.send(provider.id, provider.firstRequest(query), credential)).body,
       null,
@@ -71,19 +72,21 @@ export class RefreshEngine {
   }
 
   /**
-   * Refreshes every provider that has a stored key, sequentially in registry
-   * order, reporting each outcome through `callbacks`. Providers without a
-   * stored key are skipped silently; a failing provider does not abort the
-   * remaining ones.
+   * Refreshes every provider that has a stored credential, sequentially in
+   * registry order, reporting each outcome through `callbacks`. Credentials
+   * are read type-aware (`readCredential(id, provider.credentialType)`) — a
+   * qwen legacy plain string reads as no credential, so that provider is
+   * skipped; failures do not abort the remaining ones.
    */
   async refreshAll(query: UsageQuery, callbacks: RefreshCallbacks): Promise<void> {
     for (const id of this.deps.registry.ids()) {
-      const credential = await this.deps.keys.readKey(id);
+      const provider = this.deps.registry.get(id);
+      const credential = await this.deps.keys.readCredential(id, provider.credentialType);
       if (credential === undefined) {
         continue;
       }
       try {
-        const usage = await this.refresh(this.deps.registry.get(id), query, credential);
+        const usage = await this.refresh(provider, query, credential);
         await callbacks.onUsage(usage);
       } catch (error) {
         await callbacks.onError(id, error);

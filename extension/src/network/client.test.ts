@@ -1,20 +1,44 @@
 import { describe, expect, it } from 'vitest';
 import { AllowlistNetworkClient } from './client';
-import { NetworkRejectionError, type ProviderRequest } from './request';
+import { NetworkRejectionError, assertNoCredentialMaterial, type ProviderRequest } from './request';
 import type { TransportResponse } from './transport';
+import { FakeClock } from '../testing/fake-clock';
 import { RecordingTransport } from '../testing/recording-transport';
 
 // Hermetic (network-allowlist spec §Injectable Transport): every scenario runs
 // against RecordingTransport — no real network call can occur, and rejections
 // must leave ZERO recorded transport I/O.
-const ZAI_CREDENTIAL = 'zai-secret-token-4f2a';
+const ZAI_CREDENTIAL = { type: 'bearer', token: 'zai-secret-token-4f2a' } as const;
+const QWEN_PAIR = {
+  type: 'ak-sk',
+  accessKeyId: 'LTAI5tQwenAccessKeyId00',
+  accessKeySecret: 'QwenSecretKey000000000000000000000',
+} as const;
 const okResponse: TransportResponse = { status: 200, body: { code: 200 } };
+
+/** Decoded query params of a recorded request URL. */
+function queryOf(url: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const part of url.split('?')[1]!.split('&')) {
+    const eq = part.indexOf('=');
+    out[decodeURIComponent(part.slice(0, eq))] = decodeURIComponent(part.slice(eq + 1));
+  }
+  return out;
+}
 
 function zaiRequest(url = 'https://bigmodel.cn/api/finance/expenseBill/expenseBillList'): ProviderRequest {
   return {
     method: 'GET',
     url,
     query: { billingMonth: '2026-08', pageNum: 1, pageSize: 20 },
+  };
+}
+
+function qwenRequest(): ProviderRequest {
+  return {
+    method: 'GET',
+    url: 'https://business.aliyuncs.com/',
+    query: { Action: 'QueryAccountBalance', Version: '2017-12-14' },
   };
 }
 
@@ -33,8 +57,8 @@ describe('AllowlistNetworkClient — admission', () => {
       'https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=2026-08&pageNum=1&pageSize=20',
     );
     // Key placement: the credential appears ONLY in the Authorization header.
-    expect(sent.headers).toEqual({ Authorization: `Bearer ${ZAI_CREDENTIAL}` });
-    expect(sent.url).not.toContain(ZAI_CREDENTIAL);
+    expect(sent.headers).toEqual({ Authorization: `Bearer ${ZAI_CREDENTIAL.token}` });
+    expect(sent.url).not.toContain(ZAI_CREDENTIAL.token);
   });
 
   it('admits a subdomain of an allowlisted host (AD-5 suffix match)', async () => {
@@ -90,7 +114,7 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
     const smuggled: ProviderRequest = {
       method: 'GET',
       url: 'https://bigmodel.cn/api/finance/expenseBill/expenseBillList',
-      query: { apikey: ZAI_CREDENTIAL },
+      query: { apikey: ZAI_CREDENTIAL.token },
     };
 
     await expect(client.send('zai', smuggled, ZAI_CREDENTIAL)).rejects.toMatchObject({
@@ -105,12 +129,130 @@ describe('AllowlistNetworkClient — rejection with zero transport I/O', () => {
     const smuggled: ProviderRequest = {
       method: 'POST',
       url: 'https://bigmodel.cn/api/finance/expenseBill/expenseBillList',
-      body: JSON.stringify({ token: ZAI_CREDENTIAL }),
+      body: JSON.stringify({ token: ZAI_CREDENTIAL.token }),
     };
 
     await expect(client.send('zai', smuggled, ZAI_CREDENTIAL)).rejects.toMatchObject({
       reason: 'credential-placement',
     });
     expect(transport.requests).toHaveLength(0);
+  });
+});
+
+describe('AllowlistNetworkClient — ak-sk attach (AD-19, qwen only)', () => {
+  it('signs the qwen BSS query and dispatches with NO Authorization header', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const clock = new FakeClock();
+    const client = new AllowlistNetworkClient(transport, { clock, nonce: () => 'fixed-nonce-0001' });
+
+    const response = await client.send('qwen', qwenRequest(), QWEN_PAIR);
+
+    expect(response).toBe(okResponse);
+    const sent = transport.requests[0]!;
+    expect(sent.url.startsWith('https://business.aliyuncs.com/?')).toBe(true);
+    // NO Authorization header — the RPC exception carries auth in the query.
+    expect(sent.headers).toEqual({});
+    expect(sent.headers.Authorization).toBeUndefined();
+    const params = queryOf(sent.url);
+    expect(params.AccessKeyId).toBe(QWEN_PAIR.accessKeyId);
+    expect(params.Action).toBe('QueryAccountBalance');
+    expect(params.Version).toBe('2017-12-14');
+    expect(params.SignatureMethod).toBe('HMAC-SHA1');
+    expect(params.SignatureVersion).toBe('1.0');
+    expect(params.SignatureNonce).toBe('fixed-nonce-0001'); // injected rng
+    expect(params.Timestamp).toBe(new Date(clock.now()).toISOString()); // injected clock
+    expect(params.Signature).toMatch(/^[A-Za-z0-9+/]+={0,2}$/); // derived signature present
+  });
+
+  it('rejects an ak-sk credential for any provider other than qwen, with zero I/O', async () => {
+    const transport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(client.send('openai', zaiRequest('https://api.openai.com/v1/organization/costs'), QWEN_PAIR)).rejects.toMatchObject({
+      name: 'NetworkRejectionError',
+      reason: 'credential-placement',
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+});
+
+describe('credential-kind scan (AD-19) — AccessKeyId scoped to the Qwen host', () => {
+  it('admits AccessKeyId as a query parameter on the Qwen BSS host', () => {
+    const request: ProviderRequest = {
+      method: 'GET',
+      url: 'https://business.aliyuncs.com/',
+      query: { AccessKeyId: QWEN_PAIR.accessKeyId, Action: 'QueryAccountBalance' },
+    };
+    expect(() =>
+      assertNoCredentialMaterial(
+        request,
+        QWEN_PAIR,
+        'https://business.aliyuncs.com/?AccessKeyId=LTAI5tQwenAccessKeyId00&Action=QueryAccountBalance',
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects signed-style credentials off the Qwen host (spec scenario)', () => {
+    const request: ProviderRequest = {
+      method: 'GET',
+      url: 'https://api.openai.com/v1/organization/costs',
+      query: { AccessKeyId: QWEN_PAIR.accessKeyId },
+    };
+    expect(() =>
+      assertNoCredentialMaterial(request, QWEN_PAIR, 'https://api.openai.com/v1/organization/costs?AccessKeyId=LTAI5tQwenAccessKeyId00'),
+    ).toThrowError(NetworkRejectionError);
+    try {
+      assertNoCredentialMaterial(request, QWEN_PAIR, 'https://api.openai.com/v1/organization/costs?AccessKeyId=LTAI5tQwenAccessKeyId00');
+    } catch (error) {
+      expect((error as NetworkRejectionError).reason).toBe('credential-placement');
+    }
+  });
+
+  it('rejects the AccessKeySecret in the query even on the Qwen host', () => {
+    const request: ProviderRequest = {
+      method: 'GET',
+      url: 'https://business.aliyuncs.com/',
+      query: { AccessKeySecret: QWEN_PAIR.accessKeySecret },
+    };
+    expect(() =>
+      assertNoCredentialMaterial(request, QWEN_PAIR, `https://business.aliyuncs.com/?AccessKeySecret=${QWEN_PAIR.accessKeySecret}`),
+    ).toThrowError(/AccessKeySecret/u);
+  });
+
+  it('rejects AccessKeyId in the URL path or body even on the Qwen host', () => {
+    const inPath: ProviderRequest = { method: 'GET', url: `https://business.aliyuncs.com/${QWEN_PAIR.accessKeyId}`, query: {} };
+    expect(() => assertNoCredentialMaterial(inPath, QWEN_PAIR, inPath.url)).toThrowError(/AccessKeyId/u);
+
+    const inBody: ProviderRequest = { method: 'POST', url: 'https://business.aliyuncs.com/', body: JSON.stringify({ ak: QWEN_PAIR.accessKeyId }) };
+    expect(() => assertNoCredentialMaterial(inBody, QWEN_PAIR, inBody.url)).toThrowError(/AccessKeyId/u);
+  });
+});
+
+describe('signed qwen dispatch — secret never transmitted (O2: every surface asserted)', () => {
+  it('the AccessKeySecret appears in NO surface: url, query, body, headers, cookies', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport, { clock: new FakeClock(), nonce: () => 'fixed-nonce-0001' });
+    await client.send('qwen', qwenRequest(), QWEN_PAIR);
+    const sent = transport.requests[0]!;
+
+    // url — whole URL including its query component
+    expect(sent.url.includes(QWEN_PAIR.accessKeySecret)).toBe(false);
+    // query — every parameter, raw AND decoded
+    for (const [key, value] of Object.entries(queryOf(sent.url))) {
+      expect(key.includes(QWEN_PAIR.accessKeySecret)).toBe(false);
+      expect(value.includes(QWEN_PAIR.accessKeySecret)).toBe(false);
+      expect(decodeURIComponent(value).includes(QWEN_PAIR.accessKeySecret)).toBe(false);
+    }
+    // body — absent or clean
+    expect((sent.body ?? '').includes(QWEN_PAIR.accessKeySecret)).toBe(false);
+    // headers — no value carries the secret
+    for (const value of Object.values(sent.headers)) {
+      expect(value.includes(QWEN_PAIR.accessKeySecret)).toBe(false);
+    }
+    // cookies — structurally impossible: no Cookie header, no cookie field
+    expect(sent.headers.Cookie).toBeUndefined();
+    expect('cookies' in sent).toBe(false);
+    // whole-request sweep
+    expect(JSON.stringify(sent).includes(QWEN_PAIR.accessKeySecret)).toBe(false);
   });
 });

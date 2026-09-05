@@ -23,14 +23,28 @@ describe('QwenProvider (spec §Qwen Parsing)', () => {
     expect(usage.currency).toBe('CNY');
   });
 
-  it('builds the documented BSS QueryAccountBalance request (API 2017-12-14)', async () => {
+  it('builds the documented BSS QueryAccountBalance request, signed per AD-19 (no Authorization header)', async () => {
     const transport = new RecordingTransport([FIXTURE_RESPONSES['qwen/query-account-balance--ok']]);
-    await driveRefresh(new QwenProvider(), {}, new AllowlistNetworkClient(transport), new FakeClock());
+    const client = new AllowlistNetworkClient(transport, {
+      clock: new FakeClock(),
+      nonce: () => 'test-nonce-0001',
+    });
+    await driveRefresh(new QwenProvider(), {}, client, new FakeClock());
 
     expect(transport.requests).toHaveLength(1);
-    expect(transport.requests[0]!.url).toBe(
-      'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14',
-    );
+    const sent = transport.requests[0]!;
+    expect(sent.headers).toEqual({}); // ak-sk: auth travels as the signed query
+    const params: Record<string, string> = {};
+    for (const part of sent.url.split('?')[1]!.split('&')) {
+      const eq = part.indexOf('=');
+      params[decodeURIComponent(part.slice(0, eq))] = decodeURIComponent(part.slice(eq + 1));
+    }
+    expect(params.Action).toBe('QueryAccountBalance');
+    expect(params.Version).toBe('2017-12-14');
+    expect(params.AccessKeyId).toBe('LTAI5tTestDriverAK000');
+    expect(params.SignatureMethod).toBe('HMAC-SHA1');
+    expect(params.SignatureNonce).toBe('test-nonce-0001');
+    expect(params.Signature.length).toBeGreaterThan(0);
   });
 
   it('declares ak-sk, so DashScope sk- keys are rejected with AK/SK + RAM guidance', () => {
