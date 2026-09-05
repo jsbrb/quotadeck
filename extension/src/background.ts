@@ -3,30 +3,30 @@
 // Together with platform/browser-api.ts this is the only production module
 // that may touch the `chrome` global, and it does so exclusively through the
 // ChromeBrowserApi adapter. Everything the tick needs is composed here:
-// registry → AllowlistNetworkClient over a FixtureTransport (AD-8) →
+// registry → AllowlistNetworkClient over a FetchTransport (AD-19) →
 // RefreshEngine → badge via formatBadgeText (usage-badge spec).
 //
 // Behavior (usage-badge spec):
 // - One-Minute Alarm Schedule: `usage-refresh` is registered with a 1-minute
 //   period on install and on startup WHEN ABSENT.
-// - Badge refresh per tick: every alarm tick runs refreshAll; each successful
-//   provider updates the badge (registry order, last result wins).
-// - Error State: a failed provider renders ERROR_BADGE_TEXT; the next success
-//   (same tick or a later tick) replaces it.
-// - No Live Calls: this milestone's transport is the bundled fixture table —
-//   an unrouted URL throws, there is no network path at all.
+// - Live refresh per tick: every alarm tick derives the whole UsageQuery from
+//   the injected Clock (buildTickQuery) and refreshes each keyed provider
+//   live; each success updates the badge (registry order, last result wins).
+// - Error State + Taxonomy: a failed provider renders ERROR_BADGE_TEXT for
+//   every class; the cycle snapshot carries only its ErrorClass (AD-13/21).
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
-import { cstEpoch } from './core/tier-budget';
+import { billingMonthsFor } from './core/tier-budget';
 import { ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
-import { FIXTURE_RESPONSES } from './fixtures';
 import { AllowlistNetworkClient } from './network/client';
-import { FixtureTransport, type Transport, type TransportResponse } from './network/transport';
+import { FetchTransport } from './network/fetch-transport';
+import type { Transport } from './network/transport';
 import { ChromeBrowserApi, type BrowserApi } from './platform/browser-api';
 import { createDefaultRegistry } from './providers';
 import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
+import { readTierLimits } from './storage/limit-store';
 import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
 
 /** The single alarm name the worker owns (usage-badge §One-Minute Alarm Schedule). */
@@ -34,51 +34,34 @@ export const USAGE_REFRESH_ALARM = 'usage-refresh';
 /** Spec-pinned refresh period. */
 export const REFRESH_PERIOD_MINUTES = 1;
 
-// Fixture-milestone constants (AD-8): the recorded fixture set pins one ZAI
-// billing month, the fixture-internal "now" its records were recorded around,
-// and one OpenAI cost window. The tick query AND the transport route table
-// below derive from these, so every dispatched URL resolves to a recorded
-// fixture. The live milestone replaces the transport and derives the query
-// from the injected Clock (buildTickQuery), not these constants.
-const ZAI_BILLING_MONTH = '2026-08';
-/** 2026-08-30 12:00:00 +08:00 — the main-flow fixtures' window anchor (AD-20). */
-const ZAI_FIXTURE_NOW = cstEpoch(2026, 8, 30, 12, 0, 0);
-const OPENAI_START_TIME = 1_754_006_400;
-const OPENAI_END_TIME = 1_754_179_200;
-
-/** The query every tick dispatches; each provider consumes its own fields. */
-export const FIXTURE_QUERY: UsageQuery = {
-  billingMonths: [ZAI_BILLING_MONTH],
-  now: ZAI_FIXTURE_NOW,
-  startTime: OPENAI_START_TIME,
-  endTime: OPENAI_END_TIME,
-};
-
-function zaiPageUrl(pageNum: number): string {
-  return `https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=${ZAI_BILLING_MONTH}&pageNum=${pageNum}&pageSize=2`;
-}
+/**
+ * OpenAI trailing cost window in seconds (`bucket_width=1d`). Product default
+ * per the design's open questions — revisable without architectural change.
+ */
+const OPENAI_WINDOW_SECONDS = 24 * 3_600;
 
 /**
- * FixtureTransport route table: exact full URLs → recorded responses. URL
- * shapes are the ones the providers build (proven byte-exact in the slice-2
- * provider tests), so the unpacked worker replays the recorded flows.
+ * Derives the provider-agnostic tick query from the injected clock (spec §Live
+ * refresh per tick — no wall-clock reads inside provider logic): the ZAI
+ * billing months and window anchor come from +08:00 month arithmetic (AD-20),
+ * the OpenAI window is the trailing 24h, and the tier-limit feed from the
+ * limit store passes through verbatim.
  */
-export const FIXTURE_ROUTES: Readonly<Record<string, TransportResponse>> = {
-  [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-1'],
-  [zaiPageUrl(2)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-2'],
-  [zaiPageUrl(3)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-3'],
-  'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14':
-    FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
-  'https://api.openai.com/v1/organization/costs?start_time=1754006400&bucket_width=1d&end_time=1754179200':
-    FIXTURE_RESPONSES['openai/costs--page-1'],
-  'https://api.openai.com/v1/organization/costs?start_time=1754006400&bucket_width=1d&end_time=1754179200&page=costs_page2_cursor_9f3ab2c1':
-    FIXTURE_RESPONSES['openai/costs--page-2-final'],
-  'https://api.moonshot.cn/v1/users/me/balance': FIXTURE_RESPONSES['kimi/users-me-balance--ok'],
-};
+export function buildTickQuery(clock: Clock, tierLimits: Readonly<Record<string, number>>): UsageQuery {
+  const now = clock.now();
+  const endTime = Math.floor(now / 1000);
+  return {
+    billingMonths: billingMonthsFor(now),
+    now,
+    startTime: endTime - OPENAI_WINDOW_SECONDS,
+    endTime,
+    tierLimits,
+  };
+}
 
-/** Test-visible injection points; production uses the fixture defaults. */
+/** Test-visible injection points; production uses the live defaults. */
 export interface WorkerOptions {
-  /** Defaults to the bundled fixture route table (AD-8). */
+  /** Defaults to FetchTransport over the ambient worker fetch (AD-19). */
   readonly transport?: Transport;
   /** Defaults to SystemClock. */
   readonly clock?: Clock;
@@ -90,7 +73,7 @@ export interface WorkerOptions {
 export function createRefreshEngine(browser: BrowserApi, options: WorkerOptions = {}): RefreshEngine {
   return new RefreshEngine({
     registry: createDefaultRegistry(),
-    client: new AllowlistNetworkClient(options.transport ?? new FixtureTransport(FIXTURE_ROUTES)),
+    client: new AllowlistNetworkClient(options.transport ?? new FetchTransport()),
     keys: new KeyStore(browser.storage.local),
     clock: options.clock ?? new SystemClock(),
     rng: options.rng,
@@ -98,15 +81,18 @@ export function createRefreshEngine(browser: BrowserApi, options: WorkerOptions 
 }
 
 /**
- * One alarm tick: refresh every keyed provider sequentially and render each
- * outcome — usage text per success, ERROR_BADGE_TEXT per failure (replaced by
- * the next success). After the cycle completes, its per-provider outcomes are
- * persisted as ONE `qd:snapshot` write for the popup (AD-13) — the badge
- * path above is unchanged.
+ * One alarm tick: derive the live query from the clock and the tier-limit
+ * store, refresh every keyed provider sequentially and render each outcome —
+ * usage text per success, ERROR_BADGE_TEXT per failure (replaced by the next
+ * success). After the cycle completes, its per-provider outcomes are persisted
+ * as ONE `qd:snapshot` write for the popup (AD-13) — usage+budget on the ok
+ * arm, the classified ErrorClass on the error arm.
  */
-export async function refreshTick(browser: BrowserApi, engine: RefreshEngine): Promise<void> {
+export async function refreshTick(browser: BrowserApi, engine: RefreshEngine, clock: Clock): Promise<void> {
+  const tierLimits = await readTierLimits(browser.storage.local); // qd:tier-limits override (AD-20)
+  const query = buildTickQuery(clock, tierLimits);
   const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {};
-  await engine.refreshAll(FIXTURE_QUERY, {
+  await engine.refreshAll(query, {
     onUsage: (usage) => {
       results[usage.providerId] = { status: 'ok', usage };
       browser.action.setBadgeText({ text: formatBadgeText(usage) });
@@ -123,6 +109,9 @@ export async function refreshTick(browser: BrowserApi, engine: RefreshEngine): P
 
 /** Wires alarm registration and the tick handler onto the injected browser. */
 export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): void {
+  // One clock instant per worker: the same source feeds the engine (sleeps,
+  // fetchedAt) and the tick query derivation.
+  const clock = options.clock ?? new SystemClock();
   const engine = createRefreshEngine(browser, options);
 
   const ensureAlarm = async (): Promise<void> => {
@@ -141,7 +130,7 @@ export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): v
     if (alarm.name !== USAGE_REFRESH_ALARM) {
       return;
     }
-    void refreshTick(browser, engine).catch((error) => {
+    void refreshTick(browser, engine, clock).catch((error) => {
       console.error('[quotadeck] refresh tick failed:', error);
     });
   });

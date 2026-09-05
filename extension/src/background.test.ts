@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildTickQuery,
   createRefreshEngine,
-  FIXTURE_ROUTES,
   refreshTick,
   REFRESH_PERIOD_MINUTES,
   startWorker,
@@ -11,8 +11,7 @@ import type { Credential, ProviderId } from './core/provider';
 import { cstEpoch } from './core/tier-budget';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { HttpStatusError } from './network/fetch-transport';
-import type { AuthorizedRequest, Transport, TransportResponse } from './network/transport';
-import { FixtureTransport } from './network/transport';
+import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
 import type { BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
 import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
@@ -20,15 +19,39 @@ import { FakeClock } from './testing/fake-clock';
 import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-store';
 
 // Hermetic worker tests (usage-badge spec): the composition root is driven
-// end-to-end through FakeBrowser-shaped fakes and the bundled fixture routes —
-// no Chrome runtime and zero network (the transport is FixtureTransport,
-// which has no network path). FakeBrowser (slice 2) predates the `runtime`
-// lifecycle port added in Phase 5, so the harness composes a BrowserApi-shaped
-// object around its parts plus a recording alarms double — no slice-2 file is
-// modified.
-const ZAI_PAGE_1_URL =
-  'https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=2026-08&pageNum=1&pageSize=2';
+// end-to-end through FakeBrowser-shaped fakes and locally built fixture route
+// tables keyed at CLOCK-DERIVED URLs — the live tick derives every time
+// parameter from the injected clock, so a route only matches when the
+// derivation is exactly right. Zero network: tests that exercise the default
+// transport stub the global fetch; everything else injects FixtureTransport
+// (no network path). No slice-2 file is modified.
 const ALL_KEYS: readonly ProviderId[] = ['zai', 'qwen', 'openai', 'kimi'];
+
+/** 2026-08-30 12:00 +08:00 — the ZAI fixtures' window anchor (2026-08 month). */
+const TICK_NOW = Date.UTC(2026, 7, 30, 4, 0, 0);
+/** OpenAI trailing window derived from TICK_NOW: [end − 24h, end], epoch s. */
+const END_TIME = TICK_NOW / 1000;
+const START_TIME = END_TIME - 86_400;
+
+function zaiPageUrl(pageNum: number): string {
+  return `https://bigmodel.cn/api/finance/expenseBill/expenseBillList?billingMonth=2026-08&pageNum=${pageNum}&pageSize=2`;
+}
+
+/** Route table keyed at the exact URLs the clock-derived tick query produces. */
+function liveRoutes(): Record<string, TransportResponse> {
+  return {
+    [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-1'],
+    [zaiPageUrl(2)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-2'],
+    [zaiPageUrl(3)]: FIXTURE_RESPONSES['zai/expense-bill-list--page-3'],
+    [`https://api.openai.com/v1/organization/costs?start_time=${START_TIME}&bucket_width=1d&end_time=${END_TIME}`]:
+      FIXTURE_RESPONSES['openai/costs--page-1'],
+    [`https://api.openai.com/v1/organization/costs?start_time=${START_TIME}&bucket_width=1d&end_time=${END_TIME}&page=costs_page2_cursor_9f3ab2c1`]:
+      FIXTURE_RESPONSES['openai/costs--page-2-final'],
+    'https://api.moonshot.cn/v1/users/me/balance': FIXTURE_RESPONSES['kimi/users-me-balance--ok'],
+    'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14':
+      FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+  };
+}
 
 /** FakeAlarms that records every create() — proves the "only when absent" guard. */
 class AlarmRecorder extends FakeAlarms {
@@ -89,7 +112,7 @@ async function saveKeys(local: FakeStorageArea, ids: readonly ProviderId[]): Pro
 }
 
 /**
- * FixtureTransport wrapper for the qwen leg: the live client now dispatches a
+ * FixtureTransport wrapper for the qwen leg: the live client dispatches a
  * SIGNED query (timestamp/nonce vary per run), so exact-URL routing cannot
  * match. This double normalizes any business.aliyuncs.com dispatch to the
  * recorded route key — proving the signed request still targets the BSS host —
@@ -113,6 +136,21 @@ class SignedQwenRouteTransport implements Transport {
 /** Lets fire-and-forget listener promises (alarm ensure/tick) settle. */
 const flushTasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
+/**
+ * Clock double pinned to ONE instant: unlike FakeClock it never advances on
+ * inter-page sleeps, so repeated ticks derive byte-identical request URLs and
+ * the route table matches on every cycle.
+ */
+class FixedClock extends FakeClock {
+  override now(): number {
+    return TICK_NOW;
+  }
+
+  override async sleep(): Promise<void> {
+    /* pinned: the engine's inter-page sleep resolves without advancing time */
+  }
+}
+
 /** Counts set() calls that targeted the cycle snapshot key — one per tick. */
 const snapshotWrites = (local: FakeStorageArea): number =>
   local.calls.filter((call) => call.op === 'set' && SNAPSHOT_STORAGE_KEY in (call.args[0] as Record<string, unknown>))
@@ -121,7 +159,7 @@ const snapshotWrites = (local: FakeStorageArea): number =>
 describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
   it('registers the usage-refresh alarm with a 1-minute period on install', async () => {
     const h = makeApi();
-    startWorker(h.api, { clock: new FakeClock() });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
 
     h.fireInstalled();
     await vi.waitFor(async () => {
@@ -135,7 +173,7 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
 
   it('registers the alarm on startup when absent', async () => {
     const h = makeApi();
-    startWorker(h.api, { clock: new FakeClock() });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
 
     h.fireStartup();
     await vi.waitFor(async () => {
@@ -149,7 +187,7 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
     // Pre-existing alarm with a DIFFERENT period: if the worker re-created
     // (or overwrote) it, the period would flip to 1 and creates would grow.
     h.alarms.create(USAGE_REFRESH_ALARM, { periodInMinutes: 5 });
-    startWorker(h.api, { clock: new FakeClock() });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
 
     h.fireStartup();
     await flushTasks();
@@ -159,11 +197,32 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
   });
 });
 
+describe('background — buildTickQuery (usage-badge spec §Live refresh per tick)', () => {
+  it('derives billingMonths, now and the trailing-24h OpenAI window from the injected clock', () => {
+    expect(buildTickQuery(new FakeClock(TICK_NOW), { Lite: 4800 })).toEqual({
+      billingMonths: ['2026-08'], // 2026-08-30 12:00 +08:00; window start 07:00 same month
+      now: TICK_NOW,
+      startTime: START_TIME,
+      endTime: END_TIME,
+      tierLimits: { Lite: 4800 }, // limit-store feed passes through verbatim
+    });
+  });
+
+  it('queues both billing months when the 5h window straddles a month boundary', () => {
+    const straddleNow = cstEpoch(2026, 9, 1, 2, 0, 0); // window starts 2026-08-31 21:00 +08:00
+    expect(buildTickQuery(new FakeClock(straddleNow), {}).billingMonths).toEqual(['2026-08', '2026-09']);
+  });
+});
+
 describe('background — Badge Rendering + refresh per tick (usage-badge spec)', () => {
   it('updates the badge on every tick: one deterministic text per keyed provider, last result wins, stable across repeated ticks', async () => {
     const h = makeApi();
     await saveKeys(h.local, ALL_KEYS);
-    startWorker(h.api, { clock: new FakeClock(), rng: () => 0, transport: new SignedQwenRouteTransport(FIXTURE_ROUTES) });
+    startWorker(h.api, {
+      clock: new FixedClock(),
+      rng: () => 0,
+      transport: new SignedQwenRouteTransport(liveRoutes()),
+    });
     h.fireInstalled();
     await flushTasks();
 
@@ -178,10 +237,83 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
   it('refreshes only keyed providers — unkeyed providers leave the badge untouched', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
-    startWorker(h.api, { clock: new FakeClock() });
+    startWorker(h.api, { clock: new FixedClock(), transport: new FixtureTransport(liveRoutes()) });
 
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(['¥89']));
+  });
+
+  it('dispatches live-shaped requests whose time parameters derive from the clock', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai', 'openai']);
+    // Routes are keyed ONLY at clock-derived URLs: the ZAI pages match only
+    // when billingMonth comes from the clock, the OpenAI pages only when the
+    // start/end window does — any wall-clock or fixture-table query misses.
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      rng: () => 0,
+      transport: new FixtureTransport(liveRoutes()),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['¥39', '$20']);
+  });
+});
+
+describe('background — default live transport (FetchTransport, AD-19)', () => {
+  it('dispatches through the real fetch when no transport is injected', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['kimi']);
+    vi.stubGlobal('fetch', async () => ({
+      status: 200,
+      ok: true,
+      json: async () => ({ data: { available_balance: '88.88' } }),
+    }));
+    try {
+      const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW) }); // no transport
+      await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(h.action.badgeTexts).toEqual(['¥89']); // the live fetch answered
+  });
+
+  it('a fetch-level network failure classifies as network and badges ERR', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['kimi']);
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')));
+    try {
+      const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW) });
+      await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(h.action.badgeTexts).toEqual(['ERR']);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.kimi).toEqual({ status: 'error', errorClass: 'network' });
+  });
+
+  it('hermetic proof: an injected transport serves the full four-provider tick with the global fetch forbidden', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ALL_KEYS);
+    vi.stubGlobal('fetch', () => {
+      throw new Error('live network is forbidden in the hermetic suite');
+    });
+    try {
+      const engine = createRefreshEngine(h.api, {
+        clock: new FakeClock(TICK_NOW),
+        rng: () => 0,
+        transport: new SignedQwenRouteTransport(liveRoutes()),
+      });
+      await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    expect(h.action.badgeTexts).toEqual(['¥39', '¥100', '$20', '¥89']);
   });
 });
 
@@ -194,13 +326,22 @@ describe('background — Error State (usage-badge spec)', () => {
     // every fetch; there is no fallback, so the refresh fails.
     const failing = createRefreshEngine(h.api, {
       transport: new FixtureTransport({}),
-      clock: new FakeClock(),
+      clock: new FakeClock(TICK_NOW),
     });
-    await refreshTick(h.api, failing);
+    await refreshTick(h.api, failing, new FakeClock(TICK_NOW));
 
-    // Tick 2 — recovery via the default bundled fixture routes.
-    const recovering = createRefreshEngine(h.api, { clock: new FakeClock() });
-    await refreshTick(h.api, recovering);
+    // Tick 2 — recovery through the stubbed default transport.
+    vi.stubGlobal('fetch', async () => ({
+      status: 200,
+      ok: true,
+      json: async () => ({ data: { available_balance: '88.88' } }),
+    }));
+    try {
+      const recovering = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW) });
+      await refreshTick(h.api, recovering, new FakeClock(TICK_NOW));
+    } finally {
+      vi.unstubAllGlobals();
+    }
 
     expect(h.action.badgeTexts).toEqual(['ERR', '¥89']);
   });
@@ -211,41 +352,18 @@ describe('background — Error State (usage-badge spec)', () => {
     // Recorded ZAI failure fixture routed at page 1 — the recorded-flow way to
     // inject a provider error.
     const routes = {
-      ...FIXTURE_ROUTES,
-      [ZAI_PAGE_1_URL]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
+      ...liveRoutes(),
+      [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
     };
     const engine = createRefreshEngine(h.api, {
       transport: new FixtureTransport(routes),
-      clock: new FakeClock(),
+      clock: new FakeClock(TICK_NOW),
       rng: () => 0,
     });
 
-    await refreshTick(h.api, engine);
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['ERR', '¥89']);
-  });
-});
-
-describe('background — No Live Calls in Milestone (usage-badge spec)', () => {
-  it('completes a full four-provider tick with global fetch disabled — fixture data only', async () => {
-    const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS);
-    vi.stubGlobal('fetch', () => {
-      throw new Error('live network is forbidden in the fixture-only milestone');
-    });
-
-    try {
-      const engine = createRefreshEngine(h.api, {
-        clock: new FakeClock(),
-        rng: () => 0,
-        transport: new SignedQwenRouteTransport(FIXTURE_ROUTES),
-      });
-      await refreshTick(h.api, engine);
-    } finally {
-      vi.unstubAllGlobals();
-    }
-
-    expect(h.action.badgeTexts).toEqual(['¥39', '¥100', '$20', '¥89']);
   });
 });
 
@@ -270,10 +388,10 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
     await saveKeys(h.local, ['kimi']);
     const engine = createRefreshEngine(h.api, {
       transport: new FailingTransport(makeError()),
-      clock: new FakeClock(),
+      clock: new FakeClock(TICK_NOW),
     });
 
-    await refreshTick(h.api, engine);
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['ERR']); // every class renders the marker
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
@@ -284,11 +402,11 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai']);
     const engine = createRefreshEngine(h.api, {
-      transport: new FixtureTransport({ [ZAI_PAGE_1_URL]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'] }),
-      clock: new FakeClock(),
+      transport: new FixtureTransport({ [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'] }),
+      clock: new FakeClock(TICK_NOW),
     });
 
-    await refreshTick(h.api, engine);
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['ERR']);
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
@@ -297,10 +415,14 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
 });
 
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
-  it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage, badge texts unchanged', async () => {
+  it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage incl. budget', async () => {
     const h = makeApi();
     await saveKeys(h.local, ALL_KEYS);
-    startWorker(h.api, { clock: new FakeClock(), rng: () => 0, transport: new SignedQwenRouteTransport(FIXTURE_ROUTES) });
+    startWorker(h.api, {
+      clock: new FixedClock(),
+      rng: () => 0,
+      transport: new SignedQwenRouteTransport(liveRoutes()),
+    });
     h.fireInstalled();
     await flushTasks();
 
@@ -343,7 +465,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
   it('unkeyed providers have no snapshot entry and no credential material reaches the snapshot', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
-    startWorker(h.api, { clock: new FakeClock(), rng: () => 0 });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW), rng: () => 0, transport: new FixtureTransport(liveRoutes()) });
 
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
@@ -354,20 +476,20 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     expect(JSON.stringify(stored)).not.toContain('fixture-milestone-key');
   });
 
-  it('a failed provider records a bare error entry while its badge path stays unchanged', async () => {
+  it('a failed provider records its class entry while its badge path stays unchanged', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
     const routes = {
-      ...FIXTURE_ROUTES,
-      [ZAI_PAGE_1_URL]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
+      ...liveRoutes(),
+      [zaiPageUrl(1)]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
     };
     const engine = createRefreshEngine(h.api, {
       transport: new FixtureTransport(routes),
-      clock: new FakeClock(),
+      clock: new FakeClock(TICK_NOW),
       rng: () => 0,
     });
 
-    await refreshTick(h.api, engine);
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['ERR', '¥89']); // usage-badge behavior, byte-identical
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;

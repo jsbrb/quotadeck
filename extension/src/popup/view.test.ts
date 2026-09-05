@@ -59,7 +59,7 @@ describe('renderPopup — Provider List Rendering (popup-ui spec)', () => {
   const fullSnapshot: CycleSnapshot = {
     results: {
       zai: { status: 'ok', usage: usage('zai', { kind: 'cost', value: 39, tier: 'GLM-4.5-Air' }) },
-      qwen: { status: 'error' },
+      qwen: { status: 'error', errorClass: 'server' },
       openai: { status: 'ok', usage: usage('openai', { kind: 'cost', value: 20, currency: 'usd' }) },
       kimi: { status: 'ok', usage: usage('kimi', { value: 88.88 }) },
     },
