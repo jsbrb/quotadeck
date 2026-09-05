@@ -89,7 +89,7 @@ describe('RefreshEngine — single-provider cycle (AD-2)', () => {
 
     expect(usage.providerId).toBe('zai');
     expect(usage.kind).toBe('cost');
-    expect(usage.windows?.level).toBe('Pro'); // monitor windows fold through untouched
+    expect(usage.windows?.level).toBe('pro'); // monitor windows fold through untouched (live-captured level)
     expect(transport.requests).toHaveLength(1); // firstRequest only — done on page 1
     expect(clock.sleeps).toEqual([]); // no inter-page sleep machinery remains
   });
@@ -152,7 +152,7 @@ describe('RefreshEngine — refreshAll (sequential, keyed-only, error marker fee
     await engine.refreshAll(QUERY, calls);
 
     expect(calls.usages.map((usage) => usage.providerId)).toEqual(['zai', 'kimi']);
-    expect(calls.usages.map((usage) => usage.windows?.level)).toEqual(['Pro', undefined]); // kimi is monetary
+    expect(calls.usages.map((usage) => usage.windows?.level)).toEqual(['pro', undefined]); // kimi is monetary
     expect(calls.usages.map((usage) => usage.value)).toEqual([undefined, 88.88]);
     expect(calls.errors).toEqual([]);
     // Sequential proof: the ZAI monitor dispatch completes before Kimi dispatches.
@@ -240,7 +240,7 @@ describe('RefreshEngine — credential threading (AD-17/19)', () => {
 
     const sent = transport.requests[0]!;
     expect(sent.headers.Authorization).toBe('engine-test-credential'); // raw — no Bearer prefix
-    expect(calls.usages.map((usage) => usage.windows?.level)).toEqual(['Pro']);
+    expect(calls.usages.map((usage) => usage.windows?.level)).toEqual(['pro']);
     expect(calls.errors).toEqual([]);
   });
 

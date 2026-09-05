@@ -80,8 +80,101 @@ describe('ZaiProvider — platform binding (§Platform Binding)', () => {
   });
 });
 
+// Live capture (2026-09-05, maintainer plan "pro", api.z.ai) — the pinning
+// payload for the real wire shape: entries under `data.limits` (NOT
+// tokenLimits), a TOKENS_LIMIT carrying percentage + nextResetTime with NO
+// total, and usageDetails as an ARRAY of {modelCode, usage} entries. Kept
+// verbatim (field order included) so no fixture drift can dilute the pin.
+const LIVE_PRO_PAYLOAD = {
+  code: 200,
+  msg: 'Operation successful',
+  data: {
+    limits: [
+      {
+        type: 'TIME_LIMIT',
+        unit: 5,
+        number: 1,
+        usage: 1000,
+        currentValue: 0,
+        remaining: 1000,
+        percentage: 0,
+        nextResetTime: 1790507835998,
+        usageDetails: [
+          { modelCode: 'search-prime', usage: 0 },
+          { modelCode: 'web-reader', usage: 0 },
+          { modelCode: 'zread', usage: 0 },
+        ],
+      },
+      { type: 'TOKENS_LIMIT', unit: 3, number: 5, percentage: 32, nextResetTime: 1788656274505 },
+    ],
+    level: 'pro',
+  },
+  success: true,
+} as const;
+
+describe('ZaiProvider — live-captured plan-pro payload (2026-09-05 pinning)', () => {
+  it('parses the real wire shape: limits field, total-less 5h window, array usageDetails', async () => {
+    const usage = await driveRefresh(
+      new ZaiProvider(),
+      QUERY,
+      new AllowlistNetworkClient(new RecordingTransport([{ status: 200, body: LIVE_PRO_PAYLOAD }])),
+      new FakeClock(),
+    );
+
+    expect(usage.windows?.level).toBe('pro');
+    expect(usage.windows?.fiveHour).toStrictEqual({
+      percentage: 32,
+      resetAt: 1_788_656_274_505,
+    }); // real 5h entry has no total → no total, no derived used
+    expect(usage.windows?.weekly).toBeUndefined(); // single TOKENS_LIMIT: no positional fallback once 5h is discriminated
+    expect(usage.windows?.mcp).toStrictEqual({
+      used: 0, // currentValue
+      ceiling: 1000, // usage
+      tools: [
+        { name: 'search-prime', used: 0 },
+        { name: 'web-reader', used: 0 },
+        { name: 'zread', used: 0 },
+      ],
+    });
+  });
+
+  it('ignores non-object usageDetails entries and skips entries with neither percentage nor total', async () => {
+    const payload = {
+      ...LIVE_PRO_PAYLOAD,
+      data: {
+        ...LIVE_PRO_PAYLOAD.data,
+        limits: [
+          // Non-object detail rows must not break MCP parsing.
+          {
+            type: 'TIME_LIMIT',
+            usage: 100,
+            currentValue: 4,
+            usageDetails: ['nonsense', 42, null, { modelCode: 'zread', usage: 4 }],
+          },
+          // Discriminated but empty: percentage absent AND total absent → skipped.
+          { type: 'TOKENS_LIMIT', unit: 6, number: 1, nextResetTime: 1788656274505 },
+        ],
+      },
+    };
+    const usage = await driveRefresh(
+      new ZaiProvider(),
+      QUERY,
+      new AllowlistNetworkClient(new RecordingTransport([{ status: 200, body: payload }])),
+      new FakeClock(),
+    );
+
+    expect(usage.windows?.mcp).toStrictEqual({
+      used: 4,
+      ceiling: 100,
+      tools: [{ name: 'zread', used: 4 }],
+    });
+    expect(usage.windows?.weekly).toBeUndefined(); // empty entry skipped, not rendered
+    expect(usage.windows?.fiveHour).toBeUndefined();
+  });
+});
+
 describe('ZaiProvider — level and window discrimination (§Level and Window Discrimination)', () => {
-  it('maps unit 3/number 5 to the 5h window and unit 6/number 1 to weekly', async () => {
+  it('maps unit 3/number 5 to the 5h window; a lone TOKENS_LIMIT leaves weekly absent', async () => {
     const usage = await driveRefresh(
       new ZaiProvider(),
       QUERY,
@@ -89,19 +182,11 @@ describe('ZaiProvider — level and window discrimination (§Level and Window Di
       new FakeClock(),
     );
 
-    expect(usage.windows?.level).toBe('Pro');
-    expect(usage.windows?.fiveHour).toStrictEqual({
-      percentage: 42,
-      used: 5040, // round(12000 × 42 / 100)
-      total: 12_000,
-      resetAt: 1_788_066_000_000, // nextResetTime verbatim, epoch ms
-    });
-    expect(usage.windows?.weekly).toStrictEqual({
-      percentage: 17,
-      used: 22_100, // round(130000 × 17 / 100)
-      total: 130_000,
-      resetAt: 1_788_576_000_000,
-    });
+    expect(usage.windows?.level).toBe('pro');
+    expect(usage.windows?.fiveHour).toStrictEqual({ percentage: 32, resetAt: 1_788_656_274_505 });
+    // Single TOKENS_LIMIT: 5h WAS discriminated, so positional fallback must
+    // not fire and weekly stays absent (live-pinned behavior).
+    expect(usage.windows?.weekly).toBeUndefined();
   });
 
   it('falls back to position when entries omit unit/number: [0] → 5h, [1] → weekly', async () => {
@@ -132,7 +217,15 @@ describe('ZaiProvider — level and window discrimination (§Level and Window Di
     expect(usage.windows?.level).toBe('Pro');
     expect(usage.windows?.fiveHour).toBeUndefined();
     expect(usage.windows?.weekly).toBeUndefined();
-    expect(usage.windows?.mcp).toBeDefined();
+    // Array usageDetails arrive unsorted (web-search first); output is name-sorted.
+    expect(usage.windows?.mcp).toStrictEqual({
+      used: 3,
+      ceiling: 60,
+      tools: [
+        { name: 'deep-research', used: 1 },
+        { name: 'web-search', used: 2 },
+      ],
+    });
   });
 });
 
@@ -148,7 +241,13 @@ describe('ZaiProvider — percentage passthrough and used derivation (§Percenta
     expect(usage.windows?.fiveHour?.percentage).toBe(137); // uncapped — NOT 100
     expect(usage.windows?.fiveHour?.used).toBe(16_440); // round(12000 × 137 / 100)
     expect(usage.windows?.fiveHour?.total).toBe(12_000);
-    expect(usage.windows?.weekly).toBeDefined();
+    // Weekly u6/n1 discrimination with total: derived used stays covered here.
+    expect(usage.windows?.weekly).toStrictEqual({
+      percentage: 64,
+      used: 83_200, // round(130000 × 64 / 100)
+      total: 130_000,
+      resetAt: 1_788_576_000_000,
+    });
     expect(usage.windows?.mcp).toBeDefined();
   });
 
@@ -170,11 +269,11 @@ describe('ZaiProvider — reset countdown basis (§Reset Countdown)', () => {
     const usage = await driveRefresh(
       new ZaiProvider(),
       QUERY,
-      new AllowlistNetworkClient(new RecordingTransport([FIXTURE_RESPONSES['zai/monitor--pro-plan']])),
+      new AllowlistNetworkClient(new RecordingTransport([FIXTURE_RESPONSES['zai/monitor--over-100']])),
       new FakeClock(),
     );
 
-    expect(usage.windows?.fiveHour?.resetAt).toBe(1_788_066_000_000);
+    expect(usage.windows?.fiveHour?.resetAt).toBe(1_788_069_600_000);
     expect(usage.windows?.weekly?.resetAt).toBe(1_788_576_000_000);
   });
 
@@ -193,7 +292,7 @@ describe('ZaiProvider — reset countdown basis (§Reset Countdown)', () => {
 });
 
 describe('ZaiProvider — monthly MCP window (§Monthly MCP Window)', () => {
-  it('parses currentValue/usage/usageDetails with per-tool entries name-sorted', async () => {
+  it('parses the live array usageDetails ({modelCode, usage}) with per-tool entries name-sorted', async () => {
     const usage = await driveRefresh(
       new ZaiProvider(),
       QUERY,
@@ -202,11 +301,12 @@ describe('ZaiProvider — monthly MCP window (§Monthly MCP Window)', () => {
     );
 
     expect(usage.windows?.mcp).toStrictEqual({
-      used: 3, // currentValue
-      ceiling: 60, // usage
+      used: 0, // currentValue
+      ceiling: 1000, // usage
       tools: [
-        { name: 'deep-research', used: 1 }, // name-sorted for determinism
-        { name: 'web-search', used: 2 },
+        { name: 'search-prime', used: 0 }, // name-sorted for determinism
+        { name: 'web-reader', used: 0 },
+        { name: 'zread', used: 0 },
       ],
     });
   });

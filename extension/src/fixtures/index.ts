@@ -9,11 +9,16 @@
 // the body, never the HTTP status. Plain-text transport-level failures (401)
 // are recorded with their real status; classification is status-first (AD-30).
 //
-// O3: the ZAI monitor payload shape (`data.level`, `TOKENS_LIMIT` unit/number
-// discriminators, `TIME_LIMIT` MCP fields) is pinned from community evidence
+// O3: the ZAI monitor payload shape is pinned from a LIVE CAPTURE
+// (maintainer plan "pro", api.z.ai, 2026-09-05): entries live under
+// `data.limits`, `usageDetails` is an ARRAY of {modelCode, usage} entries,
+// and a TOKENS_LIMIT may carry percentage + nextResetTime with NO total
+// (monitor--pro-plan is the verbatim capture). Community evidence
 // (zai-org/zai-coding-plugins, ecerutti/glm-usage-monitor,
-// guyinwonder168/opencode-glm-quota); the maintainer live E2E confirms it. No
-// test asserts live semantics beyond fixture-internal consistency.
+// guyinwonder168/opencode-glm-quota) agrees on the field names; totals are
+// kept in the synthetic fixtures (over-100, null-pct, fallback-position) so
+// the used-derivation path stays covered. No test asserts live semantics
+// beyond fixture-internal consistency.
 import type { TransportResponse } from '../network/transport';
 import kimiOk from './kimi/users-me-balance--ok.json';
 import openaiPage1 from './openai/costs--page-1.json';

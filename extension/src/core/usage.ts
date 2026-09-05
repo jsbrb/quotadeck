@@ -21,8 +21,11 @@ export interface UsageWindow {
   readonly percentage?: number;
   /** round(total × percentage / 100); absent when percentage or total is. */
   readonly used?: number;
-  /** Window quota ceiling. */
-  readonly total: number;
+  /**
+   * Window quota ceiling; OPTIONAL — a live-pinned TOKENS_LIMIT (plan pro,
+   * 2026-09-05) carries percentage + nextResetTime with no total.
+   */
+  readonly total?: number;
   /** Reset instant (epoch ms, `nextResetTime` verbatim); absent when the API omits it. */
   readonly resetAt?: number;
 }

@@ -8,16 +8,20 @@
 // only — a string "200" is a failure (ProviderApiError; classifies as
 // `server` per AD-21).
 //
-// Parsing (AD-26/27): `data.level` is the plan level. `TOKENS_LIMIT` entries
+// Parsing (AD-26/27, live-pinned 2026-09-05): `data.level` is the plan
+// level. Entries live under `data.limits`. `TOKENS_LIMIT` entries
 // discriminate by unit/number — unit 3/number 5 → the 5h window, unit 6/
 // number 1 → weekly; when no entry carries the discriminators, position
 // decides ([0] → 5h, [1] → weekly). The `TIME_LIMIT` entry is the monthly MCP
-// window (currentValue/usage/usageDetails) with NO synthesized percentage or
-// countdown. Per window: percentage passes through UNCAPPED, null/absent →
-// percentage AND derived used absent, used = round(total × pct / 100) when
-// both present, numeric nextResetTime → resetAt verbatim (the countdown
-// renders from it at display time). The result carries `windows` only — no
-// value/currency/tier (the monitor endpoint reports no monetary figure).
+// window (currentValue/usage + usageDetails as an ARRAY of {modelCode,
+// usage} entries) with NO synthesized percentage or countdown. Per window:
+// percentage passes through UNCAPPED, total is OPTIONAL (a live TOKENS_LIMIT
+// may carry percentage + nextResetTime only) but an entry with NEITHER is
+// skipped, null/absent percentage → percentage AND derived used absent,
+// used = round(total × pct / 100) when both present, numeric nextResetTime
+// → resetAt verbatim (the countdown renders from it at display time). The
+// result carries `windows` only — no value/currency/tier (the monitor
+// endpoint reports no monetary figure).
 import { ProviderApiError, type PageParse, type Provider, type ProviderState, type UsageQuery } from '../core/provider';
 import type { McpToolUsage, McpWindow, MonitorWindows, UsageWindow } from '../core/usage';
 import { zaiMonitorBaseUrl, type ZaiPlatform } from '../core/zai-platforms';
@@ -43,32 +47,34 @@ function finiteNumber(value: unknown): number | undefined {
 }
 
 /**
- * TOKENS_LIMIT entry → UsageWindow. Absent (undefined) when `total` is
- * missing — a window without its quota ceiling cannot be formed. A null or
+ * TOKENS_LIMIT entry → UsageWindow. `total` is OPTIONAL (a live-pinned plan-pro
+ * TOKENS_LIMIT carries percentage + nextResetTime only), but an entry with
+ * NEITHER percentage NOR total is skipped — nothing to report. A null or
  * absent percentage suppresses the percentage AND the derived used; used is
  * round(total × percentage / 100) when both are present (AD-27).
  */
 function parseUsageWindow(entry: Record<string, unknown>): UsageWindow | undefined {
   const total = finiteNumber(entry.total);
-  if (total === undefined) {
+  const percentage = finiteNumber(entry.percentage);
+  if (total === undefined && percentage === undefined) {
     return undefined;
   }
-  const percentage = finiteNumber(entry.percentage);
-  const used = percentage !== undefined ? Math.round((total * percentage) / 100) : undefined;
+  const used = total !== undefined && percentage !== undefined ? Math.round((total * percentage) / 100) : undefined;
   const resetAt = finiteNumber(entry.nextResetTime);
   return {
     ...(percentage !== undefined ? { percentage } : {}),
     ...(used !== undefined ? { used } : {}),
-    total,
+    ...(total !== undefined ? { total } : {}),
     ...(resetAt !== undefined ? { resetAt } : {}),
   };
 }
 
 /**
- * TIME_LIMIT entry → McpWindow: currentValue (used), usage (ceiling),
- * usageDetails (per-tool map) with tools sorted by name for determinism.
- * Absent when currentValue/usage are not both finite. No percentage, no
- * countdown — never synthesized (spec §Monthly MCP Window).
+ * TIME_LIMIT entry → McpWindow: currentValue (used), usage (ceiling), and
+ * per-tool usage from `usageDetails` — a live-pinned ARRAY of {modelCode,
+ * usage} entries (non-object entries ignored) with tools sorted by name for
+ * determinism. Absent when currentValue/usage are not both finite. No
+ * percentage, no countdown — never synthesized (spec §Monthly MCP Window).
  */
 function parseMcpWindow(entry: Record<string, unknown>): McpWindow | undefined {
   const used = finiteNumber(entry.currentValue);
@@ -76,14 +82,16 @@ function parseMcpWindow(entry: Record<string, unknown>): McpWindow | undefined {
   if (used === undefined || ceiling === undefined) {
     return undefined;
   }
-  const details = asObject(entry.usageDetails);
   const tools: McpToolUsage[] = [];
-  if (details !== null) {
-    for (const [name, value] of Object.entries(details)) {
-      const toolUsed = finiteNumber(value);
-      if (toolUsed !== undefined) {
-        tools.push({ name, used: toolUsed });
-      }
+  const details = Array.isArray(entry.usageDetails) ? entry.usageDetails : [];
+  for (const item of details) {
+    const detail = asObject(item);
+    if (detail === null || typeof detail.modelCode !== 'string') {
+      continue;
+    }
+    const toolUsed = finiteNumber(detail.usage);
+    if (toolUsed !== undefined) {
+      tools.push({ name: detail.modelCode, used: toolUsed });
     }
   }
   tools.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -122,7 +130,7 @@ export class ZaiProvider implements Provider {
       windows.level = level;
     }
 
-    const rawLimits = data === null ? undefined : data.tokenLimits;
+    const rawLimits = data === null ? undefined : data.limits;
     const entries = (Array.isArray(rawLimits) ? rawLimits : [])
       .map(asObject)
       .filter((entry): entry is Record<string, unknown> => entry !== null);

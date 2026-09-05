@@ -1,10 +1,8 @@
 {
   "code": 200,
-  "msg": "success",
-  "success": true,
+  "msg": "Operation successful",
   "data": {
-    "level": "Lite",
-    "tokenLimits": [
+    "limits": [
       {
         "type": "TOKENS_LIMIT",
         "unit": 3,
@@ -19,6 +17,8 @@
         "percentage": 5,
         "total": 130000
       }
-    ]
-  }
+    ],
+    "level": "Lite"
+  },
+  "success": true
 }

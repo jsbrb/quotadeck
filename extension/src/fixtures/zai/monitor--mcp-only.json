@@ -1,21 +1,21 @@
 {
   "code": 200,
-  "msg": "success",
-  "success": true,
+  "msg": "Operation successful",
   "data": {
-    "level": "Pro",
-    "tokenLimits": [
+    "limits": [
       {
         "type": "TIME_LIMIT",
         "unit": 3,
         "number": 4,
         "currentValue": 3,
         "usage": 60,
-        "usageDetails": {
-          "web-search": 2,
-          "deep-research": 1
-        }
+        "usageDetails": [
+          { "modelCode": "web-search", "usage": 2 },
+          { "modelCode": "deep-research", "usage": 1 }
+        ]
       }
-    ]
-  }
+    ],
+    "level": "Pro"
+  },
+  "success": true
 }

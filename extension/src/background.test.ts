@@ -246,7 +246,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['42%', '¥100', '$20', '¥89'];
+    const perTick = ['32%', '¥100', '$20', '¥89'];
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(perTick));
 
@@ -303,7 +303,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['42%', '$20']);
+    expect(h.action.badgeTexts).toEqual(['32%', '$20']);
   });
 
   it('targets open.bigmodel.cn when the zhipu platform preference is stored (§Platform Binding)', async () => {
@@ -319,7 +319,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['42%']);
+    expect(h.action.badgeTexts).toEqual(['32%']);
   });
 
   it('defaults to api.z.ai when no platform preference is stored (§Platform Binding)', async () => {
@@ -333,7 +333,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['42%']);
+    expect(h.action.badgeTexts).toEqual(['32%']);
   });
 });
 
@@ -388,7 +388,7 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['42%', '¥100', '$20', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['32%', '¥100', '$20', '¥89']);
   });
 });
 
@@ -517,7 +517,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['42%', '¥100', '$20', '¥89'];
+    const perTick = ['32%', '¥100', '$20', '¥89'];
     h.alarms.fire(USAGE_REFRESH_ALARM);
     // The snapshot write is the tick's LAST operation — once it lands, the
     // badge sequence is final, so both can be asserted deterministically.
@@ -535,17 +535,18 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
       usage: expect.objectContaining({
         providerId: 'zai',
         kind: 'cost',
-        // The single cycle write carries the monitor windows verbatim (AD-26).
+        // The single cycle write carries the monitor windows verbatim (AD-26);
+        // this is the live-captured plan-pro parse (no weekly, no totals).
         windows: {
-          level: 'Pro',
-          fiveHour: { percentage: 42, used: 5040, total: 12_000, resetAt: 1_788_066_000_000 },
-          weekly: { percentage: 17, used: 22_100, total: 130_000, resetAt: 1_788_576_000_000 },
+          level: 'pro',
+          fiveHour: { percentage: 32, resetAt: 1_788_656_274_505 },
           mcp: {
-            used: 3,
-            ceiling: 60,
+            used: 0,
+            ceiling: 1000,
             tools: [
-              { name: 'deep-research', used: 1 },
-              { name: 'web-search', used: 2 },
+              { name: 'search-prime', used: 0 },
+              { name: 'web-reader', used: 0 },
+              { name: 'zread', used: 0 },
             ],
           },
         },
@@ -564,7 +565,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
 
-    expect(h.action.badgeTexts).toEqual(['42%', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['32%', '¥89']);
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(Object.keys(stored.results)).toEqual(['zai', 'kimi']); // qwen + openai absent
     expect(JSON.stringify(stored)).not.toContain('fixture-milestone-key');
