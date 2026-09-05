@@ -14,6 +14,7 @@ import type { BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
 import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
 import { FakeClock } from './testing/fake-clock';
+import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-store';
 
 // Hermetic worker tests (usage-badge spec): the composition root is driven
 // end-to-end through FakeBrowser-shaped fakes and the bundled fixture routes —
@@ -78,6 +79,11 @@ async function saveKeys(local: FakeStorageArea, ids: readonly ProviderId[]): Pro
 
 /** Lets fire-and-forget listener promises (alarm ensure/tick) settle. */
 const flushTasks = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** Counts set() calls that targeted the cycle snapshot key — one per tick. */
+const snapshotWrites = (local: FakeStorageArea): number =>
+  local.calls.filter((call) => call.op === 'set' && SNAPSHOT_STORAGE_KEY in (call.args[0] as Record<string, unknown>))
+    .length;
 
 describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
   it('registers the usage-refresh alarm with a 1-minute period on install', async () => {
@@ -203,5 +209,77 @@ describe('background — No Live Calls in Milestone (usage-badge spec)', () => {
     }
 
     expect(h.action.badgeTexts).toEqual(['¥39', '¥100', '$20', '¥89']);
+  });
+});
+
+describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
+  it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage, badge texts unchanged', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ALL_KEYS);
+    startWorker(h.api, { clock: new FakeClock(), rng: () => 0 });
+    h.fireInstalled();
+    await flushTasks();
+
+    const perTick = ['¥39', '¥100', '$20', '¥89'];
+    h.alarms.fire(USAGE_REFRESH_ALARM);
+    // The snapshot write is the tick's LAST operation — once it lands, the
+    // badge sequence is final, so both can be asserted deterministically.
+    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
+    expect(h.action.badgeTexts).toEqual(perTick);
+
+    h.alarms.fire(USAGE_REFRESH_ALARM); // repeated tick — still one write per cycle
+    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(2));
+    expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(Object.keys(stored.results)).toEqual([...ALL_KEYS]);
+    expect(stored.results.zai).toEqual({
+      status: 'ok',
+      usage: expect.objectContaining({
+        providerId: 'zai',
+        kind: 'cost',
+        value: 39,
+        currency: 'CNY',
+        tier: 'GLM-4.5-Air',
+      }),
+    });
+    expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 100.28, currency: 'CNY' }) });
+    expect(stored.results.openai).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 20, currency: 'usd' }) });
+    expect(stored.results.kimi).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 88.88, currency: 'CNY' }) });
+  });
+
+  it('unkeyed providers have no snapshot entry and no credential material reaches the snapshot', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai', 'kimi']);
+    startWorker(h.api, { clock: new FakeClock(), rng: () => 0 });
+
+    h.alarms.fire(USAGE_REFRESH_ALARM);
+    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
+
+    expect(h.action.badgeTexts).toEqual(['¥39', '¥89']);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(Object.keys(stored.results)).toEqual(['zai', 'kimi']); // qwen + openai absent
+    expect(JSON.stringify(stored)).not.toContain('fixture-milestone-key');
+  });
+
+  it('a failed provider records a bare error entry while its badge path stays unchanged', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai', 'kimi']);
+    const routes = {
+      ...FIXTURE_ROUTES,
+      [ZAI_PAGE_1_URL]: FIXTURE_RESPONSES['zai/expense-bill-list--code-500'],
+    };
+    const engine = createRefreshEngine(h.api, {
+      transport: new FixtureTransport(routes),
+      clock: new FakeClock(),
+      rng: () => 0,
+    });
+
+    await refreshTick(h.api, engine);
+
+    expect(h.action.badgeTexts).toEqual(['ERR', '¥89']); // usage-badge behavior, byte-identical
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.zai).toEqual({ status: 'error' }); // no payload (AD-13)
+    expect(stored.results.kimi).toMatchObject({ status: 'ok' });
   });
 });

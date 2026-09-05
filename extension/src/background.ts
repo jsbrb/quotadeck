@@ -16,7 +16,7 @@
 // - No Live Calls: this milestone's transport is the bundled fixture table —
 //   an unrouted URL throws, there is no network path at all.
 import { SystemClock, type Clock } from './core/clock';
-import type { UsageQuery } from './core/provider';
+import type { ProviderId, UsageQuery } from './core/provider';
 import { ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { AllowlistNetworkClient } from './network/client';
@@ -25,6 +25,7 @@ import { ChromeBrowserApi, type BrowserApi } from './platform/browser-api';
 import { createDefaultRegistry } from './providers';
 import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
+import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
 
 /** The single alarm name the worker owns (usage-badge §One-Minute Alarm Schedule). */
 export const USAGE_REFRESH_ALARM = 'usage-refresh';
@@ -93,13 +94,24 @@ export function createRefreshEngine(browser: BrowserApi, options: WorkerOptions 
 /**
  * One alarm tick: refresh every keyed provider sequentially and render each
  * outcome — usage text per success, ERROR_BADGE_TEXT per failure (replaced by
- * the next success).
+ * the next success). After the cycle completes, its per-provider outcomes are
+ * persisted as ONE `qd:snapshot` write for the popup (AD-13) — the badge
+ * path above is unchanged.
  */
 export async function refreshTick(browser: BrowserApi, engine: RefreshEngine): Promise<void> {
+  const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {};
   await engine.refreshAll(FIXTURE_QUERY, {
-    onUsage: (usage) => browser.action.setBadgeText({ text: formatBadgeText(usage) }),
-    onError: (_providerId, _error) => browser.action.setBadgeText({ text: ERROR_BADGE_TEXT }),
+    onUsage: (usage) => {
+      results[usage.providerId] = { status: 'ok', usage };
+      browser.action.setBadgeText({ text: formatBadgeText(usage) });
+    },
+    onError: (providerId, _error) => {
+      // AD-13: the thrown value is dropped — error entries carry no payload.
+      results[providerId] = { status: 'error' };
+      browser.action.setBadgeText({ text: ERROR_BADGE_TEXT });
+    },
   });
+  await new SnapshotStore(browser.storage.local).write({ results });
 }
 
 /** Wires alarm registration and the tick handler onto the injected browser. */
