@@ -1,0 +1,23 @@
+{
+  "code": "200",
+  "msg": "success",
+  "success": true,
+  "data": {
+    "pageNum": 1,
+    "pageSize": 2,
+    "total": 1,
+    "list": [
+      {
+        "billingNo": "BL202608010001",
+        "billingMonth": "2026-08",
+        "modelCode": "glm-4.7-flash",
+        "tokenResourceName": "GLM-4.7-Flash",
+        "costPrice": 10,
+        "deductUsage": 2000,
+        "usageCount": 2000,
+        "currency": "CNY",
+        "timeWindow": "2026-08-01 00:00:00 - 2026-08-02 00:00:00"
+      }
+    ]
+  }
+}

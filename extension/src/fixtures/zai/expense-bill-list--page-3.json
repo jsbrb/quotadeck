@@ -1,0 +1,34 @@
+{
+  "code": 200,
+  "msg": "success",
+  "success": true,
+  "data": {
+    "pageNum": 3,
+    "pageSize": 2,
+    "total": 5,
+    "list": [
+      {
+        "billingNo": "BL202608010004",
+        "billingMonth": "2026-08",
+        "modelCode": "glm-4.5-air",
+        "tokenResourceName": "GLM-4.5-Air",
+        "costPrice": 2,
+        "deductUsage": 500,
+        "usageCount": 500,
+        "currency": "CNY",
+        "timeWindow": "2026-08-04 00:00:00 - 2026-08-05 00:00:00"
+      },
+      {
+        "billingNo": "BL202608010005",
+        "billingMonth": "2026-08",
+        "modelCode": "glm-4.5-air",
+        "tokenResourceName": "GLM-4.5-Air",
+        "costPrice": 4,
+        "deductUsage": 250,
+        "usageCount": 250,
+        "currency": "CNY",
+        "timeWindow": "2026-08-05 00:00:00 - 2026-08-06 00:00:00"
+      }
+    ]
+  }
+}

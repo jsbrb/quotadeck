@@ -1,0 +1,9 @@
+{
+  "RequestId": "3F8A7C12-9B6E-4A5D-8C21-0E5D4A7B9F10",
+  "Code": "200",
+  "Success": true,
+  "Data": {
+    "AvailableAmount": "100.28",
+    "Currency": "CNY"
+  }
+}
