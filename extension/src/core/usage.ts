@@ -15,23 +15,6 @@ export interface LineItem {
   readonly value: number;
 }
 
-/**
- * ZAI window-budget report (AD-20/22): trailing-5h usage vs the tier limit.
- * Every field that cannot be derived is absent (`undefined`), never an error.
- */
-export interface BudgetReport {
-  /** Σ apiUsage over records inside the trailing 5h window. */
-  readonly used: number;
-  /** Effective limit for the derived tier; absent when the tier has none. */
-  readonly limit: number | undefined;
-  /** min(round(used / limit × 100), 100); absent when the limit is. */
-  readonly percent: number | undefined;
-  /** tokenResourceName of the latest in-window record. */
-  readonly tier: string | undefined;
-  /** Latest in-window record's timeWindow end (epoch ms); absent when unparseable. */
-  readonly resetAt: number | undefined;
-}
-
 /** One monitor usage window (AD-26): API-provided passthrough, nothing derived here. */
 export interface UsageWindow {
   /** API percentage, UNCAPPED (137 stays 137); absent when the API omits/nulls it. */
@@ -84,8 +67,6 @@ export interface NormalizedUsage {
   readonly tier?: string;
   /** OpenAI only: per (model, usage_type) bucket totals. */
   readonly breakdown?: readonly LineItem[];
-  /** ZAI only: trailing-5h tier budget (AD-22); absent on non-ZAI results. */
-  readonly budget?: BudgetReport;
   /** ZAI monitor windows (AD-26); absent on non-ZAI results. */
   readonly windows?: MonitorWindows;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */

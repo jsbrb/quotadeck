@@ -14,15 +14,16 @@
 // - `read` shape-validates stored bytes: anything that is not a CycleSnapshot
 //   reads as `undefined` ("no cycle yet"), never as garbage for the popup.
 //   Error entries require a valid `errorClass` (AD-21) and ok entries have
-//   their `budget` validated when present (AD-22) — a pre-hitó-3 error entry
+//   their `windows` validated when present (AD-26) — a pre-hitó-3 error entry
 //   without a class therefore reads as "no cycle yet" until the next tick
-//   (≤1 min) rewrites it (transient by design).
+//   (≤1 min) rewrites it (transient by design). A pre-hitó-4 `usage.budget`
+//   field is simply ignored (unknown keys don't invalidate; AD-26 migration).
 //
 // The area is injected (AD-1/AD-12): production passes `BrowserApi.storage.local`
 // (platform/browser-api.ts); tests pass the in-memory fake from src/testing/.
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import type { BudgetReport, LineItem, MonitorWindows, NormalizedUsage } from '../core/usage';
+import type { LineItem, MonitorWindows, NormalizedUsage } from '../core/usage';
 import type { StorageArea } from './key-store';
 
 /** Storage key for the last completed cycle snapshot. */
@@ -50,20 +51,6 @@ function isLineItem(value: unknown): value is LineItem {
   }
   const item = value as Record<string, unknown>;
   return typeof item.model === 'string' && typeof item.usageType === 'string' && typeof item.value === 'number';
-}
-
-function isBudgetReport(value: unknown): value is BudgetReport {
-  if (typeof value !== 'object' || value === null) {
-    return false;
-  }
-  const report = value as Record<string, unknown>;
-  return (
-    typeof report.used === 'number' &&
-    (report.limit === undefined || typeof report.limit === 'number') &&
-    (report.percent === undefined || typeof report.percent === 'number') &&
-    (report.tier === undefined || typeof report.tier === 'string') &&
-    (report.resetAt === undefined || typeof report.resetAt === 'number')
-  );
 }
 
 /** AD-26 shape check: a monitor window requires numeric `total`; the rest is optional numeric. */
@@ -129,7 +116,6 @@ function isNormalizedUsage(value: unknown): value is NormalizedUsage {
     (usage.currency === undefined || typeof usage.currency === 'string') &&
     (usage.tier === undefined || typeof usage.tier === 'string') &&
     (usage.breakdown === undefined || (Array.isArray(usage.breakdown) && usage.breakdown.every(isLineItem))) &&
-    (usage.budget === undefined || isBudgetReport(usage.budget)) &&
     (usage.windows === undefined || isMonitorWindows(usage.windows)) &&
     typeof usage.fetchedAt === 'number'
   );
