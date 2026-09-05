@@ -11,7 +11,7 @@ import type { Credential, ProviderId } from './core/provider';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { HttpStatusError } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
-import type { BrowserApi } from './platform/browser-api';
+import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
 import { writeZaiPlatform } from './storage/zai-platform-store';
 import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
@@ -58,7 +58,7 @@ function liveRoutes(): Record<string, TransportResponse> {
 class AlarmRecorder extends FakeAlarms {
   readonly creates: string[] = [];
 
-  create(name: string, info: { periodInMinutes: number }): void {
+  create(name: string, info: AlarmCreateInfo): void {
     this.creates.push(name);
     super.create(name, info);
   }

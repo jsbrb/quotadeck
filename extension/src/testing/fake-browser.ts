@@ -7,16 +7,23 @@
 // (Phase 5) structurally: same members, in-memory behavior, plus recording
 // hooks the specs pin assertions on (sync-area access, badge texts, alarms).
 import type { StorageArea } from '../storage/key-store';
+import type { AlarmCreateInfo, BrowserStorageOnChanged, StorageChange } from '../platform/browser-api';
 
 export interface RecordedCall {
   readonly op: string;
   readonly args: readonly unknown[];
 }
 
-/** In-memory `chrome.storage` area that records every call made to it. */
+/**
+ * In-memory `chrome.storage` area that records every call made to it. An
+ * optional emitter receives chrome-shaped change records after each `set` —
+ * FakeBrowser wires it so `storage.onChanged` fires exactly like the port.
+ */
 export class FakeStorageArea {
   readonly calls: RecordedCall[] = [];
   private readonly data = new Map<string, unknown>();
+
+  constructor(private readonly emitChanges?: (changes: Record<string, StorageChange>) => void) {}
 
   async get(keys: string | string[] | null): Promise<Record<string, unknown>> {
     this.calls.push({ op: 'get', args: [keys] });
@@ -37,9 +44,17 @@ export class FakeStorageArea {
 
   async set(items: Record<string, unknown>): Promise<void> {
     this.calls.push({ op: 'set', args: [items] });
+    const changes: Record<string, StorageChange> = {};
     for (const [key, value] of Object.entries(items)) {
+      // chrome.storage semantics: oldValue only present when a value existed.
+      const change: { oldValue?: unknown; newValue?: unknown } = { newValue: value };
+      if (this.data.has(key)) {
+        change.oldValue = this.data.get(key);
+      }
+      changes[key] = change;
       this.data.set(key, value);
     }
+    this.emitChanges?.(changes);
   }
 
   async remove(keys: string | string[]): Promise<void> {
@@ -57,14 +72,14 @@ export class FakeStorageArea {
 
 /** In-memory alarms: registerable listeners, fireable ticks, queryable state. */
 export class FakeAlarms {
-  private readonly created = new Map<string, { periodInMinutes: number }>();
+  private readonly created = new Map<string, AlarmCreateInfo>();
   private readonly listeners: Array<(alarm: { name: string }) => void> = [];
 
-  create(name: string, info: { periodInMinutes: number }): void {
-    this.created.set(name, { periodInMinutes: info.periodInMinutes });
+  create(name: string, info: AlarmCreateInfo): void {
+    this.created.set(name, info);
   }
 
-  async get(name: string): Promise<{ name: string; periodInMinutes: number } | undefined> {
+  async get(name: string): Promise<{ name: string; periodInMinutes?: number; when?: number } | undefined> {
     const found = this.created.get(name);
     return found === undefined ? undefined : { name, ...found };
   }
@@ -79,6 +94,25 @@ export class FakeAlarms {
   fire(name: string): void {
     for (const listener of this.listeners) {
       listener({ name });
+    }
+  }
+}
+
+/**
+ * In-memory storage change bus behind `storage.onChanged`: registerable
+ * listeners, dispatchable events (FakeBrowser dispatches on every area set).
+ */
+export class FakeStorageOnChanged implements BrowserStorageOnChanged {
+  private readonly listeners: Array<(changes: Record<string, StorageChange>, area: 'local' | 'sync') => void> = [];
+
+  listen(listener: (changes: Record<string, StorageChange>, area: 'local' | 'sync') => void): void {
+    this.listeners.push(listener);
+  }
+
+  /** Test hook: dispatch a change event to all registered listeners. */
+  dispatch(changes: Record<string, StorageChange>, area: 'local' | 'sync'): void {
+    for (const listener of this.listeners) {
+      listener(changes, area);
     }
   }
 }
@@ -98,12 +132,19 @@ export class FakeAction {
  * receives `fakeBrowser.storage.local` and has no `.sync` path.
  */
 export class FakeBrowser {
-  readonly local = new FakeStorageArea();
-  readonly sync = new FakeStorageArea();
+  /** Change bus behind storage.onChanged — every local/sync set dispatches here. */
+  readonly onChanged = new FakeStorageOnChanged();
+  readonly local = new FakeStorageArea((changes) => this.onChanged.dispatch(changes, 'local'));
+  readonly sync = new FakeStorageArea((changes) => this.onChanged.dispatch(changes, 'sync'));
   readonly alarms = new FakeAlarms();
   readonly action = new FakeAction();
-  readonly storage: { readonly local: StorageArea; readonly sync: StorageArea } = {
+  readonly storage: {
+    readonly local: StorageArea;
+    readonly sync: StorageArea;
+    readonly onChanged: BrowserStorageOnChanged;
+  } = {
     local: this.local,
     sync: this.sync,
+    onChanged: this.onChanged,
   };
 }

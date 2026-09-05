@@ -11,11 +11,31 @@
 // absent" — those events must flow through the port to stay testable.
 import type { StorageArea } from '../storage/key-store';
 
+/**
+ * Alarm schedule info: a repeating `periodInMinutes` period or a one-shot
+ * absolute `when` timestamp (epoch ms) — chrome.alarms accepts both forms.
+ */
+export type AlarmCreateInfo = { periodInMinutes: number } | { when: number };
+
 /** Alarms surface the worker needs: create, query, and tick events. */
 export interface BrowserAlarms {
-  create(name: string, info: { periodInMinutes: number }): void;
+  create(name: string, info: AlarmCreateInfo): void;
   get(name: string): Promise<{ name: string } | undefined>;
   onAlarm: { listen(listener: (alarm: { name: string }) => void): void };
+}
+
+/** A per-key storage change as delivered by the onChanged surface. */
+export interface StorageChange {
+  readonly oldValue?: unknown;
+  readonly newValue?: unknown;
+}
+
+/**
+ * Storage change events: fired after writes land in an area, chrome-style —
+ * one changes record per affected key plus the area the write targeted.
+ */
+export interface BrowserStorageOnChanged {
+  listen(listener: (changes: Record<string, StorageChange>, area: 'local' | 'sync') => void): void;
 }
 
 /** Badge surface: one setter, promise-based like the MV3 runtime. */
@@ -32,7 +52,11 @@ export interface BrowserRuntime {
 /** The single browser-facing port of the extension (AD-1). */
 export interface BrowserApi {
   /** `sync` is exposed ONLY so tests can assert it is never called. */
-  readonly storage: { readonly local: StorageArea; readonly sync: StorageArea };
+  readonly storage: {
+    readonly local: StorageArea;
+    readonly sync: StorageArea;
+    readonly onChanged: BrowserStorageOnChanged;
+  };
   readonly alarms: BrowserAlarms;
   readonly action: BrowserAction;
   readonly runtime: BrowserRuntime;
@@ -51,6 +75,17 @@ export class ChromeBrowserApi implements BrowserApi {
   readonly storage = {
     local: chrome.storage.local,
     sync: chrome.storage.sync,
+    onChanged: {
+      listen: (listener: (changes: Record<string, StorageChange>, area: 'local' | 'sync') => void) => {
+        // The port models only local/sync; other chrome areas never reach it.
+        chrome.storage.onChanged.addListener((changes, areaName) => {
+          if (areaName !== 'local' && areaName !== 'sync') {
+            return;
+          }
+          listener(changes, areaName);
+        });
+      },
+    },
   };
 
   readonly alarms: BrowserAlarms = {
