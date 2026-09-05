@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Local agent tooling
+.atl/
+
+# Environment / secrets
+.env
+.env.*
+
+# Test coverage
+coverage/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log
