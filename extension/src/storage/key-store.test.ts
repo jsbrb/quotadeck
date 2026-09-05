@@ -2,74 +2,77 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { KEY_STORAGE_PREFIX, KeyStore } from './key-store';
 import { FakeBrowser } from '../testing/fake-browser';
 
-describe('KeyStore', () => {
+// KeyStore tests (key-storage spec) over the type-aware Credential surface
+// (AD-17). The transitional plain-string API left with the popup settings
+// view (slice-1 deviation note 2): token credentials keep byte-identical
+// plain-string STORAGE, and every display path masks each secret part.
+describe('KeyStore — token credentials', () => {
   let browser: FakeBrowser;
   let store: KeyStore;
 
   beforeEach(() => {
     browser = new FakeBrowser();
-    store = new KeyStore(browser.storage.local);
+    store = new KeyStore(browser.local);
   });
 
-  it('round-trips a saved key and stores it in storage.local under qd:key:{id}', async () => {
-    const credential = 'sk-zai-round-trip-key';
-    await store.saveKey('zai', credential);
+  it('round-trips a bearer token and stores it in storage.local under qd:key:{id}', async () => {
+    await store.saveCredential('zai', { type: 'bearer', token: 'sk-zai-round-trip-key' });
 
-    expect(await store.readKey('zai')).toBe(credential);
+    expect(await store.readCredential('zai', 'bearer')).toEqual({ type: 'bearer', token: 'sk-zai-round-trip-key' });
     // The value resides in the local area, under the namespaced key — nowhere else.
-    expect(browser.local.snapshot()).toEqual({ [`${KEY_STORAGE_PREFIX}zai`]: credential });
+    expect(browser.local.snapshot()).toEqual({ [`${KEY_STORAGE_PREFIX}zai`]: 'sk-zai-round-trip-key' });
   });
 
   it('masked read reveals at most the last 4 characters and never the full key', async () => {
-    const credential = 'sk-test-1234567890abcdef';
-    await store.saveKey('openai', credential);
+    await store.saveCredential('openai', { type: 'openai-admin-read', token: 'sk-test-1234567890abcdef' });
 
-    const masked = await store.readMaskedKey('openai');
-    expect(masked).toBe('••••cdef');
-    expect(masked).not.toContain(credential);
-    expect(masked!.endsWith(credential.slice(-4))).toBe(true);
-    expect(masked!.length).toBeLessThanOrEqual(8);
+    const masked = await store.readMaskedCredential('openai', 'openai-admin-read');
+    expect(masked).toEqual({ type: 'openai-admin-read', maskedToken: '••••cdef' });
   });
 
   it('masked read reveals nothing for a key shorter than the suffix', async () => {
-    await store.saveKey('kimi', 'abcd');
-    expect(await store.readMaskedKey('kimi')).toBe('••••');
+    await store.saveCredential('kimi', { type: 'bearer', token: 'abcd' });
+    expect(await store.readMaskedCredential('kimi', 'bearer')).toEqual({ type: 'bearer', maskedToken: '••••' });
   });
 
-  it('revocation removes the key: reads report absence', async () => {
-    await store.saveKey('openai', 'sk-admin-revoked-key');
-    await store.revokeKey('openai');
+  it('revocation removes the credential: reads report absence', async () => {
+    await store.saveCredential('openai', { type: 'openai-admin-read', token: 'sk-admin-revoked-key' });
 
-    expect(await store.readKey('openai')).toBeUndefined();
-    expect(await store.readMaskedKey('openai')).toBeUndefined();
+    await store.revokeCredential('openai');
+
+    expect(await store.readCredential('openai', 'openai-admin-read')).toBeUndefined();
+    expect(await store.readMaskedCredential('openai', 'openai-admin-read')).toBeUndefined();
   });
 
-  it('per-provider isolation: revoking one key leaves the other untouched', async () => {
-    await store.saveKey('zai', 'zai-credential');
-    await store.saveKey('kimi', 'kimi-credential');
+  it('per-provider isolation: revoking one credential leaves the other untouched', async () => {
+    await store.saveCredential('zai', { type: 'bearer', token: 'zai-credential' });
+    await store.saveCredential('kimi', { type: 'bearer', token: 'kimi-credential' });
 
-    await store.revokeKey('zai');
+    await store.revokeCredential('zai');
 
-    expect(await store.readKey('zai')).toBeUndefined();
-    expect(await store.readKey('kimi')).toBe('kimi-credential');
+    expect(await store.readCredential('zai', 'bearer')).toBeUndefined();
+    expect(await store.readCredential('kimi', 'bearer')).toEqual({ type: 'bearer', token: 'kimi-credential' });
   });
 
   it('never calls chrome.storage.sync across every wrapper operation', async () => {
-    await store.saveKey('zai', 'zai-credential');
-    await store.readKey('zai');
-    await store.readMaskedKey('zai');
-    await store.revokeKey('zai');
+    await store.saveCredential('zai', { type: 'bearer', token: 'zai-credential' });
+    await store.readCredential('zai', 'bearer');
+    await store.readMaskedCredential('zai', 'bearer');
+    await store.revokeCredential('zai');
 
     expect(browser.sync.calls).toHaveLength(0);
   });
 
-  it('refuses to store an empty credential', async () => {
-    await expect(store.saveKey('zai', '')).rejects.toThrow(/empty credential/i);
+  it('refuses to store an empty token or empty pair parts', async () => {
+    await expect(store.saveCredential('zai', { type: 'bearer', token: '' })).rejects.toThrow(/empty/i);
+    await expect(
+      store.saveCredential('qwen', { type: 'ak-sk', accessKeyId: '', accessKeySecret: 'x' }),
+    ).rejects.toThrow(/empty/i);
     expect(browser.local.snapshot()).toEqual({});
   });
 });
 
-describe('KeyStore — credential-aware surface (AD-17)', () => {
+describe('KeyStore — qwen AK/SK pair (AD-17)', () => {
   let browser: FakeBrowser;
   let store: KeyStore;
 
@@ -134,21 +137,5 @@ describe('KeyStore — credential-aware surface (AD-17)', () => {
       type: 'openai-admin-read',
       token: 'sk-admin-bytes-5678',
     });
-  });
-
-  it('masks token credentials on the display path like the legacy surface', async () => {
-    await store.saveCredential('kimi', { type: 'bearer', token: 'kimi-mask-me-9999xyz' });
-    expect(await store.readMaskedCredential('kimi', 'bearer')).toEqual({
-      type: 'bearer',
-      maskedToken: '••••9xyz',
-    });
-  });
-
-  it('refuses to store an empty token or empty pair parts', async () => {
-    await expect(store.saveCredential('zai', { type: 'bearer', token: '' })).rejects.toThrow(/empty/i);
-    await expect(
-      store.saveCredential('qwen', { type: 'ak-sk', accessKeyId: '', accessKeySecret: 'x' }),
-    ).rejects.toThrow(/empty/i);
-    expect(browser.local.snapshot()).toEqual({});
   });
 });

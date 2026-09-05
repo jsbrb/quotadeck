@@ -1,15 +1,15 @@
 // KeyStore (key-storage spec) — the ONLY home for provider key material.
 //
 // Persistence contract (spec §Local-Only Persistence):
-// - Keys live exclusively in the injected `chrome.storage.local` area under
-//   `qd:key:{providerId}`. This wrapper NEVER touches `chrome.storage.sync` —
-//   the type below is injected by the caller and this module has no `.sync`
+// - Credentials live exclusively in the injected `chrome.storage.local` area
+//   under `qd:key:{providerId}`. This wrapper NEVER touches `chrome.storage.sync`
+//   — the type below is injected by the caller and this module has no `.sync`
 //   path at all — and key material is NEVER written anywhere outside this
 //   wrapper, including `localStorage` (which the extension never uses for keys).
-// - Display reads go through `readMaskedKey`, which reveals at most the last
-//   4 characters and never the full key.
-// - `revokeKey` removes the stored key; afterwards reads report absence and no
-//   credential can be attached to provider activity.
+// - Display reads go through `readMaskedCredential`, which masks every secret
+//   part independently and never reveals a full credential.
+// - `revokeCredential` removes the stored credential; afterwards reads report
+//   absence and no credential can be attached to provider activity.
 //
 // The area is injected (AD-1): in production `platform/browser-api.ts` passes
 // `chrome.storage.local`; tests pass the in-memory fake from src/testing/.
@@ -65,42 +65,6 @@ export class KeyStore {
   private storageKey(providerId: ProviderId): string {
     return `${KEY_STORAGE_PREFIX}${providerId}`;
   }
-
-  /** Persists a provider key; refuses to store an empty credential. */
-  async saveKey(providerId: ProviderId, credential: string): Promise<void> {
-    if (credential.length === 0) {
-      throw new Error(`Refusing to store an empty credential for provider ${providerId}`);
-    }
-    await this.local.set({ [this.storageKey(providerId)]: credential });
-  }
-
-  /** Full-key read for the authentication path. `undefined` = no stored key. */
-  async readKey(providerId: ProviderId): Promise<string | undefined> {
-    const key = this.storageKey(providerId);
-    const items = await this.local.get(key);
-    const value = items[key];
-    return typeof value === 'string' ? value : undefined;
-  }
-
-  /**
-   * Masked read for display: reveals at most the last 4 characters and never
-   * the full key (spec §Masked Display). `undefined` = no stored key.
-   */
-  async readMaskedKey(providerId: ProviderId): Promise<string | undefined> {
-    const credential = await this.readKey(providerId);
-    return credential === undefined ? undefined : mask(credential);
-  }
-
-  /** Removes the stored key; subsequent reads report absence. */
-  async revokeKey(providerId: ProviderId): Promise<void> {
-    await this.local.remove(this.storageKey(providerId));
-  }
-
-  // --- Credential-aware surface (AD-17) -----------------------------------
-  // Token credentials keep today's plain-string bytes; the qwen pair persists
-  // as ONE JSON object under the SAME qd:key:qwen key, so revoking the single
-  // key removes both parts atomically. The legacy string surface above stays
-  // only for the transitional popup forms and leaves with the settings view.
 
   /** Persists a typed credential; refuses empty token or empty pair parts. */
   async saveCredential(providerId: ProviderId, credential: Credential): Promise<void> {

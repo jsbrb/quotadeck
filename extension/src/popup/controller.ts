@@ -1,53 +1,60 @@
-// Popup controller (popup-ui spec §Current Cycle Data on Open, §Key Addition
-// with Validation, §Revocation from the Popup; AD-11/AD-15) — owns state and
-// DOM events over an injected document and browser port. The view stays pure;
-// this module is the only popup code that touches the DOM.
+// Popup controller (popup-ui spec §Settings Gear Surface, §Per-Model
+// Consumption View, §Current Cycle Data on Open, §Key Addition with
+// Validation, §Masked Key Display, §Revocation from the Popup; AD-11/15/22/24)
+// — owns state and DOM events over an injected document and browser port.
+// The view stays pure; this module is the only popup code that touches the DOM.
 //
 // Security invariants (AD-15, structural — not conventions):
-// - Credential reads go through `KeyStore.readMaskedKey` ONLY; `readKey` is
-//   never imported here, so the controller cannot even observe a full key.
-// - The full key lives exclusively in the password input while entering; on a
-//   VALID submit the input is cleared before re-render, so the key leaves the
-//   DOM. Invalid submissions keep the text (the user is still editing), which
-//   stays within "during entry".
+// - Credential reads go through `KeyStore.readMaskedCredential` ONLY; no
+//   full-credential read is imported here, so the controller cannot observe one.
+// - The full key/pair lives exclusively in the password inputs while entering;
+//   on a VALID submit the inputs are cleared before re-render, so the key
+//   leaves the DOM. Invalid submissions keep the text (the user is still
+//   editing), which stays within "during entry".
 // - The controller logs nothing.
 //
-// Event wiring note: happy-dom does not fire a form's `submit` event when a
-// submit button is clicked, so the save path runs on the submit-button click
-// (default prevented — this also cancels native form submission in real
-// Chrome). A `submit` listener remains as the Enter-key backstop for real
-// browsers, guarded by `defaultPrevented` so one user action processes once.
+// Event wiring (AD-24): the save path runs on the submit-button click AND on
+// a keydown Enter in a credential input — both are dispatchable in happy-dom,
+// so the Enter path has a real test; the old real-browser-only `submit`
+// backstop is gone. Provider metadata comes from PROVIDER_METADATA: no
+// provider class, endpoint URL or parse code enters the popup bundle.
 import { validateCredential } from '../core/credentials';
-import type { ProviderId } from '../core/provider';
+import type { Credential, CredentialType, ProviderId } from '../core/provider';
+import { PROVIDER_METADATA } from '../core/provider-metadata';
 import type { BrowserApi } from '../platform/browser-api';
-import { createDefaultRegistry } from '../providers';
 import { KeyStore } from '../storage/key-store';
+import type { MaskedCredential } from '../storage/key-store';
 import { SnapshotStore, type CycleSnapshot } from '../storage/snapshot-store';
-import { renderPopup, type PopupProvider, type PopupState } from './view';
+import { renderMain, renderSettings, type PopupProvider, type PopupState } from './view';
 
 export interface PopupDeps {
   readonly browser: BrowserApi;
   readonly document: Document;
+  /** Countdown clock for display; defaults to Date.now — UI only, never provider logic. */
+  readonly now?: () => number;
+}
+
+/** The input ids one provider's credential form owns (two for the qwen pair). */
+function credentialInputIds(id: ProviderId, type: CredentialType): readonly string[] {
+  return type === 'ak-sk' ? [`key-input-${id}-ak`, `key-input-${id}-sk`] : [`key-input-${id}`];
 }
 
 export function startPopup(deps: PopupDeps): void {
-  const registry = createDefaultRegistry(); // single source of metadata (AD-6)
-  const providers: readonly PopupProvider[] = registry.ids().map((id) => ({
-    id,
-    displayName: registry.get(id).displayName,
-  }));
+  const providers: readonly PopupProvider[] = PROVIDER_METADATA; // popup-safe metadata (AD-24)
+  const metadataFor = (id: ProviderId) => PROVIDER_METADATA.find((metadata) => metadata.id === id)!;
   const keys = new KeyStore(deps.browser.storage.local);
   const snapshots = new SnapshotStore(deps.browser.storage.local);
+  const now = deps.now ?? Date.now;
 
   const state: {
+    view: 'main' | 'settings';
     snapshot: CycleSnapshot | undefined;
-    keyStates: Partial<Record<ProviderId, string | undefined>>;
+    keyStates: Partial<Record<ProviderId, MaskedCredential | undefined>>;
     guidance: Partial<Record<ProviderId, string>>;
-  } = { snapshot: undefined, keyStates: {}, guidance: {} };
+  } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {} };
 
   const app = (): HTMLElement => deps.document.getElementById('app') as HTMLElement;
-  const inputFor = (id: ProviderId): HTMLInputElement =>
-    deps.document.getElementById(`key-input-${id}`) as HTMLInputElement;
+  const inputById = (inputId: string): HTMLInputElement => deps.document.getElementById(inputId) as HTMLInputElement;
 
   /**
    * Re-renders into #app. Typed-but-unsubmitted input values are carried over
@@ -55,44 +62,64 @@ export function startPopup(deps: PopupDeps): void {
    * keep the user's text without the full key entering the rendered markup.
    */
   function render(): void {
-    const live: Partial<Record<ProviderId, string>> = {};
-    for (const { id } of providers) {
-      const input = deps.document.getElementById(`key-input-${id}`);
-      if (input !== null) {
-        live[id] = (input as HTMLInputElement).value;
-      }
+    const live: Record<string, string> = {};
+    for (const input of Array.from(deps.document.querySelectorAll('#app input'))) {
+      live[input.id] = (input as HTMLInputElement).value;
     }
     const popupState: PopupState = {
+      view: state.view,
       providers,
       snapshot: state.snapshot,
       keyStates: state.keyStates,
       guidance: state.guidance,
+      nowMs: now(),
     };
-    app().innerHTML = renderPopup(popupState);
-    for (const { id } of providers) {
-      if (live[id] !== undefined) {
-        inputFor(id).value = live[id];
+    app().innerHTML = state.view === 'main' ? renderMain(popupState) : renderSettings(popupState);
+    for (const [inputId, value] of Object.entries(live)) {
+      const input = deps.document.getElementById(inputId);
+      if (input !== null) {
+        (input as HTMLInputElement).value = value;
       }
     }
   }
 
-  async function submitKey(id: ProviderId, credential: string): Promise<void> {
-    const result = validateCredential(registry.get(id).credentialType, credential);
+  /** Reads the provider's form inputs into a typed credential candidate. */
+  function credentialFromInputs(id: ProviderId): Credential {
+    const type = metadataFor(id).credentialType;
+    if (type === 'ak-sk') {
+      return {
+        type,
+        accessKeyId: inputById(`key-input-${id}-ak`).value,
+        accessKeySecret: inputById(`key-input-${id}-sk`).value,
+      };
+    }
+    return { type, token: inputById(`key-input-${id}`).value };
+  }
+
+  async function submitCredential(id: ProviderId): Promise<void> {
+    const type = metadataFor(id).credentialType;
+    const credential = credentialFromInputs(id);
+    const result =
+      credential.type === 'ak-sk'
+        ? validateCredential('ak-sk', { accessKeyId: credential.accessKeyId, accessKeySecret: credential.accessKeySecret })
+        : validateCredential(type, credential.token);
     if (!result.ok) {
       state.guidance[id] = result.message;
-      render(); // keeps the typed value (AD-15: still entering)
+      render(); // keeps the typed values (AD-15: still entering)
       return;
     }
     delete state.guidance[id];
-    await keys.saveKey(id, credential);
-    state.keyStates[id] = await keys.readMaskedKey(id);
-    inputFor(id).value = ''; // the full key leaves the DOM on valid submit
+    await keys.saveCredential(id, credential);
+    state.keyStates[id] = await keys.readMaskedCredential(id, type);
+    for (const inputId of credentialInputIds(id, type)) {
+      inputById(inputId).value = ''; // the full credential leaves the DOM on valid submit
+    }
     render();
   }
 
-  async function revokeKey(id: ProviderId): Promise<void> {
-    await keys.revokeKey(id);
-    state.keyStates[id] = await keys.readMaskedKey(id);
+  async function revokeCredential(id: ProviderId): Promise<void> {
+    await keys.revokeCredential(id);
+    state.keyStates[id] = await keys.readMaskedCredential(id, metadataFor(id).credentialType);
     delete state.guidance[id];
     render();
   }
@@ -102,7 +129,20 @@ export function startPopup(deps: PopupDeps): void {
     const target = event.target as HTMLElement;
     const revoke = target.closest('[data-revoke]');
     if (revoke !== null) {
-      void revokeKey(revoke.getAttribute('data-revoke') as ProviderId);
+      void revokeCredential(revoke.getAttribute('data-revoke') as ProviderId);
+      return;
+    }
+    const action = target.closest('[data-action]');
+    if (action !== null) {
+      const name = action.getAttribute('data-action');
+      if (name === 'open-settings') {
+        state.view = 'settings';
+      } else if (name === 'back') {
+        state.view = 'main';
+      } else {
+        return;
+      }
+      render();
       return;
     }
     const submit = target.closest('button[type="submit"]');
@@ -111,26 +151,33 @@ export function startPopup(deps: PopupDeps): void {
       const form = submit.closest('form');
       const id = form?.getAttribute('data-provider');
       if (id !== null) {
-        void submitKey(id as ProviderId, inputFor(id as ProviderId).value);
+        void submitCredential(id as ProviderId);
       }
     }
   });
-  root.addEventListener('submit', (event) => {
-    if (event.defaultPrevented) {
-      return; // already processed by the click path
+  // Enter submits the focused provider's form (AD-24: replaces the untestable
+  // real-browser submit backstop — this path is dispatchable in happy-dom).
+  root.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') {
+      return;
     }
-    event.preventDefault();
-    const id = (event.target as HTMLFormElement).getAttribute('data-provider');
+    const input = (event.target as HTMLElement | null)?.closest('input');
+    const form = input?.closest('form.key-form');
+    if (form === null || form === undefined || input === null) {
+      return;
+    }
+    event.preventDefault(); // one user action processes once
+    const id = form.getAttribute('data-provider');
     if (id !== null) {
-      void submitKey(id as ProviderId, inputFor(id as ProviderId).value);
+      void submitCredential(id as ProviderId);
     }
   });
 
   // Initial load: last completed cycle + masked key states, then first render.
   void (async (): Promise<void> => {
     state.snapshot = await snapshots.read();
-    for (const { id } of providers) {
-      state.keyStates[id] = await keys.readMaskedKey(id);
+    for (const { id, credentialType } of providers) {
+      state.keyStates[id] = await keys.readMaskedCredential(id, credentialType);
     }
     render();
   })();
