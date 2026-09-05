@@ -10,5 +10,11 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "alarms"]
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "https://api.moonshot.cn/*",
+    "https://api.openai.com/*",
+    "https://bigmodel.cn/*",
+    "https://business.aliyuncs.com/*"
+  ]
 }
