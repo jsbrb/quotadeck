@@ -630,6 +630,41 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     expect('plan' in (stored.results.qwen as { usage: { plan?: unknown } }).usage).toBe(false);
   });
 
+  it('a probe transport failure surfaces on the worker console (permanent diagnostics, hito-7 parity)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    const transport = new QwenHybridTransport(() => {
+      throw new TypeError('Failed to fetch');
+    });
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+      expect(errorSpy).toHaveBeenCalledWith('[quotadeck] qwen plan probe failed:', 'TypeError: Failed to fetch');
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('an unmapped probe status surfaces on the worker console and leaves the cache untouched', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    const transport = new QwenHybridTransport(probeAnswer(500, 'boom'));
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+      expect(errorSpy).toHaveBeenCalledWith('[quotadeck] qwen plan probe unmapped status: 500 — cache untouched, plan omitted.');
+      expect(QWEN_PLAN_STATUS_STORAGE_KEY in h.local.snapshot()).toBe(false);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('a probe answering 429 without parseable reset text still reports exhausted without resetAt', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['qwen']);

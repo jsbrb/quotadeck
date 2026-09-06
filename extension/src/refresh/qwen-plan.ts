@@ -59,18 +59,28 @@ export class QwenPlanStep {
     }
     try {
       const response = await this.deps.client.send('qwen', buildPlanProbeRequest(), credential);
-      return await this.record(mapProbeOutcome(response.status, undefined, nowMs), nowMs);
+      return await this.record(mapProbeOutcome(response.status, undefined, nowMs), nowMs, response.status);
     } catch (error) {
       if (!(error instanceof HttpStatusError)) {
+        // Permanent diagnostics (hito-7 parity): a transport-layer probe
+        // failure writes no cache and no plan status — without this log it
+        // would be completely invisible in production.
+        console.error(
+          '[quotadeck] qwen plan probe failed:',
+          error instanceof Error ? `${error.name}: ${error.message}` : error,
+        );
         return undefined; // transport failure: cache untouched, plan omitted
       }
-      return await this.record(mapProbeOutcome(error.status, error.message, nowMs), nowMs);
+      return await this.record(mapProbeOutcome(error.status, error.message, nowMs), nowMs, error.status);
     }
   }
 
   /** Persists a mapped outcome as the new cache entry and returns it. */
-  private async record(outcome: PlanInfo | undefined, nowMs: number): Promise<PlanInfo | undefined> {
+  private async record(outcome: PlanInfo | undefined, nowMs: number, status: number): Promise<PlanInfo | undefined> {
     if (outcome === undefined) {
+      // Permanent diagnostics: unmapped statuses (e.g. 5xx) skip the cache by
+      // design — this log is the only trace they ever happened.
+      console.error(`[quotadeck] qwen plan probe unmapped status: ${status} — cache untouched, plan omitted.`);
       return undefined; // unmapped status (e.g. 5xx): cache untouched
     }
     await this.deps.store.write({ ...outcome, probedAt: nowMs });
