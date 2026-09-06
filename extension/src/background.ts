@@ -105,6 +105,13 @@ export async function refreshTick(browser: BrowserApi, engine: RefreshEngine, cl
       browser.action.setBadgeText({ text: formatBadgeText(usage) });
     },
     onError: (providerId, error) => {
+      // Temporary diagnostics (Qwen live investigation): the real error name and
+      // message surface in the worker console — the snapshot still stores only
+      // the class (AD-13). Remove once the Qwen defect is fixed.
+      console.error(
+        `[quotadeck] ${providerId} refresh failed:`,
+        error instanceof Error ? `${error.name}: ${error.message}` : error,
+      );
       // AD-13/21: the thrown value is dropped — only its taxonomy class
       // survives into the snapshot, and the badge shows ERR for every class.
       results[providerId] = { status: 'error', errorClass: classifyRefreshError(error) };
