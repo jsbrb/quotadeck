@@ -26,8 +26,15 @@ export interface StorageArea {
   remove(keys: string | string[]): Promise<void>;
 }
 
-/** Storage namespace for provider credentials: `qd:key:{providerId}`. */
+/** Storage namespace for provider credentials: `qd:key:{slot}`. */
 export const KEY_STORAGE_PREFIX = 'qd:key:';
+
+/**
+ * Credential storage slots (hito-8 dual credential): one per provider, plus
+ * the independent qwen plan-key slot `qd:key:qwen-plan` — a SECOND optional
+ * qwen credential distinct from the AK/SK pair under `qd:key:qwen`.
+ */
+export type CredentialSlot = ProviderId | 'qwen-plan';
 
 /** Reveals at most this many trailing characters on the display path. */
 export const MASK_SUFFIX_LENGTH = 4;
@@ -42,7 +49,7 @@ function mask(credential: string): string {
 
 /** Masked display form of a credential: every secret part masked independently. */
 export type MaskedCredential =
-  | { readonly type: 'bearer' | 'openai-admin-read' | 'raw'; readonly maskedToken: string }
+  | { readonly type: 'bearer' | 'openai-admin-read' | 'raw' | 'qwen-plan'; readonly maskedToken: string }
   | { readonly type: 'ak-sk'; readonly maskedAccessKeyId: string; readonly maskedAccessKeySecret: string };
 
 /** Stored shape of a qwen AK/SK pair: one JSON object, both parts, one key. */
@@ -62,22 +69,22 @@ function isStoredPair(value: unknown): value is StoredPair {
 export class KeyStore {
   constructor(private readonly local: StorageArea) {}
 
-  private storageKey(providerId: ProviderId): string {
-    return `${KEY_STORAGE_PREFIX}${providerId}`;
+  private storageKey(slot: CredentialSlot): string {
+    return `${KEY_STORAGE_PREFIX}${slot}`;
   }
 
   /** Persists a typed credential; refuses empty token or empty pair parts. */
-  async saveCredential(providerId: ProviderId, credential: Credential): Promise<void> {
+  async saveCredential(slot: CredentialSlot, credential: Credential): Promise<void> {
     const empty = credential.type === 'ak-sk'
       ? credential.accessKeyId.length === 0 || credential.accessKeySecret.length === 0
       : credential.token.length === 0;
     if (empty) {
-      throw new Error(`Refusing to store an empty credential for provider ${providerId}`);
+      throw new Error(`Refusing to store an empty credential for slot ${slot}`);
     }
     const value = credential.type === 'ak-sk'
       ? { accessKeyId: credential.accessKeyId, accessKeySecret: credential.accessKeySecret }
       : credential.token;
-    await this.local.set({ [this.storageKey(providerId)]: value });
+    await this.local.set({ [this.storageKey(slot)]: value });
   }
 
   /**
@@ -85,8 +92,8 @@ export class KeyStore {
    * `qd:key:qwen` (hito-2) is NOT a pair — it reads as `undefined` and the
    * user re-enters the credential; no unparseable value reaches the signer.
    */
-  async readCredential(providerId: ProviderId, type: CredentialType): Promise<Credential | undefined> {
-    const key = this.storageKey(providerId);
+  async readCredential(slot: CredentialSlot, type: CredentialType): Promise<Credential | undefined> {
+    const key = this.storageKey(slot);
     const value = (await this.local.get(key))[key];
     if (type === 'ak-sk') {
       return isStoredPair(value)
@@ -101,8 +108,8 @@ export class KeyStore {
    * independently (`••••` + at most 4 trailing characters, MASK_SUFFIX_LENGTH);
    * the full pair is never exposed through any display path.
    */
-  async readMaskedCredential(providerId: ProviderId, type: CredentialType): Promise<MaskedCredential | undefined> {
-    const credential = await this.readCredential(providerId, type);
+  async readMaskedCredential(slot: CredentialSlot, type: CredentialType): Promise<MaskedCredential | undefined> {
+    const credential = await this.readCredential(slot, type);
     if (credential === undefined) {
       return undefined;
     }
@@ -116,7 +123,7 @@ export class KeyStore {
   }
 
   /** Removes the stored credential — for a pair, both parts atomically. */
-  async revokeCredential(providerId: ProviderId): Promise<void> {
-    await this.local.remove(this.storageKey(providerId));
+  async revokeCredential(slot: CredentialSlot): Promise<void> {
+    await this.local.remove(this.storageKey(slot));
   }
 }

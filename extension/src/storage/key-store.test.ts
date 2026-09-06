@@ -140,6 +140,63 @@ describe('KeyStore — qwen AK/SK pair (AD-17)', () => {
   });
 });
 
+describe('KeyStore — qwen plan slot (dual credential, hito-8)', () => {
+  let browser: FakeBrowser;
+  let store: KeyStore;
+
+  beforeEach(() => {
+    browser = new FakeBrowser();
+    store = new KeyStore(browser.local);
+  });
+
+  const PAIR = { type: 'ak-sk', accessKeyId: 'LTAI5tPlanSlotAK00', accessKeySecret: 'PlanSlotSecret00000000000' } as const;
+  const PLAN_KEY = 'sk-sp-1234567890abcdef';
+
+  it('round-trips a plan key under qd:key:qwen-plan while the pair stays under qd:key:qwen', async () => {
+    await store.saveCredential('qwen', PAIR);
+    await store.saveCredential('qwen-plan', { type: 'qwen-plan', token: PLAN_KEY });
+
+    expect(await store.readCredential('qwen-plan', 'qwen-plan')).toEqual({ type: 'qwen-plan', token: PLAN_KEY });
+    expect(await store.readCredential('qwen', 'ak-sk')).toEqual(PAIR);
+    expect(browser.local.snapshot()).toEqual({
+      [`${KEY_STORAGE_PREFIX}qwen`]: { accessKeyId: PAIR.accessKeyId, accessKeySecret: PAIR.accessKeySecret },
+      [`${KEY_STORAGE_PREFIX}qwen-plan`]: PLAN_KEY,
+    });
+  });
+
+  it('masked plan read reveals at most the last 4 characters and never the full key', async () => {
+    await store.saveCredential('qwen-plan', { type: 'qwen-plan', token: PLAN_KEY });
+
+    const masked = await store.readMaskedCredential('qwen-plan', 'qwen-plan');
+    expect(masked).toEqual({ type: 'qwen-plan', maskedToken: '••••cdef' });
+    expect(JSON.stringify(masked)).not.toContain(PLAN_KEY);
+  });
+
+  it('revoking the plan key leaves the pair readable, and revoking the pair leaves the plan key readable', async () => {
+    await store.saveCredential('qwen', PAIR);
+    await store.saveCredential('qwen-plan', { type: 'qwen-plan', token: PLAN_KEY });
+
+    await store.revokeCredential('qwen-plan');
+    expect(await store.readCredential('qwen-plan', 'qwen-plan')).toBeUndefined();
+    expect(await store.readMaskedCredential('qwen-plan', 'qwen-plan')).toBeUndefined();
+    expect(await store.readCredential('qwen', 'ak-sk')).toEqual(PAIR);
+
+    // Symmetric direction from a fresh both-stored state.
+    const fresh = new KeyStore(new FakeBrowser().local);
+    await fresh.saveCredential('qwen', PAIR);
+    await fresh.saveCredential('qwen-plan', { type: 'qwen-plan', token: PLAN_KEY });
+
+    await fresh.revokeCredential('qwen');
+    expect(await fresh.readCredential('qwen', 'ak-sk')).toBeUndefined();
+    expect(await fresh.readCredential('qwen-plan', 'qwen-plan')).toEqual({ type: 'qwen-plan', token: PLAN_KEY });
+  });
+
+  it('refuses to store an empty plan key', async () => {
+    await expect(store.saveCredential('qwen-plan', { type: 'qwen-plan', token: '' })).rejects.toThrow(/empty/i);
+    expect(browser.local.snapshot()).toEqual({});
+  });
+});
+
 describe('KeyStore — raw credentials (monitor attach mode)', () => {
   let browser: FakeBrowser;
   let store: KeyStore;

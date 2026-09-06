@@ -19,6 +19,7 @@ export const TEST_CREDENTIALS: Readonly<Record<CredentialType, Credential>> = {
     accessKeyId: 'LTAI5tTestDriverAK000',
     accessKeySecret: 'TestDriverSecret0000000000000000',
   },
+  'qwen-plan': { type: 'qwen-plan', token: 'sk-sp-test-driver-plan' },
 };
 
 export async function driveRefresh(
