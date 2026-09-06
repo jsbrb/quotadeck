@@ -215,8 +215,8 @@ describe('AllowlistNetworkClient — raw attach (AD-25, ZAI monitor hosts only; 
 describe('AllowlistNetworkClient — ak-sk attach (AD-19, qwen only)', () => {
   it('signs the qwen BSS query and dispatches with NO Authorization header', async () => {
     const transport = new RecordingTransport([okResponse]);
-    const clock = new FakeClock();
-    const client = new AllowlistNetworkClient(transport, { clock, nonce: () => 'fixed-nonce-0001' });
+    // FakeClock default epoch 1_700_000_000_000 → 2023-11-14T22:13:20Z.
+    const client = new AllowlistNetworkClient(transport, { clock: new FakeClock(), nonce: () => 'fixed-nonce-0001' });
 
     const response = await client.send('qwen', qwenRequest(), QWEN_PAIR);
 
@@ -233,8 +233,23 @@ describe('AllowlistNetworkClient — ak-sk attach (AD-19, qwen only)', () => {
     expect(params.SignatureMethod).toBe('HMAC-SHA1');
     expect(params.SignatureVersion).toBe('1.0');
     expect(params.SignatureNonce).toBe('fixed-nonce-0001'); // injected rng
-    expect(params.Timestamp).toBe(new Date(clock.now()).toISOString()); // injected clock
+    expect(params.Timestamp).toBe('2023-11-14T22:13:20Z'); // injected clock, no milliseconds
+    expect(params.Timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/); // §RPC Timestamp Format: no '.'
     expect(params.Signature).toMatch(/^[A-Za-z0-9+/]+={0,2}$/); // derived signature present
+  });
+
+  it('normalizes a millisecond-carrying clock to the no-millis POP Timestamp (§RPC Timestamp Format)', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport, {
+      clock: new FakeClock(1_700_000_000_123), // nonzero milliseconds
+      nonce: () => 'fixed-nonce-0001',
+    });
+
+    await client.send('qwen', qwenRequest(), QWEN_PAIR);
+
+    const params = queryOf(transport.requests[0]!.url);
+    expect(params.Timestamp).toBe('2023-11-14T22:13:20Z'); // millis stripped before signing
+    expect(params.Timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
   });
 
   it('rejects an ak-sk credential for any provider other than qwen, with zero I/O', async () => {

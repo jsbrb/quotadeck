@@ -47,6 +47,17 @@ function buildUrl(request: ProviderRequest): string {
   return `${request.url}${request.url.includes('?') ? '&' : '?'}${query}`;
 }
 
+/**
+ * POP-compliant timestamp (§RPC Timestamp Format): ISO-8601 UTC WITHOUT the
+ * millisecond component (`YYYY-MM-DDTHH:mm:ssZ`). Alibaba POP RPC rejects
+ * millisecond-carrying timestamps with HTTP 400; `toISOString()` always
+ * emits `.sss`, so the fraction is stripped here — BEFORE signing, keeping
+ * the emitted param and the StringToSign material identical (AD-18).
+ */
+function toPopTimestamp(epochMs: number): string {
+  return new Date(epochMs).toISOString().replace(/\.\d{3}Z$/u, 'Z');
+}
+
 export class AllowlistNetworkClient {
   private readonly clock: Clock;
   private readonly nonce: () => string;
@@ -132,7 +143,7 @@ export class AllowlistNetworkClient {
     }
     base.AccessKeyId = credential.accessKeyId;
     const { query, signature } = await signBssQuery(base, credential.accessKeySecret, {
-      timestamp: new Date(this.clock.now()).toISOString(),
+      timestamp: toPopTimestamp(this.clock.now()),
       nonce: this.nonce(),
     });
     return { method: request.method, url: request.url, query: { ...query, Signature: signature } };
