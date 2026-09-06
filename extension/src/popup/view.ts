@@ -54,9 +54,9 @@ import type { CredentialType, ProviderId } from '../core/provider';
 import type { QwenSite } from '../core/qwen-sites';
 import { QWEN_SITES } from '../core/qwen-sites';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type LineItem, type NormalizedUsage, type UsageWindow } from '../core/usage';
+import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type UsageWindow } from '../core/usage';
 import { ZAI_PLATFORMS, type ZaiPlatform } from '../core/zai-platforms';
-import type { MaskedCredential } from '../storage/key-store';
+import type { CredentialSlot, MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 
 /** Provider metadata the view needs; supplied from PROVIDER_METADATA (AD-24). */
@@ -79,10 +79,17 @@ export const ZAI_WRONG_PLATFORM_GUIDANCE =
  * Static per-provider settings guidance (popup-ui spec §Settings Guidance):
  * rendered BEFORE each provider's input(s), always present — key-independent
  * — and distinct from validation errors (`state.guidance`, role="alert").
- * English copy is normative per the spec table.
+ * English copy is normative per the spec table. The qwen row covers BOTH
+ * credentials plus the site selection (hito-8 MODIFIED).
  */
 export const SETTINGS_GUIDANCE: Readonly<Record<ProviderId, string>> = {
-  qwen: 'Use an Alibaba Cloud AccessKey pair — Access Key ID and Access Key Secret — created in the Alibaba Cloud Console under RAM → AccessKey pair. The account needs the RAM permission bss:DescribeAcccount. DashScope sk- keys do not work here.',
+  qwen:
+    'Balance: use an Alibaba Cloud AccessKey pair — Access Key ID and Access Key Secret — created in the ' +
+    'Alibaba Cloud Console under RAM → AccessKey pair. The account needs the RAM permission ' +
+    'bss:DescribeAcccount. DashScope sk- keys do not work for balance. Plan (optional): a separate ' +
+    'inference-only sk-sp- key from the Qwen token-plan service; it probes the international endpoint and ' +
+    'each probe costs one 1-token request — NOT the AccessKey pair. Site: international accounts (the ' +
+    'default) use the ap-southeast-1 endpoint; china accounts select China.',
   openai: 'Use an admin API key (sk-admin-, read scope) from your organization settings; regular project keys are rejected.',
   kimi: 'Use an API key from the Kimi console; CN and international keys are not interchangeable.',
   zai: 'Use your coding-plan API key — the same key your coding tools use. The platform selector chooses Z.AI (international) or ZHIPU (bigmodel.cn); keys are platform-bound.',
@@ -97,8 +104,10 @@ export interface PopupState {
   readonly snapshot: CycleSnapshot | undefined;
   /** Masked credential per provider (`KeyStore.readMaskedCredential`); absent = no stored key. */
   readonly keyStates: Readonly<Partial<Record<ProviderId, MaskedCredential | undefined>>>;
-  /** Last validation message per provider, rendered verbatim. */
-  readonly guidance: Readonly<Partial<Record<ProviderId, string>>>;
+  /** Masked qwen plan key (`qd:key:qwen-plan`); `undefined` = no plan key stored (hito-8). */
+  readonly qwenPlanKey: MaskedCredential | undefined;
+  /** Last validation message per credential slot, rendered verbatim. */
+  readonly guidance: Readonly<Partial<Record<CredentialSlot, string>>>;
   /** Selected ZAI monitor platform (`qd:pref:zai-platform`); the controller reads/persists it. */
   readonly zaiPlatform: ZaiPlatform;
   /** Selected Qwen BSS site (`qd:pref:qwen-site`); the controller reads/persists it. */
@@ -271,6 +280,29 @@ function modelRows(usage: NormalizedUsage): string {
   return `<ul class="model-rows">${items.join('')}</ul>`;
 }
 
+/**
+ * Qwen plan line (popup-ui §Qwen Plan Line, hito-8): normal weight below the
+ * balance, one of the three status texts; exhausted renders the countdown
+ * (via the pure `formatResetCountdown`, a distinct `.countdown` element like
+ * the monitor windows) only when a reset instant exists — an unparseable 429
+ * degrades to the bare status, nothing is synthesized. `Plan: Available`
+ * capitalizes the positive status; the two failure forms stay lowercase per
+ * the spec table.
+ */
+function planLine(plan: PlanInfo, state: PopupState): string {
+  if (plan.status === 'available') {
+    return '<p class="plan-status">Plan: Available</p>';
+  }
+  if (plan.status === 'key-rejected') {
+    return '<p class="plan-status">Plan: key rejected</p>';
+  }
+  if (plan.resetAt === undefined) {
+    return '<p class="plan-status">Plan: exhausted</p>';
+  }
+  const countdown = formatResetCountdown(plan.resetAt, state.nowMs);
+  return `<p class="plan-status">Plan: exhausted · resets in <span class="countdown">${countdown}</span></p>`;
+}
+
 function providerMainSection(provider: PopupProvider, state: PopupState): string {
   const entry = state.snapshot?.results[provider.id];
   // Card wrapper (popup-ui §Provider List Rendering): one card per provider —
@@ -298,6 +330,9 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
       parts.push(`<p class="hero-percentage">${Math.round(heroPercentage)}%</p>`);
     }
     parts.push(`<p class="usage">${formatUsageText(entry.usage)}</p>`);
+    if (entry.usage.plan !== undefined) {
+      parts.push(planLine(entry.usage.plan, state)); // hito-8: below the balance
+    }
     if (entry.usage.tier !== undefined) {
       parts.push(`<p class="tier">Tier: ${escapeHtml(entry.usage.tier)}</p>`);
     }
@@ -316,8 +351,14 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
 export function renderMain(state: PopupState): string {
   // Keyless filtering (hito-6 §Provider List Rendering): one card per
   // provider WITH a stored credential — keyless providers render no card
-  // ("No cycle data yet" noise dies); the settings view keeps everyone.
-  const keyedProviders = state.providers.filter((provider) => state.keyStates[provider.id] !== undefined);
+  // ("No cycle data yet" noise dies); the settings view keeps everyone. A
+  // qwen card keys on EITHER qwen credential (hito-8 §Qwen Plan Line): the
+  // AK/SK pair or the plan key alone.
+  const keyedProviders = state.providers.filter((provider) =>
+    provider.id === 'qwen'
+      ? state.keyStates.qwen !== undefined || state.qwenPlanKey !== undefined
+      : state.keyStates[provider.id] !== undefined,
+  );
   const sections = keyedProviders.map((provider) => providerMainSection(provider, state)).join('\n');
   const header =
     '<header class="popup-header"><h1>quotadeck</h1><div class="header-actions">' +
@@ -387,6 +428,30 @@ function siteSelector(state: PopupState): string {
   );
 }
 
+/**
+ * Qwen plan key group (popup-ui §Qwen Plan Key Settings Group, hito-8): the
+ * SECOND qwen field group — its own password input, save and revoke
+ * controls, labeled `Plan key (sk-sp-)` and revoked via the plan slot
+ * (`data-revoke="qwen-plan"`), independent of the AK/SK pair above it. The
+ * masked state renders inside the group; the controller owns persistence.
+ */
+function planKeyGroup(state: PopupState): string {
+  const masked = state.qwenPlanKey;
+  const maskedLine =
+    masked !== undefined && masked.type !== 'ak-sk'
+      ? `<p class="key-state">Plan key: ${escapeHtml(masked.maskedToken)}</p>`
+      : '';
+  return (
+    maskedLine +
+    '<form class="key-form plan-key-form" data-provider="qwen-plan">' +
+    '<label for="key-input-qwen-plan">Plan key (sk-sp-)</label>' +
+    '<input type="password" autocomplete="off" id="key-input-qwen-plan" name="credential" placeholder="sk-sp-..." />' +
+    '<button type="submit" id="key-add-qwen-plan">Save plan key</button>' +
+    '<button type="button" class="revoke" id="key-revoke-qwen-plan" data-revoke="qwen-plan">Revoke plan key</button>' +
+    '</form>'
+  );
+}
+
 function providerSettingsSection(provider: PopupProvider, state: PopupState): string {
   const masked = state.keyStates[provider.id];
   const guidance = state.guidance[provider.id];
@@ -410,9 +475,15 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
   }
   if (provider.id === 'qwen') {
     parts.push(siteSelector(state));
+    parts.push(planKeyGroup(state)); // second field group (hito-8 dual credential)
   }
   if (guidance !== undefined) {
     parts.push(`<p class="guidance" role="alert">${escapeHtml(guidance)}</p>`);
+  }
+  if (provider.id === 'qwen' && state.guidance['qwen-plan'] !== undefined) {
+    // Plan-slot validation guidance, rendered after the group it belongs to —
+    // separate content from the static per-provider copy above.
+    parts.push(`<p class="guidance" role="alert">${escapeHtml(state.guidance['qwen-plan'])}</p>`);
   }
   parts.push('</section>');
   return parts.join('');

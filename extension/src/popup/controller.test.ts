@@ -9,7 +9,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { QWEN_AK_SK_GUIDANCE } from '../core/credentials';
+import { QWEN_AK_SK_GUIDANCE, QWEN_PLAN_KEY_GUIDANCE } from '../core/credentials';
 import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
@@ -181,7 +181,8 @@ describe('controller — Settings Gear Surface (popup-ui spec)', () => {
 
     document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('Settings'));
-    expect(document.querySelectorAll('#app form.key-form')).toHaveLength(4); // one per provider
+    // One form per provider PLUS the qwen plan-key group (hito-8 dual credential).
+    expect(document.querySelectorAll('#app form.key-form')).toHaveLength(5);
 
     document.querySelector<HTMLButtonElement>('[data-action="back"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('quotadeck'));
@@ -430,6 +431,118 @@ describe('controller — Qwen Site Selector (popup-ui spec §Qwen Site Selector)
 
     expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222'); // keys untouched
     expect(document.body.textContent).toContain('••••2222'); // masked state intact
+  });
+});
+
+describe('controller — Qwen Plan Key Settings Group (popup-ui spec §Qwen Plan Key Settings Group, hito-8)', () => {
+  const PLAN_SLOT_KEY = `${KEY_STORAGE_PREFIX}qwen-plan`;
+  const PAIR_CREDENTIAL = PROVIDER_CREDENTIALS.qwen as Extract<Credential, { type: 'ak-sk' }>;
+
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#key-input-qwen-plan')).not.toBeNull());
+  }
+
+  it('a valid sk-sp- key persists through the plan slot and displays masked; the stored pair is unchanged', async () => {
+    const h = makePopupHarness();
+    await new KeyStore(h.local).saveCredential('qwen', PAIR_CREDENTIAL); // pair stored first
+    await openSettingsView(h);
+
+    const planKey = 'sk-sp-plan-key-abcd1234';
+    document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value = planKey;
+    document.querySelector<HTMLButtonElement>('#key-add-qwen-plan')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBe(planKey); // persisted through the plan slot
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair untouched
+      accessKeyId: PAIR_CREDENTIAL.accessKeyId,
+      accessKeySecret: PAIR_CREDENTIAL.accessKeySecret,
+    });
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value).toBe(''); // cleared on valid submit
+    expect(document.documentElement.textContent ?? '').not.toContain(planKey); // full key never in DOM
+  });
+
+  it('a non-sk-sp value is rejected with the plan-key guidance and nothing persists', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value = 'sk-ordinary-dashscope-key';
+    document.querySelector<HTMLButtonElement>('#key-add-qwen-plan')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain(QWEN_PLAN_KEY_GUIDANCE));
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBeUndefined();
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value).toBe('sk-ordinary-dashscope-key'); // keeps text
+  });
+
+  it('plan guidance and the static AK/SK guidance are distinct — the pair copy never regresses', async () => {
+    expect(QWEN_PLAN_KEY_GUIDANCE).not.toBe(QWEN_AK_SK_GUIDANCE);
+  });
+
+  it('revoking the plan key leaves the AK/SK pair stored and displayed masked', async () => {
+    const h = makePopupHarness();
+    const keys = new KeyStore(h.local);
+    await keys.saveCredential('qwen', PAIR_CREDENTIAL);
+    await keys.saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
+    await openSettingsView(h);
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
+
+    document.querySelector<HTMLButtonElement>('#key-revoke-qwen-plan')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain('••••1234'));
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBeUndefined();
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair survives the plan revoke
+      accessKeyId: PAIR_CREDENTIAL.accessKeyId,
+      accessKeySecret: PAIR_CREDENTIAL.accessKeySecret,
+    });
+    expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'); // still displayed masked
+  });
+
+  it('revoking the AK/SK pair leaves the plan key stored and displayed masked', async () => {
+    const h = makePopupHarness();
+    const keys = new KeyStore(h.local);
+    await keys.saveCredential('qwen', PAIR_CREDENTIAL);
+    await keys.saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
+    await openSettingsView(h);
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
+
+    document.querySelector<HTMLButtonElement>('#key-revoke-qwen')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain('AccessKeyId: ••••sKey'));
+    expect(h.local.snapshot()[storageKey('qwen')]).toBeUndefined();
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBe('sk-sp-plan-key-abcd1234'); // plan survives the pair revoke
+    expect(document.body.textContent).toContain('Plan key: ••••1234');
+  });
+});
+
+describe('controller — plan-only qwen card (popup-ui spec §Qwen Plan Line, hito-8)', () => {
+  it('a stored plan key with no pair renders the qwen card showing the plan line and no balance', async () => {
+    const h = makePopupHarness();
+    await new KeyStore(h.local).saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
+    await seedSnapshot(h.local, {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: {
+            providerId: 'qwen',
+            kind: 'balance',
+            plan: { status: 'exhausted', resetAt: NOW_MS + 90 * 60_000 },
+            fetchedAt: NOW_MS,
+          },
+        },
+      },
+    });
+    mountApp();
+    await openPopup(h);
+
+    const qwen = document.querySelector('section[data-provider="qwen"]');
+    expect(qwen).not.toBeNull(); // the card renders on the plan key alone
+    const text = qwen!.textContent ?? '';
+    expect(text).toContain('Plan: exhausted · resets in 1h 30m');
+    expect(text).not.toContain('No cycle data yet');
+    expect(text).not.toContain('¥'); // no balance figure on a plan-only card
+    expect((qwen!.querySelector('.usage') as HTMLElement | null)?.textContent).toBe(''); // empty usage line, like monitor cards
   });
 });
 

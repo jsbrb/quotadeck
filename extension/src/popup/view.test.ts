@@ -6,7 +6,7 @@ import { strictEqual } from 'node:assert/strict';
 import { describe, expect, it } from 'vitest';
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type McpWindow, type MonitorWindows, type NormalizedUsage } from '../core/usage';
+import { currencySymbol, type McpWindow, type MonitorWindows, type NormalizedUsage, type PlanInfo } from '../core/usage';
 import type { MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 import {
@@ -92,8 +92,14 @@ function popupState(overrides: Partial<PopupState> = {}): PopupState {
     nowMs: NOW_MS,
     zaiPlatform: 'zai',
     qwenSite: 'international',
+    qwenPlanKey: undefined,
     ...overrides,
   };
+}
+
+/** A last cycle whose qwen entry carries plan status (hito-8 §Qwen Plan Line). */
+function qwenPlanSnapshot(plan: PlanInfo, overrides: Partial<NormalizedUsage> = {}): CycleSnapshot {
+  return { results: { qwen: { status: 'ok', usage: usage('qwen', { value: 100.28, plan, ...overrides }) } } };
 }
 
 /** Extracts one provider's <section> so assertions stay scoped per provider. */
@@ -458,6 +464,118 @@ describe('renderSettings — Qwen Site Selector (popup-ui spec §Qwen Site Selec
     const china = sectionFor(renderSettings(popupState({ view: 'settings', qwenSite: 'china' })), 'qwen');
     expect(china).toContain('<option value="china" selected>');
     expect(china).not.toContain('<option value="international" selected>');
+  });
+});
+
+describe('renderMain — Qwen Plan Line (popup-ui spec §Qwen Plan Line, hito-8)', () => {
+  it('renders the plan line per status: Available / exhausted · countdown / key rejected', () => {
+    const available = sectionFor(renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'available' }) })), 'qwen');
+    expect(available).toContain('Plan: Available');
+
+    const exhausted = sectionFor(
+      renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'exhausted', resetAt: NOW_MS + 2 * 3_600_000 }) })),
+      'qwen',
+    );
+    expect(stripTags(exhausted)).toContain('Plan: exhausted · resets in 2h 0m'); // combined textContent (countdown span)
+
+    const rejected = sectionFor(renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'key-rejected' }) })), 'qwen');
+    expect(rejected).toContain('Plan: key rejected');
+  });
+
+  it('an exhausted status without a reset instant renders no countdown — nothing is synthesized', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'exhausted' }) })), 'qwen');
+
+    expect(qwen).toContain('Plan: exhausted');
+    expect(qwen).not.toContain('resets in');
+  });
+
+  it('the plan line sits below the balance, which stays the leading figure; no hero is synthesized', () => {
+    const qwen = sectionFor(
+      renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'exhausted', resetAt: NOW_MS + 90 * 60_000 }) })),
+      'qwen',
+    );
+
+    expect(qwen.indexOf('¥100.28')).toBeGreaterThan(-1);
+    expect(qwen.indexOf('Plan:')).toBeGreaterThan(qwen.indexOf('¥100.28')); // below the balance
+    expect(qwen).not.toContain('hero-percentage'); // monetary card: no hero, plan is not a percentage
+  });
+
+  it('renders no plan line when the cycle result carries no plan status', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: { results: { qwen: { status: 'ok', usage: usage('qwen') } } } })), 'qwen');
+
+    expect(qwen).not.toContain('Plan:');
+  });
+
+  it('a plan-only card renders: plan key stored, no pair, value-less ok entry', () => {
+    const snapshot: CycleSnapshot = {
+      results: { qwen: { status: 'ok', usage: usage('qwen', { value: undefined, currency: undefined, plan: { status: 'available' } }) } },
+    };
+    const html = renderMain(
+      popupState({ snapshot, keyStates: { ...KEYED_STATES, qwen: undefined }, qwenPlanKey: { type: 'qwen-plan', maskedToken: '••••cdef' } }),
+    );
+    const qwen = sectionFor(html, 'qwen');
+
+    expect(qwen).toContain('Plan: Available'); // the plan line renders…
+    expect(qwen).not.toContain('No cycle data yet'); // …from a real cycle entry…
+    expect(qwen).not.toContain('¥'); // …with no balance figure (empty usage line, like monitor cards)
+    expect(qwen).not.toContain('•••'); // masked key material stays out of the main view
+  });
+
+  it('a keyless-pair qwen with a plan key still renders its card (either credential keys the card)', () => {
+    const html = renderMain(
+      popupState({ keyStates: { ...KEYED_STATES, qwen: undefined }, qwenPlanKey: { type: 'qwen-plan', maskedToken: '••••cdef' } }),
+    );
+
+    expect(html).toContain('data-provider="qwen"'); // plan key alone keys the card
+    expect(sectionFor(html, 'qwen')).toContain('No cycle data yet'); // no cycle yet — honest note
+  });
+});
+
+describe('renderSettings — Qwen Plan Key Settings Group (popup-ui spec, hito-8)', () => {
+  it('renders the second field group with its own input, save and revoke controls in the qwen section only', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+    const qwen = sectionFor(html, 'qwen');
+
+    expect(qwen).toContain('Plan key (sk-sp-)');
+    expect(qwen).toContain('id="key-input-qwen-plan"');
+    expect(qwen).toContain('id="key-add-qwen-plan"');
+    expect(qwen).toContain('data-revoke="qwen-plan"');
+    expect(sectionFor(html, 'kimi')).not.toContain('qwen-plan'); // qwen section only
+  });
+
+  it('renders the stored plan key masked with at most 4 trailing characters', () => {
+    const qwen = sectionFor(
+      renderSettings(popupState({ view: 'settings', qwenPlanKey: { type: 'qwen-plan', maskedToken: '••••cdef' } })),
+      'qwen',
+    );
+
+    expect(qwen).toContain('Plan key: ••••cdef');
+    expect(qwen).not.toContain('sk-sp-full-key-material');
+  });
+
+  it('renders the plan-slot validation guidance inside the qwen section, separate from the static copy', () => {
+    const message = 'The Qwen plan key is a separate inference-only sk-sp- key.';
+    const qwen = sectionFor(renderSettings(popupState({ view: 'settings', guidance: { 'qwen-plan': message } })), 'qwen');
+
+    expect(qwen).toContain(`<p class="guidance" role="alert">${message}</p>`);
+    expect(qwen.indexOf(message)).toBeGreaterThan(qwen.indexOf('Plan key (sk-sp-)')); // near its group
+  });
+
+  it('updated qwen guidance copy covers balance, plan and site (popup-ui §Settings Guidance MODIFIED)', () => {
+    const qwen = SETTINGS_GUIDANCE.qwen;
+    // Balance (preserved elements).
+    expect(qwen).toContain('Access Key ID');
+    expect(qwen).toContain('Access Key Secret');
+    expect(qwen).toContain('bss:DescribeAcccount');
+    expect(qwen).toContain('DashScope sk- keys do not work');
+    // Plan (new): inference-only sk-sp-, intl endpoint, 1-token cost, NOT the pair.
+    expect(qwen).toContain('sk-sp-');
+    expect(qwen).toContain('inference-only');
+    expect(qwen).toContain('1-token');
+    expect(qwen).toContain('NOT the AccessKey pair');
+    // Site: intl default on ap-southeast-1, china selects China.
+    expect(qwen).toContain('ap-southeast-1');
+    expect(qwen).toContain('China');
   });
 });
 

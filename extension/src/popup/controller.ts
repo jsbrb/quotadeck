@@ -32,8 +32,7 @@ import { PROVIDER_METADATA } from '../core/provider-metadata';
 import type { QwenSite } from '../core/qwen-sites';
 import type { ZaiPlatform } from '../core/zai-platforms';
 import type { BrowserApi } from '../platform/browser-api';
-import { KeyStore } from '../storage/key-store';
-import type { MaskedCredential } from '../storage/key-store';
+import { KeyStore, type CredentialSlot, type MaskedCredential } from '../storage/key-store';
 import { readQwenSite, writeQwenSite } from '../storage/qwen-site-store';
 import { SnapshotStore, SNAPSHOT_STORAGE_KEY, type CycleSnapshot } from '../storage/snapshot-store';
 import { readZaiPlatform, writeZaiPlatform } from '../storage/zai-platform-store';
@@ -54,9 +53,14 @@ export interface PopupDeps {
  */
 const REFRESH_NOW_ALARM = 'refresh-now';
 
-/** The input ids one provider's credential form owns (two for the qwen pair). */
-function credentialInputIds(id: ProviderId, type: CredentialType): readonly string[] {
-  return type === 'ak-sk' ? [`key-input-${id}-ak`, `key-input-${id}-sk`] : [`key-input-${id}`];
+/** The input ids one credential slot's form owns (two for the qwen pair). */
+function credentialInputIds(slot: CredentialSlot, type: CredentialType): readonly string[] {
+  return type === 'ak-sk' ? [`key-input-${slot}-ak`, `key-input-${slot}-sk`] : [`key-input-${slot}`];
+}
+
+/** Attach-mode declaration per slot: providers come from metadata, the plan slot is fixed (hito-8). */
+function slotCredentialType(slot: CredentialSlot): CredentialType {
+  return slot === 'qwen-plan' ? 'qwen-plan' : PROVIDER_METADATA.find((metadata) => metadata.id === slot)!.credentialType;
 }
 
 export function startPopup(deps: PopupDeps): void {
@@ -70,12 +74,22 @@ export function startPopup(deps: PopupDeps): void {
     view: 'main' | 'settings';
     snapshot: CycleSnapshot | undefined;
     keyStates: Partial<Record<ProviderId, MaskedCredential | undefined>>;
-    guidance: Partial<Record<ProviderId, string>>;
+    guidance: Partial<Record<CredentialSlot, string>>;
     /** Selected ZAI monitor platform; read from and persisted to `qd:pref:zai-platform`. */
     zaiPlatform: ZaiPlatform;
     /** Selected Qwen BSS site; read from and persisted to `qd:pref:qwen-site`. */
     qwenSite: QwenSite;
-  } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {}, zaiPlatform: 'zai', qwenSite: 'international' };
+    /** Masked qwen plan key (`qd:key:qwen-plan`); `undefined` = none stored (hito-8). */
+    planKeyState: MaskedCredential | undefined;
+  } = {
+    view: 'main',
+    snapshot: undefined,
+    keyStates: {},
+    guidance: {},
+    zaiPlatform: 'zai',
+    qwenSite: 'international',
+    planKeyState: undefined,
+  };
 
   const app = (): HTMLElement => deps.document.getElementById('app') as HTMLElement;
   const inputById = (inputId: string): HTMLInputElement => deps.document.getElementById(inputId) as HTMLInputElement;
@@ -98,6 +112,7 @@ export function startPopup(deps: PopupDeps): void {
       guidance: state.guidance,
       zaiPlatform: state.zaiPlatform,
       qwenSite: state.qwenSite,
+      qwenPlanKey: state.planKeyState,
       nowMs: now(),
     };
     app().innerHTML = state.view === 'main' ? renderMain(popupState) : renderSettings(popupState);
@@ -109,44 +124,52 @@ export function startPopup(deps: PopupDeps): void {
     }
   }
 
-  /** Reads the provider's form inputs into a typed credential candidate. */
-  function credentialFromInputs(id: ProviderId): Credential {
-    const type = metadataFor(id).credentialType;
+  /** Reads one credential slot's form inputs into a typed credential candidate. */
+  function credentialFromInputs(slot: CredentialSlot): Credential {
+    const type = slotCredentialType(slot);
     if (type === 'ak-sk') {
       return {
         type,
-        accessKeyId: inputById(`key-input-${id}-ak`).value,
-        accessKeySecret: inputById(`key-input-${id}-sk`).value,
+        accessKeyId: inputById(`key-input-${slot}-ak`).value,
+        accessKeySecret: inputById(`key-input-${slot}-sk`).value,
       };
     }
-    return { type, token: inputById(`key-input-${id}`).value };
+    return { type, token: inputById(`key-input-${slot}`).value };
   }
 
-  async function submitCredential(id: ProviderId): Promise<void> {
-    const type = metadataFor(id).credentialType;
-    const credential = credentialFromInputs(id);
+  async function submitCredential(slot: CredentialSlot): Promise<void> {
+    const type = slotCredentialType(slot);
+    const credential = credentialFromInputs(slot);
     const result =
       credential.type === 'ak-sk'
         ? validateCredential('ak-sk', { accessKeyId: credential.accessKeyId, accessKeySecret: credential.accessKeySecret })
         : validateCredential(type, credential.token);
     if (!result.ok) {
-      state.guidance[id] = result.message;
+      state.guidance[slot] = result.message;
       render(); // keeps the typed values (AD-15: still entering)
       return;
     }
-    delete state.guidance[id];
-    await keys.saveCredential(id, credential);
-    state.keyStates[id] = await keys.readMaskedCredential(id, type);
-    for (const inputId of credentialInputIds(id, type)) {
+    delete state.guidance[slot];
+    await keys.saveCredential(slot, credential);
+    if (slot === 'qwen-plan') {
+      state.planKeyState = await keys.readMaskedCredential('qwen-plan', 'qwen-plan');
+    } else {
+      state.keyStates[slot] = await keys.readMaskedCredential(slot, type);
+    }
+    for (const inputId of credentialInputIds(slot, type)) {
       inputById(inputId).value = ''; // the full credential leaves the DOM on valid submit
     }
     render();
   }
 
-  async function revokeCredential(id: ProviderId): Promise<void> {
-    await keys.revokeCredential(id);
-    state.keyStates[id] = await keys.readMaskedCredential(id, metadataFor(id).credentialType);
-    delete state.guidance[id];
+  async function revokeCredential(slot: CredentialSlot): Promise<void> {
+    await keys.revokeCredential(slot);
+    if (slot === 'qwen-plan') {
+      state.planKeyState = undefined;
+    } else {
+      state.keyStates[slot] = await keys.readMaskedCredential(slot, slotCredentialType(slot));
+    }
+    delete state.guidance[slot];
     render();
   }
 
@@ -167,7 +190,7 @@ export function startPopup(deps: PopupDeps): void {
     const target = event.target as HTMLElement;
     const revoke = target.closest('[data-revoke]');
     if (revoke !== null) {
-      void revokeCredential(revoke.getAttribute('data-revoke') as ProviderId);
+      void revokeCredential(revoke.getAttribute('data-revoke') as CredentialSlot);
       return;
     }
     const action = target.closest('[data-action]');
@@ -206,7 +229,7 @@ export function startPopup(deps: PopupDeps): void {
       const form = submit.closest('form');
       const id = form?.getAttribute('data-provider');
       if (id !== null) {
-        void submitCredential(id as ProviderId);
+        void submitCredential(id as CredentialSlot);
       }
     }
   });
@@ -224,7 +247,7 @@ export function startPopup(deps: PopupDeps): void {
     event.preventDefault(); // one user action processes once
     const id = form.getAttribute('data-provider');
     if (id !== null) {
-      void submitCredential(id as ProviderId);
+      void submitCredential(id as CredentialSlot);
     }
   });
 
@@ -262,8 +285,8 @@ export function startPopup(deps: PopupDeps): void {
     }
   });
 
-  // Initial load: last completed cycle + masked key states + both preference
-  // selections, then first render.
+  // Initial load: last completed cycle + masked key states (per provider AND
+  // the qwen plan slot, hito-8) + both preference selections, then first render.
   void (async (): Promise<void> => {
     state.snapshot = await snapshots.read();
     state.zaiPlatform = await readZaiPlatform(deps.browser.storage.local);
@@ -271,6 +294,7 @@ export function startPopup(deps: PopupDeps): void {
     for (const { id, credentialType } of providers) {
       state.keyStates[id] = await keys.readMaskedCredential(id, credentialType);
     }
+    state.planKeyState = await keys.readMaskedCredential('qwen-plan', 'qwen-plan');
     render();
   })();
 }
