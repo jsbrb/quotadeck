@@ -31,6 +31,16 @@ export const QWEN_AK_SK_GUIDANCE =
   'Alibaba Cloud AK/SK pair (AccessKeyId/AccessKeySecret) whose RAM user has the ' +
   'bss:DescribeAcccount permission. DashScope sk- keys do not work here.';
 
+/**
+ * Guidance emitted when a non-`sk-sp-` value is offered as the Qwen plan key
+ * (hito-8 dual credential): the plan key is a different credential from a
+ * different console surface than the AK/SK pair, so the remedy names BOTH.
+ */
+export const QWEN_PLAN_KEY_GUIDANCE =
+  'The Qwen plan key is a separate inference-only sk-sp- key from the Qwen token-plan ' +
+  'service — NOT the Alibaba Cloud AK/SK pair used for balance. Paste an sk-sp- key, or ' +
+  'use the AccessKeyId/AccessKeySecret fields for the balance surface.';
+
 /** Empty/blank credentials are never acceptable, for any type. */
 const EMPTY_MESSAGE = 'Credential must not be empty.';
 
@@ -57,6 +67,10 @@ export function validateCredential(
   // Qwen (ak-sk): DashScope `sk-` keys are structurally wrong for BSS (spec scenario).
   if (type === 'ak-sk' && credential.startsWith('sk-')) {
     return { ok: false, message: QWEN_AK_SK_GUIDANCE };
+  }
+  // Qwen plan slot (hito-8): the auxiliary credential must be an `sk-sp-` key.
+  if (type === 'qwen-plan' && !credential.startsWith('sk-sp-')) {
+    return { ok: false, message: QWEN_PLAN_KEY_GUIDANCE };
   }
   return { ok: true };
 }

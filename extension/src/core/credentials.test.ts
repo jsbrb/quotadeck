@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QWEN_AK_SK_GUIDANCE, validateCredential } from './credentials';
+import { QWEN_AK_SK_GUIDANCE, QWEN_PLAN_KEY_GUIDANCE, validateCredential } from './credentials';
 
 describe('validateCredential', () => {
   it('rejects a DashScope sk- key for the ak-sk type with AK/SK + RAM guidance', () => {
@@ -26,10 +26,39 @@ describe('validateCredential', () => {
   });
 
   it('rejects empty or blank credentials for every type', () => {
-    for (const type of ['bearer', 'ak-sk', 'openai-admin-read', 'raw'] as const) {
+    for (const type of ['bearer', 'ak-sk', 'openai-admin-read', 'raw', 'qwen-plan'] as const) {
       expect(validateCredential(type, '').ok).toBe(false);
       expect(validateCredential(type, '   ').ok).toBe(false);
     }
+  });
+});
+
+describe('validateCredential — qwen-plan type (hito-8 dual credential)', () => {
+  it('accepts a non-empty sk-sp- plan key', () => {
+    expect(validateCredential('qwen-plan', 'sk-sp-plan-key-1234567890abcdef')).toEqual({ ok: true });
+  });
+
+  it('rejects an empty or blank plan key with explicit guidance', () => {
+    for (const candidate of ['', '   ']) {
+      const result = validateCredential('qwen-plan', candidate);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.message).toMatch(/empty/i);
+      }
+    }
+  });
+
+  it('rejects a non-sk-sp value with the plan-key guidance', () => {
+    expect(validateCredential('qwen-plan', 'sk-ordinary-dashscope-key')).toEqual({
+      ok: false,
+      message: QWEN_PLAN_KEY_GUIDANCE,
+    });
+  });
+
+  it('plan-key guidance is distinct from the AK/SK guidance and names the sk-sp- shape', () => {
+    expect(QWEN_PLAN_KEY_GUIDANCE).not.toBe(QWEN_AK_SK_GUIDANCE);
+    expect(QWEN_PLAN_KEY_GUIDANCE).toMatch(/sk-sp-/);
+    expect(QWEN_PLAN_KEY_GUIDANCE).toMatch(/NOT the (?:Alibaba Cloud )?AK\/SK/i);
   });
 });
 

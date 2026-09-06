@@ -21,8 +21,12 @@ export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
  * - `openai-admin-read` — OpenAI admin key with read scope (`sk-admin-...`).
  * - `raw` — ZAI monitor key, attached verbatim (`Authorization: <key>`, no
  *   Bearer prefix) on the ZAI monitor hosts only (AD-25).
+ * - `qwen-plan` — the auxiliary Qwen token-plan key (`sk-sp-`), attached as
+ *   Bearer ONLY on the token-plan probe host (hito-8 dual credential: it
+ *   rides the token union so the client's Bearer branch covers it — no new
+ *   attach mode).
  */
-export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read' | 'raw';
+export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read' | 'raw' | 'qwen-plan';
 
 /**
  * A concrete credential as stored and attached (AD-17). Token credentials
@@ -30,7 +34,7 @@ export type CredentialType = 'bearer' | 'ak-sk' | 'openai-admin-read' | 'raw';
  * feeds the BSS RPC signer — the secret never leaves the signing boundary.
  */
 export type Credential =
-  | { readonly type: 'bearer' | 'openai-admin-read' | 'raw'; readonly token: string }
+  | { readonly type: 'bearer' | 'openai-admin-read' | 'raw' | 'qwen-plan'; readonly token: string }
   | { readonly type: 'ak-sk'; readonly accessKeyId: string; readonly accessKeySecret: string };
 
 /**
