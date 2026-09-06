@@ -1,7 +1,9 @@
 // FetchTransport tests (AD-19) — the live Transport over an injectable fetch
 // implementation. Every case stubs `fetchImpl`; zero real network exists in
 // this suite (hermetic), and the typed-error contract the refresh taxonomy
-// classifies on (AD-21) is pinned here at its source.
+// classifies on (AD-21) is pinned here at its source. Since hito-7, error
+// statuses also surface a bounded TEXT snippet of the body (§Error Body
+// Surfacing): text-only, capped at 200 chars, never parsed, never persisted.
 import { describe, expect, it } from 'vitest';
 import { FetchTransport, HttpStatusError, ResponseParseError } from './fetch-transport';
 import type { AuthorizedRequest } from './transport';
@@ -12,15 +14,36 @@ interface StubResponse {
   readonly status: number;
   readonly ok: boolean;
   json: () => Promise<unknown>;
+  text: () => Promise<string>;
 }
 
 function respond(status: number, body?: unknown): StubResponse {
-  return { status, ok: status >= 200 && status < 300, json: () => Promise.resolve(body) };
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body ?? null)),
+  };
+}
+
+/** Non-2xx double whose body reads as the given text. */
+function errorText(status: number, body: string): StubResponse {
+  return {
+    status,
+    ok: false,
+    json: () => Promise.reject(new Error('json() must not be called on the error path')),
+    text: () => Promise.resolve(body),
+  };
 }
 
 /** Minimal 2xx definition: ok exactly inside [200, 299]. */
 function rejectJson(status: number, error: Error): StubResponse {
-  return { status, ok: status >= 200 && status < 300, json: () => Promise.reject(error) };
+  return {
+    status,
+    ok: status >= 200 && status < 300,
+    json: () => Promise.reject(error),
+    text: () => Promise.resolve(''),
+  };
 }
 
 const GET_REQUEST: AuthorizedRequest = {
@@ -32,9 +55,11 @@ const GET_REQUEST: AuthorizedRequest = {
 describe('FetchTransport — 2xx passthrough', () => {
   it('returns { status, body } for a 200 JSON response and threads url/method/headers to fetchImpl', async () => {
     const calls: Array<{ url: string; method: string; headers: Record<string, string> }> = [];
+    let textCalls = 0;
+    const stub = respond(200, { data: { available_balance: '88.88' } });
     const transport = new FetchTransport(async (url, init) => {
       calls.push({ url, method: init.method, headers: { ...init.headers } });
-      return respond(200, { data: { available_balance: '88.88' } });
+      return { ...stub, text: () => { textCalls += 1; return Promise.resolve(''); } };
     });
 
     await expect(transport.fetch(GET_REQUEST)).resolves.toEqual({
@@ -42,6 +67,7 @@ describe('FetchTransport — 2xx passthrough', () => {
       body: { data: { available_balance: '88.88' } },
     });
     expect(calls).toEqual([{ url: GET_REQUEST.url, method: 'GET', headers: { Authorization: 'Bearer kimi-token' } }]);
+    expect(textCalls).toBe(0); // 2xx is handled exactly as before: parsed as JSON
   });
 
   it('carries a POST body through and passes other 2xx statuses verbatim', async () => {
@@ -58,24 +84,87 @@ describe('FetchTransport — 2xx passthrough', () => {
   });
 });
 
-describe('FetchTransport — non-2xx throws HttpStatusError (status only, AD-13 spirit)', () => {
-  it.each([401, 403, 404, 429, 500, 503])('HTTP %i rejects with HttpStatusError carrying the status', async (status) => {
-    const transport = new FetchTransport(async () => respond(status, { ignored: 'body-text-is-untrusted' }));
+describe('FetchTransport — non-2xx throws HttpStatusError with a bounded body snippet (§Error Body Surfacing)', () => {
+  it.each([400, 401, 403, 404, 429, 500, 503])('HTTP %i carries the status plus the body verbatim', async (status) => {
+    const transport = new FetchTransport(async () => errorText(status, `boom-${status}`));
 
     const failure = await transport.fetch(GET_REQUEST).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(HttpStatusError);
     expect((failure as HttpStatusError).status).toBe(status);
-    expect((failure as Error).message).toBe(`HTTP ${status}`); // no body text captured
+    expect((failure as Error).message).toBe(`HTTP ${status}: boom-${status}`);
+  });
+
+  it('caps the snippet at the first 200 body characters (long plain-text body, json never called)', async () => {
+    let jsonCalls = 0;
+    const longBody = `${'A'.repeat(150)}${'B'.repeat(350)}`; // 500 chars, boundary at char 200
+    const transport = new FetchTransport(async () => ({
+      status: 400,
+      ok: false,
+      json: () => {
+        jsonCalls += 1;
+        return Promise.reject(new Error('must not be called'));
+      },
+      text: () => Promise.resolve(longBody),
+    }));
+
+    const failure = await transport.fetch(GET_REQUEST).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(HttpStatusError);
+    expect((failure as HttpStatusError).status).toBe(400);
+    expect((failure as Error).message).toBe(`HTTP 400: ${'A'.repeat(150)}${'B'.repeat(50)}`); // first 200, verbatim
+    expect((failure as Error).message.length).toBe('HTTP 400: '.length + 200);
+    expect((failure as Error).message).not.toContain('B'.repeat(51)); // nothing past the cap
+    expect(jsonCalls).toBe(0); // read as text, never parsed as JSON
+  });
+
+  it('surfaces a JSON error document as raw text — server Code visible, never parsed', async () => {
+    let jsonCalls = 0;
+    const body = '{"RequestId":"4C4-UUID","Code":"InvalidAccessKeyId.NotFound","Message":"The specified AccessKeyID does not exist."}';
+    const transport = new FetchTransport(async () => ({
+      status: 400,
+      ok: false,
+      json: () => {
+        jsonCalls += 1;
+        return Promise.reject(new Error('must not be called'));
+      },
+      text: () => Promise.resolve(body),
+    }));
+
+    const failure = await transport.fetch(GET_REQUEST).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(HttpStatusError);
+    expect((failure as HttpStatusError).status).toBe(400);
+    expect((failure as Error).message).toBe(`HTTP 400: ${body}`); // raw snippet, verbatim
+    expect((failure as Error).message).toContain('"Code":"InvalidAccessKeyId.NotFound"');
+    expect(jsonCalls).toBe(0); // no JSON parse on the error path
+  });
+
+  it('degrades to a status-only message when the body read rejects (no secondary failure)', async () => {
+    const readFailure = new TypeError('body stream already locked');
+    const transport = new FetchTransport(async () => ({
+      status: 400,
+      ok: false,
+      json: () => Promise.reject(new Error('must not be called')),
+      text: () => Promise.reject(readFailure),
+    }));
+
+    const failure = await transport.fetch(GET_REQUEST).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(HttpStatusError); // the read failure never masks the status error
+    expect(failure).not.toBe(readFailure);
+    expect((failure as HttpStatusError).status).toBe(400);
+    expect((failure as Error).message).toBe('HTTP 400');
   });
 });
 
 describe('FetchTransport — status-first error classification (AD-30 pins)', () => {
   // zai-monitor §Status-First Error Classification: error responses are
   // classified by HTTP status BEFORE any body parse — a plain-text body on an
-  // error status can never cause a parse failure. Each stub's json() REJECTS
-  // and records the call: if the transport ever tried to read the body, these
-  // pins would fail twice over (ResponseParseError + jsonCalls > 0).
+  // error status can never cause a parse failure. Since hito-7 the error body
+  // IS read, but only as text (§Error Body Surfacing); each stub's json()
+  // still REJECTS and records the call, so jsonCalls > 0 or a ResponseParseError
+  // would fail these pins twice over.
   it.each([
     [401, 'auth'],
     [403, 'auth'],
@@ -90,6 +179,7 @@ describe('FetchTransport — status-first error classification (AD-30 pins)', ()
         jsonCalls += 1;
         return Promise.reject(new SyntaxError('Unexpected token <')); // plain-text body
       },
+      text: () => Promise.resolve('plain-text error body'),
     }));
 
     const failure = await transport.fetch(GET_REQUEST).catch((error: unknown) => error);
