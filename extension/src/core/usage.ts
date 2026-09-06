@@ -52,6 +52,21 @@ export interface MonitorWindows {
   readonly mcp?: McpWindow;
 }
 
+/**
+ * Qwen plan probe status (hito-8 §Qwen Plan Probe): the binary outcome of
+ * the token-plan probe — available, exhausted (reset instant when the 429
+ * text parses), or key-rejected. No percentage or total is ever synthesized:
+ * no such figure exists on any key surface.
+ */
+export type PlanStatus = 'available' | 'exhausted' | 'key-rejected';
+
+/** The plan probe result riding a qwen usage entry; optional like `windows`. */
+export interface PlanInfo {
+  readonly status: PlanStatus;
+  /** Reset instant (epoch ms) parsed from the surfaced 429 text; optional. */
+  readonly resetAt?: number;
+}
+
 /** The single result shape every provider folds into. */
 export interface NormalizedUsage {
   readonly providerId: ProviderId;
