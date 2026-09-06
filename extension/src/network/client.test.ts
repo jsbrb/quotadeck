@@ -365,10 +365,25 @@ describe('AllowlistNetworkClient — qwen plan key (hito-8 §Credential Attach M
 
     expect(response).toBe(okResponse);
     const sent = transport.requests[0]!;
-    expect(sent.headers).toEqual({ Authorization: 'Bearer sk-sp-plan-probe-key-9999' });
+    // A dispatched JSON body is always labeled: the token-plan endpoint
+    // rejects unlabeled POST bodies with HTTP 400 (live-found 2026-09-06).
+    expect(sent.headers).toEqual({
+      Authorization: 'Bearer sk-sp-plan-probe-key-9999',
+      'Content-Type': 'application/json',
+    });
     expect(sent.url).not.toContain('sk-sp-');
     expect(sent.body ?? '').not.toContain('sk-sp-'); // key confined to the header, never the body
     expect(sent.body ?? '').not.toContain('AccessKeyId'); // probe body is the documented 1-token shape
+  });
+
+  it('a bodyless GET attaches NO Content-Type — the label belongs to the body, not the credential', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    await client.send('zai', zaiRequest(), ZAI_CREDENTIAL);
+
+    const sent = transport.requests[0]!;
+    expect(sent.headers).toEqual({ Authorization: 'Bearer zai-secret-token-4f2a' });
   });
 
   it('rejects a qwen plan key off the probe host — even on the qwen-allowlisted BSS hosts — with zero I/O', async () => {

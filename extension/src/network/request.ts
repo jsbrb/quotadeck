@@ -4,9 +4,10 @@
 // §Credentials Only in Authorization Header): `ProviderRequest` deliberately has
 // NO `headers` field and NO `cookies` field — a provider cannot set arbitrary
 // headers or attach cookies even if it wanted to. The only component that
-// produces headers is `AllowlistNetworkClient`, which sets at most one:
-// `Authorization` (token credentials). The downstream `Transport` type carries
-// headers but no cookie jar.
+// produces headers is `AllowlistNetworkClient`, which sets at most:
+// `Authorization` (token credentials) and `Content-Type: application/json`
+// whenever a JSON body dispatches (the label belongs to the body). The
+// downstream `Transport` type carries headers but no cookie jar.
 //
 // Credential material therefore has exactly one legal path per kind — the
 // Authorization header for tokens (bearer, openai-admin-read, and raw, which

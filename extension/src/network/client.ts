@@ -59,6 +59,16 @@ function toPopTimestamp(epochMs: number): string {
   return new Date(epochMs).toISOString().replace(/\.\d{3}Z$/u, 'Z');
 }
 
+/**
+ * A dispatched JSON body is always labeled `application/json` (live-found
+ * 2026-09-06: the token-plan endpoint answers an unlabeled POST body with
+ * HTTP 400 before even validating the credential). The label belongs to the
+ * BODY — bodyless GETs dispatch without it.
+ */
+function jsonContentType(body: string | undefined): Record<string, string> {
+  return body === undefined ? {} : { 'Content-Type': 'application/json' };
+}
+
 export class AllowlistNetworkClient {
   private readonly clock: Clock;
   private readonly nonce: () => string;
@@ -112,21 +122,21 @@ export class AllowlistNetworkClient {
 
     const authorized: AuthorizedRequest =
       credential.type === 'ak-sk'
-        ? { method: dispatched.method, url, headers: {}, ...(dispatched.body !== undefined ? { body: dispatched.body } : {}) }
+        ? { method: dispatched.method, url, headers: { ...jsonContentType(dispatched.body) }, ...(dispatched.body !== undefined ? { body: dispatched.body } : {}) }
         : credential.type === 'raw'
           ? {
               // Verbatim key, no Bearer prefix, plus the localization header
               // (AD-25: presence is the contract; the value is cosmetic).
               method: dispatched.method,
               url,
-              headers: { Authorization: credential.token, 'Accept-Language': 'zh-CN' },
+              headers: { Authorization: credential.token, 'Accept-Language': 'zh-CN', ...jsonContentType(request.body) },
               ...(request.body !== undefined ? { body: request.body } : {}),
             }
           : {
               method: dispatched.method,
               url,
-              headers: { Authorization: `Bearer ${credential.token}` },
-              ...(request.body !== undefined ? { body: request.body } : {}),
+              headers: { Authorization: `Bearer ${credential.token}`, ...jsonContentType(dispatched.body) },
+              ...(dispatched.body !== undefined ? { body: dispatched.body } : {}),
             };
     return this.transport.fetch(authorized);
   }
