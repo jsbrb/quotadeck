@@ -116,9 +116,13 @@ async function saveKeys(local: FakeStorageArea, ids: readonly ProviderId[]): Pro
 /**
  * FixtureTransport wrapper for the qwen leg: the live client dispatches a
  * SIGNED query (timestamp/nonce vary per run), so exact-URL routing cannot
- * match. This double normalizes any business.aliyuncs.com dispatch to the
- * recorded route key — proving the signed request still targets the BSS host —
- * and leaves every other route byte-exact.
+ * match. This double normalizes any BSS-host dispatch (china or the
+ * international default — hito-8 flipped the default to ap-southeast-1) to
+ * the recorded route key — proving the signed request still targets a BSS
+ * host — and leaves every other route byte-exact. The recorded CN-shaped
+ * body serves both: the tolerant qwen parse accepts numeric and string
+ * envelopes alike. Which BSS host a tick targets is pinned by the dedicated
+ * site-selection tests below, not by this normalization.
  */
 class SignedQwenRouteTransport implements Transport {
   private readonly routes: FixtureTransport;
@@ -128,9 +132,11 @@ class SignedQwenRouteTransport implements Transport {
   }
 
   async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
-    const url = request.url.startsWith('https://business.aliyuncs.com/')
-      ? 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14'
-      : request.url;
+    const url =
+      request.url.startsWith('https://business.aliyuncs.com/') ||
+      request.url.startsWith('https://business.ap-southeast-1.aliyuncs.com/')
+        ? 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14'
+        : request.url;
     return this.routes.fetch({ ...request, url });
   }
 }

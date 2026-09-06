@@ -52,18 +52,26 @@ Verification levels:
   `zai-org/zai-coding-plugins` (the vendor org's own plugin), `ecerutti/glm-usage-monitor`,
   `guyinwonder168/opencode-glm-quota`.
 
-## Qwen (Alibaba Cloud BSS) — `business.aliyuncs.com` — verified-official
+## Qwen (Alibaba Cloud BSS) — `business.aliyuncs.com` + `business.ap-southeast-1.aliyuncs.com` — verified-official
 
 - Endpoint: Alibaba Cloud BSS OpenAPI `QueryAccountBalance`, API version `2017-12-14`,
-  host `business.aliyuncs.com`.
+  on the SITE-SELECTED host: `business.ap-southeast-1.aliyuncs.com` for the
+  international site (the DEFAULT) and `business.aliyuncs.com` for the china site.
+  Live evidence (maintainer, international account): the china host answers
+  HTTP 400 `AuthSiteFail` for international credentials; the ap-southeast-1 host
+  answers 200.
 - Auth: Alibaba Cloud AccessKeyId/AccessKeySecret (AK/SK) with RAM permission
-  `bss:DescribeAcccount`. **DashScope `sk-` keys do NOT work** against BSS — rejected
+  `bss:DescribeAccount`. **DashScope `sk-` keys do NOT work** against BSS — rejected
   by the credential validator with AK/SK guidance.
-- Balance: `Data.AvailableAmount`; currency: `Data.Currency`.
+- Balance: `Data.AvailableAmount`; currency: `Data.Currency`. The envelope differs
+  per site: china serializes NUMERIC `Code` 200 and numeric amounts; international
+  serializes STRING `Code` `"200"`, bool `Success`, and decimal STRING amounts —
+  parsing tolerates both forms and normalizes amounts to numbers.
 - Coding Plan quota: **no clean API** — the console path relies on cookie + CSRF
   session auth, which cannot be modeled with stored API credentials. Out of scope for
   this milestone (blocked).
-- Source: official Alibaba Cloud BSS OpenAPI documentation.
+- Source: official Alibaba Cloud BSS OpenAPI documentation plus maintainer live
+  captures on both sites (2026-09).
 
 ## OpenAI — `api.openai.com` — verified-official
 
@@ -100,7 +108,7 @@ AD-5), scoped per provider. This block must stay structurally identical to
     "verification": "community"
   },
   "qwen": {
-    "hosts": ["business.aliyuncs.com"],
+    "hosts": ["business.aliyuncs.com", "business.ap-southeast-1.aliyuncs.com"],
     "verification": "official"
   },
   "openai": {

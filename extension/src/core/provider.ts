@@ -7,6 +7,7 @@
 // the refresh engine.
 import type { ProviderRequest } from '../network/request';
 import type { NormalizedUsage } from './usage';
+import type { QwenSite } from './qwen-sites';
 import type { ZaiPlatform } from './zai-platforms';
 
 /** Stable provider identifiers. Also the registry key and the allowlist scope. */
@@ -55,6 +56,8 @@ export class ProviderApiError extends Error {
 export interface UsageQuery {
   /** ZAI monitor platform selection; absent → `'zai'` (AD-28). */
   readonly zaiPlatform?: ZaiPlatform;
+  /** Qwen BSS site selection; absent → `'international'` (AD-28 mirror). */
+  readonly qwenSite?: QwenSite;
   /** Inclusive range start for cost-window endpoints (OpenAI), epoch seconds. */
   readonly startTime?: number;
   /** Exclusive range end for cost-window endpoints (OpenAI), epoch seconds. */

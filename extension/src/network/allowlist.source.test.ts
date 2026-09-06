@@ -38,6 +38,13 @@ describe('allowlist single-source sync (AD-4)', () => {
       'the apex bigmodel.cn grant retired with expenseBillList — a permission grant with no caller violates least privilege',
     );
   });
+
+  it('pins: qwen allowlists exactly the two BSS hosts — china site plus the international default', () => {
+    deepStrictEqual(PROVIDER_ALLOWLIST.qwen.hosts, [
+      'business.aliyuncs.com',
+      'business.ap-southeast-1.aliyuncs.com',
+    ]);
+  });
 });
 
 describe('isHostAllowed suffix matching (AD-5, re-pinned to the monitor hosts)', () => {

@@ -23,6 +23,7 @@ import type { TransportResponse } from '../network/transport';
 import kimiOk from './kimi/users-me-balance--ok.json';
 import openaiPage1 from './openai/costs--page-1.json';
 import openaiPage2Final from './openai/costs--page-2-final.json';
+import qwenIntlOk from './qwen/query-account-balance--intl-ok.json';
 import qwenOk from './qwen/query-account-balance--ok.json';
 import zaiCodeString200 from './zai/monitor--code-string-200.json';
 import zaiFallbackPosition from './zai/monitor--fallback-position.json';
@@ -41,6 +42,7 @@ const responses = {
   'zai/monitor--code-string-200': { status: 200, body: zaiCodeString200 },
   'zai/monitor--plain-text-401': { status: 401, body: zaiPlainText401 },
   'qwen/query-account-balance--ok': { status: 200, body: qwenOk },
+  'qwen/query-account-balance--intl-ok': { status: 200, body: qwenIntlOk },
   'openai/costs--page-1': { status: 200, body: openaiPage1 },
   'openai/costs--page-2-final': { status: 200, body: openaiPage2Final },
   'kimi/users-me-balance--ok': { status: 200, body: kimiOk },

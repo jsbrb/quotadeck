@@ -16,6 +16,7 @@
     "https://api.openai.com/*",
     "https://api.z.ai/*",
     "https://business.aliyuncs.com/*",
+    "https://business.ap-southeast-1.aliyuncs.com/*",
     "https://open.bigmodel.cn/*"
   ]
 }
