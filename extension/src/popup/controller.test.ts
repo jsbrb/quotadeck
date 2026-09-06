@@ -13,6 +13,7 @@ import { QWEN_AK_SK_GUIDANCE } from '../core/credentials';
 import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
+import { QWEN_SITE_STORAGE_KEY } from '../storage/qwen-site-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
 import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY, SnapshotStore } from '../storage/snapshot-store';
 import { FakeBrowser, type FakeStorageArea } from '../testing/fake-browser';
@@ -365,6 +366,67 @@ describe('controller — ZAI Platform Selector (popup-ui spec §ZAI Platform Sel
     select.value = 'zhipu';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await vi.waitFor(() => expect(h.local.snapshot()[ZAI_PLATFORM_STORAGE_KEY]).toBe('zhipu'));
+
+    expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222'); // keys untouched
+    expect(document.body.textContent).toContain('••••2222'); // masked state intact
+  });
+});
+
+describe('controller — Qwen Site Selector (popup-ui spec §Qwen Site Selector)', () => {
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#qwen-site-select')).not.toBeNull());
+  }
+
+  it('defaults to International with the unmasked default-marking label when no preference is stored', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    expect(select.value).toBe('international');
+    expect(select.selectedOptions[0]!.textContent).toBe('International (default)'); // label rendered unmasked
+  });
+
+  it('selecting China persists the preference and re-renders the selector on it', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    select.value = 'china';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(h.local.snapshot()[QWEN_SITE_STORAGE_KEY]).toBe('china'));
+    const reRendered = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    expect(reRendered.value).toBe('china'); // the re-render reflects the persisted site
+  });
+
+  it('reads the stored preference on load — China shows selected after reopening the popup', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [QWEN_SITE_STORAGE_KEY]: 'china' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#qwen-site-select')!.value).toBe('china');
+  });
+
+  it('an invalid stored preference defaults the selector to International (read-on-load contract)', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [QWEN_SITE_STORAGE_KEY]: 'singapore' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#qwen-site-select')!.value).toBe('international');
+  });
+
+  it('a site switch never touches the credential namespace', async () => {
+    const h = makePopupHarness();
+    await seedKey(h.local, 'kimi', 'sk-kimi-bbbb2222');
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    select.value = 'china';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(h.local.snapshot()[QWEN_SITE_STORAGE_KEY]).toBe('china'));
 
     expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222'); // keys untouched
     expect(document.body.textContent).toContain('••••2222'); // masked state intact

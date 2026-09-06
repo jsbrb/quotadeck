@@ -91,6 +91,7 @@ function popupState(overrides: Partial<PopupState> = {}): PopupState {
     guidance: {},
     nowMs: NOW_MS,
     zaiPlatform: 'zai',
+    qwenSite: 'international',
     ...overrides,
   };
 }
@@ -435,6 +436,28 @@ describe('renderSettings — ZAI Platform Selector (popup-ui spec §ZAI Platform
     const zhipu = sectionFor(renderSettings(popupState({ view: 'settings', zaiPlatform: 'zhipu' })), 'zai');
     expect(zhipu).toContain('<option value="zhipu" selected>');
     expect(zhipu).not.toContain('<option value="zai" selected>');
+  });
+});
+
+describe('renderSettings — Qwen Site Selector (popup-ui spec §Qwen Site Selector)', () => {
+  it('renders the selector in the qwen section only, with unmasked labels that mark international as the default', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+    const qwen = sectionFor(html, 'qwen');
+
+    expect(qwen).toContain('id="qwen-site-select"');
+    expect(qwen).toContain('>International (default)</option>');
+    expect(qwen).toContain('>China</option>');
+    expect(sectionFor(html, 'kimi')).not.toContain('qwen-site-select'); // qwen only
+  });
+
+  it('marks the current site selected — International by default, China when the preference says so', () => {
+    const byDefault = sectionFor(renderSettings(popupState({ view: 'settings' })), 'qwen');
+    expect(byDefault).toContain('<option value="international" selected>');
+    expect(byDefault).not.toContain('<option value="china" selected>');
+
+    const china = sectionFor(renderSettings(popupState({ view: 'settings', qwenSite: 'china' })), 'qwen');
+    expect(china).toContain('<option value="china" selected>');
+    expect(china).not.toContain('<option value="international" selected>');
   });
 });
 

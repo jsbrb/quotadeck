@@ -40,7 +40,9 @@
 //   and distinct from validation errors. The ZAI section carries the
 //   platform selector (AD-28), rendered from the pure ZAI_PLATFORMS table
 //   with unmasked labels and the current preference marked `selected`; the
-//   controller owns persistence.
+//   qwen section carries the site selector (popup-ui §Qwen Site Selector)
+//   from the pure QWEN_SITES table the same way; the controller owns
+//   persistence for both.
 // - Both views end with the shared branding footer (popup-ui §Branding
 //   Footer): "Built by The North Code" → https://www.thenorthcode.es/.
 // - Every dynamic string is escaped (AD-3 spirit): provider-sourced levels,
@@ -49,6 +51,8 @@
 // - The view renders exactly the masked forms it is given; full keys never
 //   reach this module (AD-15).
 import type { CredentialType, ProviderId } from '../core/provider';
+import type { QwenSite } from '../core/qwen-sites';
+import { QWEN_SITES } from '../core/qwen-sites';
 import type { ErrorClass } from '../refresh/error-taxonomy';
 import { currencySymbol, type LineItem, type NormalizedUsage, type UsageWindow } from '../core/usage';
 import { ZAI_PLATFORMS, type ZaiPlatform } from '../core/zai-platforms';
@@ -97,6 +101,8 @@ export interface PopupState {
   readonly guidance: Readonly<Partial<Record<ProviderId, string>>>;
   /** Selected ZAI monitor platform (`qd:pref:zai-platform`); the controller reads/persists it. */
   readonly zaiPlatform: ZaiPlatform;
+  /** Selected Qwen BSS site (`qd:pref:qwen-site`); the controller reads/persists it. */
+  readonly qwenSite: QwenSite;
   /** Render instant (epoch ms) feeding countdowns — supplied by the controller. */
   readonly nowMs: number;
 }
@@ -361,6 +367,26 @@ function platformSelector(state: PopupState): string {
   );
 }
 
+/**
+ * Qwen site selector (popup-ui §Qwen Site Selector; AD-28 mirror): rendered
+ * from the pure QWEN_SITES table — the labels are display strings (the
+ * international option names itself the default), never secret material, so
+ * they render unmasked. The current preference carries the `selected`
+ * attribute; the controller persists changes.
+ */
+function siteSelector(state: PopupState): string {
+  const options = QWEN_SITES.map(
+    (site) =>
+      `<option value="${site.id}"${site.id === state.qwenSite ? ' selected' : ''}>${escapeHtml(site.label)}</option>`,
+  ).join('');
+  return (
+    '<div class="site-field">' +
+    '<label for="qwen-site-select">Site</label>' +
+    `<select id="qwen-site-select" data-action="qwen-site">${options}</select>` +
+    '</div>'
+  );
+}
+
 function providerSettingsSection(provider: PopupProvider, state: PopupState): string {
   const masked = state.keyStates[provider.id];
   const guidance = state.guidance[provider.id];
@@ -381,6 +407,9 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
   );
   if (provider.id === 'zai') {
     parts.push(platformSelector(state));
+  }
+  if (provider.id === 'qwen') {
+    parts.push(siteSelector(state));
   }
   if (guidance !== undefined) {
     parts.push(`<p class="guidance" role="alert">${escapeHtml(guidance)}</p>`);

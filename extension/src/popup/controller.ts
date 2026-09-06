@@ -29,10 +29,12 @@
 import { validateCredential } from '../core/credentials';
 import type { Credential, CredentialType, ProviderId } from '../core/provider';
 import { PROVIDER_METADATA } from '../core/provider-metadata';
+import type { QwenSite } from '../core/qwen-sites';
 import type { ZaiPlatform } from '../core/zai-platforms';
 import type { BrowserApi } from '../platform/browser-api';
 import { KeyStore } from '../storage/key-store';
 import type { MaskedCredential } from '../storage/key-store';
+import { readQwenSite, writeQwenSite } from '../storage/qwen-site-store';
 import { SnapshotStore, SNAPSHOT_STORAGE_KEY, type CycleSnapshot } from '../storage/snapshot-store';
 import { readZaiPlatform, writeZaiPlatform } from '../storage/zai-platform-store';
 import { renderMain, renderSettings, type PopupProvider, type PopupState } from './view';
@@ -71,7 +73,9 @@ export function startPopup(deps: PopupDeps): void {
     guidance: Partial<Record<ProviderId, string>>;
     /** Selected ZAI monitor platform; read from and persisted to `qd:pref:zai-platform`. */
     zaiPlatform: ZaiPlatform;
-  } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {}, zaiPlatform: 'zai' };
+    /** Selected Qwen BSS site; read from and persisted to `qd:pref:qwen-site`. */
+    qwenSite: QwenSite;
+  } = { view: 'main', snapshot: undefined, keyStates: {}, guidance: {}, zaiPlatform: 'zai', qwenSite: 'international' };
 
   const app = (): HTMLElement => deps.document.getElementById('app') as HTMLElement;
   const inputById = (inputId: string): HTMLInputElement => deps.document.getElementById(inputId) as HTMLInputElement;
@@ -93,6 +97,7 @@ export function startPopup(deps: PopupDeps): void {
       keyStates: state.keyStates,
       guidance: state.guidance,
       zaiPlatform: state.zaiPlatform,
+      qwenSite: state.qwenSite,
       nowMs: now(),
     };
     app().innerHTML = state.view === 'main' ? renderMain(popupState) : renderSettings(popupState);
@@ -223,30 +228,46 @@ export function startPopup(deps: PopupDeps): void {
     }
   });
 
-  // Platform selector (AD-28): a change-delegated handler on the same root —
-  // the select only exists in the settings view, and persistence goes through
-  // the non-secret `qd:pref:zai-platform` wrapper, never the key namespace.
+  // Preference selectors (AD-28 + qwen-site mirror): change-delegated
+  // handlers on the same root — the selects only exist in the settings view,
+  // and persistence goes through the non-secret `qd:pref:*` wrappers, never
+  // the key namespace.
   root.addEventListener('change', (event) => {
     const target = event.target as HTMLElement | null;
-    if (target === null || target.id !== 'zai-platform-select') {
+    if (target === null) {
       return;
     }
-    const platform = (target as HTMLSelectElement).value;
-    if (platform !== 'zai' && platform !== 'zhipu') {
-      return; // the select offers exactly the union; anything else is ignored
+    if (target.id === 'zai-platform-select') {
+      const platform = (target as HTMLSelectElement).value;
+      if (platform !== 'zai' && platform !== 'zhipu') {
+        return; // the select offers exactly the union; anything else is ignored
+      }
+      void (async (): Promise<void> => {
+        await writeZaiPlatform(deps.browser.storage.local, platform);
+        state.zaiPlatform = platform;
+        render();
+      })();
+      return;
     }
-    void (async (): Promise<void> => {
-      await writeZaiPlatform(deps.browser.storage.local, platform);
-      state.zaiPlatform = platform;
-      render();
-    })();
+    if (target.id === 'qwen-site-select') {
+      const site = (target as HTMLSelectElement).value;
+      if (site !== 'international' && site !== 'china') {
+        return; // the select offers exactly the union; anything else is ignored
+      }
+      void (async (): Promise<void> => {
+        await writeQwenSite(deps.browser.storage.local, site);
+        state.qwenSite = site;
+        render();
+      })();
+    }
   });
 
-  // Initial load: last completed cycle + masked key states + the platform
-  // preference, then first render.
+  // Initial load: last completed cycle + masked key states + both preference
+  // selections, then first render.
   void (async (): Promise<void> => {
     state.snapshot = await snapshots.read();
     state.zaiPlatform = await readZaiPlatform(deps.browser.storage.local);
+    state.qwenSite = await readQwenSite(deps.browser.storage.local);
     for (const { id, credentialType } of providers) {
       state.keyStates[id] = await keys.readMaskedCredential(id, credentialType);
     }
