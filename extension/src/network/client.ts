@@ -16,6 +16,7 @@
 import { SystemClock, type Clock } from '../core/clock';
 import type { Credential, ProviderId } from '../core/provider';
 import { isHostAllowed } from './allowlist';
+import { QWEN_PLAN_PROBE_HOST } from '../providers/qwen-plan-probe';
 import {
   assertNoCredentialMaterial,
   NetworkRejectionError,
@@ -96,6 +97,15 @@ export class AllowlistNetworkClient {
       throw new NetworkRejectionError(
         'credential-placement',
         `Raw credentials are only valid on the ZAI monitor hosts, not ${host}.`,
+      );
+    }
+    // The qwen plan key is probe-host-only (hito-8 §Credential Attach Modes):
+    // the sk-sp- key attaches as Bearer EXCLUSIVELY on the token-plan probe
+    // host — an allowlisted BSS host is still the wrong surface for it.
+    if (credential.type === 'qwen-plan' && host !== QWEN_PLAN_PROBE_HOST) {
+      throw new NetworkRejectionError(
+        'credential-placement',
+        `Qwen plan keys are only valid on ${QWEN_PLAN_PROBE_HOST}, not ${host}.`,
       );
     }
     assertNoCredentialMaterial(dispatched, credential, url);

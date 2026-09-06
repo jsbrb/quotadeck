@@ -21,7 +21,14 @@ export type AllowlistConfig = Readonly<Record<ProviderId, AllowlistEntry>>;
 /** Typed copy of the doc allowlist — keep structurally identical to the doc block. */
 export const PROVIDER_ALLOWLIST: AllowlistConfig = {
   zai: { hosts: ['api.z.ai', 'open.bigmodel.cn'], verification: 'community' },
-  qwen: { hosts: ['business.aliyuncs.com', 'business.ap-southeast-1.aliyuncs.com'], verification: 'official' },
+  qwen: {
+    hosts: [
+      'business.aliyuncs.com',
+      'business.ap-southeast-1.aliyuncs.com',
+      'token-plan.ap-southeast-1.maas.aliyuncs.com',
+    ],
+    verification: 'official',
+  },
   openai: { hosts: ['api.openai.com'], verification: 'official' },
   kimi: { hosts: ['api.moonshot.cn'], verification: 'official' },
 };

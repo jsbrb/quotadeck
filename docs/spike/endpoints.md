@@ -67,11 +67,32 @@ Verification levels:
   per site: china serializes NUMERIC `Code` 200 and numeric amounts; international
   serializes STRING `Code` `"200"`, bool `Success`, and decimal STRING amounts —
   parsing tolerates both forms and normalizes amounts to numbers.
-- Coding Plan quota: **no clean API** — the console path relies on cookie + CSRF
-  session auth, which cannot be modeled with stored API credentials. Out of scope for
-  this milestone (blocked).
+- Coding Plan quota: no percentage/total on any key surface — only the binary
+  probe below. RPC-signing credentials are sanctioned on the TWO BSS hosts ONLY
+  (never the probe host).
 - Source: official Alibaba Cloud BSS OpenAPI documentation plus maintainer live
   captures on both sites (2026-09).
+
+### Qwen token-plan probe — `token-plan.ap-southeast-1.maas.aliyuncs.com` — verified-community
+
+- Endpoint: `POST /compatible-mode/v1/chat/completions` with body
+  `{ "model": "qwen3.6-flash", "messages": [{ "role": "user", "content": "hi" }], "max_tokens": 1, "stream": false }`.
+- Auth: the token-plan inference key (`sk-sp-`) EXCLUSIVELY as
+  `Authorization: Bearer <key>` — never in the URL, query, or body. Each probe
+  costs one 1-token request; the extension caches outcomes (120 min available,
+  15 min exhausted/key-rejected).
+- Outcome mapping (status-first): 200 → plan available; 429 → exhausted with the
+  reset instant parsed from the surfaced error text (`reset at MM-DD HH:MM:SS UTC`,
+  year derived from the clock; past-derived instants roll to the next year);
+  401/403 → key rejected. No percentage or total exists on any surface — none is
+  synthesized.
+- Verification status: honestly **community** — the endpoint shape follows the
+  officially documented DashScope-compatible API, but the token-plan host itself
+  is community/maintainer-evidenced only; the allowlist entry-level
+  `verification: official` describes the BSS hosts, this subsection carries the
+  probe's weaker evidence class.
+- Source: community evidence on the Qwen token-plan (coding-plan) service,
+  maintainer-ratified 2026-09.
 
 ## OpenAI — `api.openai.com` — verified-official
 
@@ -108,7 +129,11 @@ AD-5), scoped per provider. This block must stay structurally identical to
     "verification": "community"
   },
   "qwen": {
-    "hosts": ["business.aliyuncs.com", "business.ap-southeast-1.aliyuncs.com"],
+    "hosts": [
+      "business.aliyuncs.com",
+      "business.ap-southeast-1.aliyuncs.com",
+      "token-plan.ap-southeast-1.maas.aliyuncs.com"
+    ],
     "verification": "official"
   },
   "openai": {

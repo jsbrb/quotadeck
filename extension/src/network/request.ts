@@ -16,10 +16,11 @@
 // - token credentials (incl. raw): the token must not appear in url/query/body;
 // - ak-sk (AD-19 sanctioned exception, scoped): the AccessKeySecret must not
 //   appear ANYWHERE; the AccessKeyId may appear ONLY as a query parameter and
-//   ONLY on the Qwen BSS host (business.aliyuncs.com) — anything else is
-//   rejected before any transport I/O.
+//   ONLY on the two Qwen BSS hosts (business.aliyuncs.com,
+//   business.ap-southeast-1.aliyuncs.com — never the token-plan probe host) —
+//   anything else is rejected before any transport I/O.
 import type { Credential } from '../core/provider';
-import { isHostAllowed } from './allowlist';
+import { isQwenBssHost } from '../core/qwen-sites';
 
 /** A request as built by a provider, BEFORE credentials are attached. */
 export interface ProviderRequest {
@@ -77,13 +78,15 @@ export function assertNoCredentialMaterial(
         );
       }
     }
-    // AccessKeyId: query-only, and only on the Qwen BSS host.
-    if (!isHostAllowed('qwen', new URL(fullUrl).hostname)) {
+    // AccessKeyId: query-only, and only on the TWO Qwen BSS hosts (china +
+    // international). The allowlist also admits the token-plan probe host —
+    // signed-style credentials are NOT sanctioned there (hito-8 scoping).
+    if (!isQwenBssHost(new URL(fullUrl).hostname)) {
       for (const surface of [...querySurfaces, fullUrl]) {
         if (surface.includes(credential.accessKeyId)) {
           throw new NetworkRejectionError(
             'credential-placement',
-            'AccessKeyId in the query is allowed only on the Qwen BSS host (business.aliyuncs.com).',
+            'AccessKeyId in the query is allowed only on the Qwen BSS hosts (business.aliyuncs.com, business.ap-southeast-1.aliyuncs.com).',
           );
         }
       }

@@ -34,7 +34,7 @@ describe('manifest host_permissions sync (AD-16)', () => {
     deepStrictEqual(manifest.host_permissions, expectedHostPatterns());
   });
 
-  it('pins the exact six shipped host patterns (5 → 6: intl BSS host per hito-8)', () => {
+  it('pins the exact seven shipped host patterns (6 → 7: token-plan probe host per hito-8)', () => {
     const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as {
       host_permissions?: string[];
     };
@@ -45,6 +45,7 @@ describe('manifest host_permissions sync (AD-16)', () => {
       'https://business.aliyuncs.com/*',
       'https://business.ap-southeast-1.aliyuncs.com/*',
       'https://open.bigmodel.cn/*',
+      'https://token-plan.ap-southeast-1.maas.aliyuncs.com/*',
     ]);
   });
 });

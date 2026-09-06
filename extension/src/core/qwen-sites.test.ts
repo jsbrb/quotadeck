@@ -2,7 +2,7 @@
 // AD-28 mirror) — pure literal pins over the popup-safe site table: union,
 // labels, and the BSS base URL per site.
 import { describe, expect, it } from 'vitest';
-import { isQwenSite, QWEN_SITES, qwenBssBaseUrl, type QwenSite } from './qwen-sites';
+import { isQwenBssHost, isQwenSite, QWEN_SITES, qwenBssBaseUrl, type QwenSite } from './qwen-sites';
 
 describe('QWEN_SITES (site table)', () => {
   it('lists exactly the two sites with their display labels, international first (the default)', () => {
@@ -38,5 +38,15 @@ describe('isQwenSite (runtime guard for the provider seam)', () => {
     expect(isQwenSite('china')).toBe(true);
     expect(isQwenSite('intl')).toBe(false);
     expect(isQwenSite(undefined)).toBe(false);
+  });
+});
+
+describe('isQwenBssHost (RPC-signing exception scope, hito-8)', () => {
+  it('admits exactly the two BSS site hosts — and NOT the qwen-allowlisted probe host', () => {
+    expect(isQwenBssHost('business.aliyuncs.com')).toBe(true);
+    expect(isQwenBssHost('business.ap-southeast-1.aliyuncs.com')).toBe(true);
+    expect(isQwenBssHost('token-plan.ap-southeast-1.maas.aliyuncs.com')).toBe(false);
+    expect(isQwenBssHost('api.openai.com')).toBe(false);
+    expect(isQwenBssHost('BUSINESS.ALIYUNCS.COM')).toBe(true); // case-insensitive
   });
 });

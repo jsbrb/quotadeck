@@ -39,10 +39,11 @@ describe('allowlist single-source sync (AD-4)', () => {
     );
   });
 
-  it('pins: qwen allowlists exactly the two BSS hosts — china site plus the international default', () => {
+  it('pins: qwen allowlists exactly the two BSS hosts plus the token-plan probe host (hito-8)', () => {
     deepStrictEqual(PROVIDER_ALLOWLIST.qwen.hosts, [
       'business.aliyuncs.com',
       'business.ap-southeast-1.aliyuncs.com',
+      'token-plan.ap-southeast-1.maas.aliyuncs.com',
     ]);
   });
 });

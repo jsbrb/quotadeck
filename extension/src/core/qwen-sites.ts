@@ -35,3 +35,18 @@ export function qwenBssBaseUrl(site: QwenSite): string {
 export function isQwenSite(value: unknown): value is QwenSite {
   return value === 'international' || value === 'china';
 }
+
+/** Hostnames of the two BSS site bases, derived from the site table itself. */
+const BSS_HOSTS: ReadonlySet<string> = new Set(
+  QWEN_SITES.map((site) => new URL(qwenBssBaseUrl(site.id)).hostname),
+);
+
+/**
+ * True only for the TWO BSS site hosts (china + international). This is the
+ * RPC-signing exception scope (network/request.ts, hito-8): AccessKeyId may
+ * appear in the query on these hosts ONLY — the token-plan probe host is a
+ * qwen-allowlisted host that is deliberately NOT in this set.
+ */
+export function isQwenBssHost(host: string): boolean {
+  return BSS_HOSTS.has(host.toLowerCase());
+}

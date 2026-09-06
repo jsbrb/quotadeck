@@ -280,6 +280,21 @@ describe('credential-kind scan (AD-19) — AccessKeyId scoped to the Qwen host',
     ).not.toThrow();
   });
 
+  it('admits AccessKeyId as a query parameter on the international BSS host too (hito-8 two-host scope)', () => {
+    const request: ProviderRequest = {
+      method: 'GET',
+      url: 'https://business.ap-southeast-1.aliyuncs.com/',
+      query: { AccessKeyId: QWEN_PAIR.accessKeyId, Action: 'QueryAccountBalance' },
+    };
+    expect(() =>
+      assertNoCredentialMaterial(
+        request,
+        QWEN_PAIR,
+        'https://business.ap-southeast-1.aliyuncs.com/?AccessKeyId=LTAI5tQwenAccessKeyId00&Action=QueryAccountBalance',
+      ),
+    ).not.toThrow();
+  });
+
   it('rejects signed-style credentials off the Qwen host (spec scenario)', () => {
     const request: ProviderRequest = {
       method: 'GET',
@@ -294,6 +309,21 @@ describe('credential-kind scan (AD-19) — AccessKeyId scoped to the Qwen host',
     } catch (error) {
       expect((error as NetworkRejectionError).reason).toBe('credential-placement');
     }
+  });
+
+  it('2.9 RED: rejects AccessKeyId in the query on the token-plan probe host — BSS-only scoping (spec scenario)', () => {
+    const request: ProviderRequest = {
+      method: 'POST',
+      url: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      query: { AccessKeyId: QWEN_PAIR.accessKeyId },
+    };
+    expect(() =>
+      assertNoCredentialMaterial(
+        request,
+        QWEN_PAIR,
+        'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions?AccessKeyId=LTAI5tQwenAccessKeyId00',
+      ),
+    ).toThrowError(NetworkRejectionError);
   });
 
   it('rejects the AccessKeySecret in the query even on the Qwen host', () => {
@@ -313,6 +343,42 @@ describe('credential-kind scan (AD-19) — AccessKeyId scoped to the Qwen host',
 
     const inBody: ProviderRequest = { method: 'POST', url: 'https://business.aliyuncs.com/', body: JSON.stringify({ ak: QWEN_PAIR.accessKeyId }) };
     expect(() => assertNoCredentialMaterial(inBody, QWEN_PAIR, inBody.url)).toThrowError(/AccessKeyId/u);
+  });
+});
+
+describe('AllowlistNetworkClient — qwen plan key (hito-8 §Credential Attach Modes)', () => {
+  const PLAN_CREDENTIAL = { type: 'qwen-plan', token: 'sk-sp-plan-probe-key-9999' } as const;
+
+  function probeRequest(): ProviderRequest {
+    return {
+      method: 'POST',
+      url: 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions',
+      body: JSON.stringify({ model: 'qwen3.6-flash', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1, stream: false }),
+    };
+  }
+
+  it('admits the probe host and attaches the sk-sp- key ONLY as the Bearer Authorization header', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    const response = await client.send('qwen', probeRequest(), PLAN_CREDENTIAL);
+
+    expect(response).toBe(okResponse);
+    const sent = transport.requests[0]!;
+    expect(sent.headers).toEqual({ Authorization: 'Bearer sk-sp-plan-probe-key-9999' });
+    expect(sent.url).not.toContain('sk-sp-');
+    expect(sent.body ?? '').not.toContain('sk-sp-'); // key confined to the header, never the body
+    expect(sent.body ?? '').not.toContain('AccessKeyId'); // probe body is the documented 1-token shape
+  });
+
+  it('rejects a qwen plan key off the probe host — even on the qwen-allowlisted BSS hosts — with zero I/O', async () => {
+    const transport = new RecordingTransport(); // empty queue: any fetch would throw
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(
+      client.send('qwen', qwenRequest(), PLAN_CREDENTIAL), // business.aliyuncs.com is allowlisted, but not for plan keys
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
   });
 });
 
