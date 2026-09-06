@@ -31,7 +31,9 @@ import { ChromeBrowserApi, type BrowserApi } from './platform/browser-api';
 import { createDefaultRegistry } from './providers';
 import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
+import { QwenPlanStep } from './refresh/qwen-plan';
 import { KeyStore } from './storage/key-store';
+import { QwenPlanStore } from './storage/qwen-plan-store';
 import { readQwenSite } from './storage/qwen-site-store';
 import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
 import { readZaiPlatform } from './storage/zai-platform-store';
@@ -94,14 +96,36 @@ export function createRefreshEngine(browser: BrowserApi, options: WorkerOptions 
 }
 
 /**
+ * Builds the tick-level qwen plan probe step (hito-8 design note 2) over the
+ * same injected transport as the engine — the probe dispatches through the
+ * identical AllowlistNetworkClient seam in tests and production alike.
+ */
+export function createQwenPlanStep(browser: BrowserApi, options: WorkerOptions = {}): QwenPlanStep {
+  return new QwenPlanStep({
+    client: new AllowlistNetworkClient(options.transport ?? new FetchTransport()),
+    keys: new KeyStore(browser.storage.local),
+    store: new QwenPlanStore(browser.storage.local),
+  });
+}
+
+/**
  * One alarm tick: read the ZAI platform preference, derive the live query
  * from the clock + platform, refresh every keyed provider sequentially and
  * render each outcome — usage text per success, ERROR_BADGE_TEXT per failure
- * (replaced by the next success). After the cycle completes, its per-provider
- * outcomes are persisted as ONE `qd:snapshot` write for the popup (AD-13) —
- * usage+windows on the ok arm, the classified ErrorClass on the error arm.
+ * (replaced by the next success). The qwen plan probe step (hito-8) runs
+ * AFTER refreshAll and BEFORE the snapshot write: its status merges into the
+ * qwen entry only when that entry is ok or absent — the error arm wins, and
+ * the badge is never re-rendered from plan status. Finally the cycle's
+ * per-provider outcomes are persisted as ONE `qd:snapshot` write for the
+ * popup (AD-13) — usage+windows+plan on the ok arm, the classified
+ * ErrorClass on the error arm.
  */
-export async function refreshTick(browser: BrowserApi, engine: RefreshEngine, clock: Clock): Promise<void> {
+export async function refreshTick(
+  browser: BrowserApi,
+  engine: RefreshEngine,
+  clock: Clock,
+  planStep?: QwenPlanStep,
+): Promise<void> {
   const zaiPlatform = await readZaiPlatform(browser.storage.local); // qd:pref:zai-platform (AD-28)
   const qwenSite = await readQwenSite(browser.storage.local); // qd:pref:qwen-site (AD-28 mirror)
   const query = buildTickQuery(clock, zaiPlatform, qwenSite);
@@ -128,6 +152,21 @@ export async function refreshTick(browser: BrowserApi, engine: RefreshEngine, cl
       browser.action.setBadgeText({ text: ERROR_BADGE_TEXT });
     },
   });
+  // Qwen plan probe (usage-badge §Qwen Plan Probe Cadence): tick-level step
+  // after refreshAll, before the snapshot write. A plan-only user (no AK/SK)
+  // gets a value-less ok entry; an ok balance entry gains the plan field; an
+  // error entry is left untouched (something IS broken — the class wins).
+  if (planStep !== undefined) {
+    const plan = await planStep.resolve(clock.now());
+    if (plan !== undefined) {
+      const entry = results.qwen;
+      if (entry === undefined) {
+        results.qwen = { status: 'ok', usage: { providerId: 'qwen', kind: 'balance', plan, fetchedAt: clock.now() } };
+      } else if (entry.status === 'ok') {
+        results.qwen = { status: 'ok', usage: { ...entry.usage, plan } };
+      }
+    }
+  }
   await new SnapshotStore(browser.storage.local).write({ results });
 }
 
@@ -137,6 +176,7 @@ export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): v
   // fetchedAt) and the tick query derivation.
   const clock = options.clock ?? new SystemClock();
   const engine = createRefreshEngine(browser, options);
+  const planStep = createQwenPlanStep(browser, options);
 
   const ensureAlarm = async (): Promise<void> => {
     if ((await browser.alarms.get(USAGE_REFRESH_ALARM)) === undefined) {
@@ -156,7 +196,7 @@ export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): v
     if (alarm.name !== USAGE_REFRESH_ALARM && alarm.name !== REFRESH_NOW_ALARM) {
       return;
     }
-    void refreshTick(browser, engine, clock).catch((error) => {
+    void refreshTick(browser, engine, clock, planStep).catch((error) => {
       console.error('[quotadeck] refresh tick failed:', error);
     });
   });

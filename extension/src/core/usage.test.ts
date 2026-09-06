@@ -49,6 +49,32 @@ describe('NormalizedUsage.windows (AD-26) — MonitorWindows model', () => {
   });
 });
 
+describe('NormalizedUsage.plan (hito-8 §Qwen Plan Probe) — badge ignores it', () => {
+  it('carries the plan status alongside the balance, with an optional reset instant', () => {
+    const available = usage({ providerId: 'qwen', plan: { status: 'available' } });
+    const exhausted = usage({ providerId: 'qwen', plan: { status: 'exhausted', resetAt: 1_788_656_274_505 } });
+    const rejected = usage({ providerId: 'qwen', plan: { status: 'key-rejected' } });
+
+    expect(available.plan).toEqual({ status: 'available' });
+    expect(exhausted.plan).toEqual({ status: 'exhausted', resetAt: 1_788_656_274_505 });
+    expect(rejected.plan).toEqual({ status: 'key-rejected' });
+    expect(usage({ providerId: 'qwen' }).plan).toBeUndefined(); // optional like windows
+  });
+
+  it('formatBadgeText is byte-identical with and without plan status — the badge renders the balance', () => {
+    const withoutPlan = usage({ providerId: 'qwen', value: 12.34, currency: 'USD' });
+    const withPlan = usage({
+      providerId: 'qwen',
+      value: 12.34,
+      currency: 'USD',
+      plan: { status: 'exhausted', resetAt: 1_788_656_274_505 },
+    });
+
+    expect(formatBadgeText(withPlan)).toBe('$12');
+    expect(formatBadgeText(withPlan)).toBe(formatBadgeText(withoutPlan));
+  });
+});
+
 describe('formatBadgeText — windows branch (usage-badge §Badge Rendering)', () => {
   it('renders the 5h percentage uncapped as integer display text', () => {
     expect(formatBadgeText(usage({ windows: { fiveHour: { percentage: 137, total: 12_000 } } }))).toBe('137%');

@@ -23,7 +23,7 @@
 // (platform/browser-api.ts); tests pass the in-memory fake from src/testing/.
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import type { LineItem, MonitorWindows, NormalizedUsage } from '../core/usage';
+import type { LineItem, MonitorWindows, NormalizedUsage, PlanInfo } from '../core/usage';
 import type { StorageArea } from './key-store';
 
 /** Storage key for the last completed cycle snapshot. */
@@ -112,6 +112,18 @@ function isMonitorWindows(value: unknown): value is MonitorWindows {
   );
 }
 
+/** hito-8 shape check: one of the three plan statuses plus an optional numeric resetAt. */
+function isPlanInfo(value: unknown): value is PlanInfo {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const plan = value as Record<string, unknown>;
+  return (
+    (plan.status === 'available' || plan.status === 'exhausted' || plan.status === 'key-rejected') &&
+    (plan.resetAt === undefined || typeof plan.resetAt === 'number')
+  );
+}
+
 function isNormalizedUsage(value: unknown): value is NormalizedUsage {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -127,6 +139,7 @@ function isNormalizedUsage(value: unknown): value is NormalizedUsage {
     (usage.tier === undefined || typeof usage.tier === 'string') &&
     (usage.breakdown === undefined || (Array.isArray(usage.breakdown) && usage.breakdown.every(isLineItem))) &&
     (usage.windows === undefined || isMonitorWindows(usage.windows)) &&
+    (usage.plan === undefined || isPlanInfo(usage.plan)) &&
     typeof usage.fetchedAt === 'number'
   );
 }

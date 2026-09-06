@@ -87,6 +87,11 @@ export interface NormalizedUsage {
   readonly breakdown?: readonly LineItem[];
   /** ZAI monitor windows (AD-26); absent on non-ZAI results. */
   readonly windows?: MonitorWindows;
+  /**
+   * Qwen plan probe status (hito-8 §Qwen Plan Probe); optional like
+   * `windows` — `formatBadgeText` ignores it (the badge renders the balance).
+   */
+  readonly plan?: PlanInfo;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */
   readonly fetchedAt: number;
 }

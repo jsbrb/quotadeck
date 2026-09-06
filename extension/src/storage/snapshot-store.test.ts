@@ -53,6 +53,14 @@ const openaiUsage: NormalizedUsage = {
   fetchedAt: FETCHED_AT,
 };
 
+const qwenUsage: NormalizedUsage = {
+  providerId: 'qwen',
+  kind: 'balance',
+  value: 100.28,
+  currency: 'CNY',
+  fetchedAt: FETCHED_AT,
+};
+
 describe('SnapshotStore', () => {
   let browser: FakeBrowser;
   let store: SnapshotStore;
@@ -253,10 +261,40 @@ describe('SnapshotStore', () => {
     ['ok entry usage has a non-array breakdown', { results: { zai: { status: 'ok', usage: { ...openaiUsage, breakdown: 'nope' } } } }],
     ['error entry carries no errorClass', { results: { zai: { status: 'error' } } }],
     ['error entry carries a non-class string', { results: { zai: { status: 'error', errorClass: 'fatal' } } }],
+    ['ok entry usage has an unknown plan status', { results: { qwen: { status: 'ok', usage: { ...qwenUsage, plan: { status: 'weird' } } } } }],
+    ['ok entry usage has a non-number plan resetAt', { results: { qwen: { status: 'ok', usage: { ...qwenUsage, plan: { status: 'exhausted', resetAt: 'soon' } } } } }],
+    ['ok entry usage has a non-object plan', { results: { qwen: { status: 'ok', usage: { ...qwenUsage, plan: 'available' } } } }],
   ])('malformed stored shape reads as undefined: %s', async (_label, stored) => {
     await browser.local.set({ [SNAPSHOT_STORAGE_KEY]: stored });
 
     expect(await store.read()).toBeUndefined();
+  });
+
+  it('qwen ok entries round-trip with plan status in every form (hito-8)', async () => {
+    for (const plan of [
+      { status: 'available' },
+      { status: 'exhausted', resetAt: FETCHED_AT + 3_600_000 },
+      { status: 'key-rejected' },
+    ] as const) {
+      const snapshot: CycleSnapshot = { results: { qwen: { status: 'ok', usage: { ...qwenUsage, plan } } } };
+      await store.write(snapshot);
+      expect(await store.read()).toEqual(snapshot);
+      await browser.local.remove(SNAPSHOT_STORAGE_KEY); // isolate per form
+    }
+  });
+
+  it('a plan-only value-less qwen usage round-trips (§Qwen Plan Line plan-only card)', async () => {
+    const planOnly: NormalizedUsage = {
+      providerId: 'qwen',
+      kind: 'balance',
+      plan: { status: 'exhausted', resetAt: 1 },
+      fetchedAt: FETCHED_AT,
+    };
+    const snapshot: CycleSnapshot = { results: { qwen: { status: 'ok', usage: planOnly } } };
+
+    await store.write(snapshot);
+
+    expect(await store.read()).toEqual(snapshot);
   });
 
   it('carries no credential material: no credential field on the snapshot types, none in stored bytes', async () => {

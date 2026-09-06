@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildTickQuery,
+  createQwenPlanStep,
   createRefreshEngine,
   refreshTick,
   REFRESH_NOW_ALARM,
@@ -12,8 +13,10 @@ import type { Credential, ProviderId } from './core/provider';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { HttpStatusError } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
+import { QWEN_PLAN_PROBE_HOST } from './providers/qwen-plan-probe';
 import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
+import { QWEN_PLAN_STATUS_STORAGE_KEY } from './storage/qwen-plan-store';
 import { writeQwenSite } from './storage/qwen-site-store';
 import { writeZaiPlatform } from './storage/zai-platform-store';
 import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
@@ -457,6 +460,189 @@ describe('background — Qwen Site Selection (usage-badge spec §Live refresh pe
       'business.ap-southeast-1.aliyuncs.com',
       'business.aliyuncs.com',
     ]);
+  });
+});
+
+describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan Probe Cadence)', () => {
+  /**
+   * Transport double for the hybrid qwen legs: serves the recorded balance
+   * fixture on either BSS host and a configurable probe outcome on the
+   * token-plan host (FetchTransport-shaped: non-2xx probes THROW
+   * HttpStatusError after the body-as-text, so the 429 reset text reaches
+   * the mapper exactly as in production). Counts every probe dispatch.
+   */
+  class QwenHybridTransport implements Transport {
+    private probeDispatches = 0;
+    readonly probeCalls = (): number => this.probeDispatches;
+
+    constructor(
+      private readonly probeOutcome: () => TransportResponse,
+      private readonly balanceOutcome: () => TransportResponse = () =>
+        FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+    ) {}
+
+    async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+      const host = new URL(request.url).hostname;
+      if (host === QWEN_PLAN_PROBE_HOST) {
+        this.probeDispatches++;
+        return this.probeOutcome();
+      }
+      if (host === 'business.aliyuncs.com' || host === 'business.ap-southeast-1.aliyuncs.com') {
+        return this.balanceOutcome();
+      }
+      throw new Error(`unexpected non-qwen dispatch: ${request.url}`);
+    }
+  }
+
+  /** A probe leg answering `status` with an optional text body (429 reset text lives there). */
+  const probeAnswer = (status: number, bodyText = ''): (() => TransportResponse) => () => {
+    if (status < 200 || status >= 300) {
+      throw new HttpStatusError(status, bodyText);
+    }
+    return FIXTURE_RESPONSES['qwen/plan-probe--ok'];
+  };
+
+  async function savePlanKey(local: FakeStorageArea): Promise<void> {
+    await new KeyStore(local).saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-probe-key-0001' });
+  }
+
+  /** The 429 text the mapper parses: resets 2026-09-06T10:00:00Z, TICK_NOW is 08-30. */
+  const RESET_TEXT = 'HTTP 429: {"Code":"Throttling","Message":"quota reset at 09-06 10:00:00 UTC"}';
+
+  it('a fresh available cache suppresses the probe: only the balance request dispatches', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    await h.local.set({ [QWEN_PLAN_STATUS_STORAGE_KEY]: { status: 'available', probedAt: TICK_NOW - 30 * 60_000 } });
+    const transport = new QwenHybridTransport(probeAnswer(200));
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(transport.probeCalls()).toBe(0); // 30 min < 120 min TTL → no probe
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: { plan: { status: 'available' } } });
+  });
+
+  it('an expired cache probes exactly once, rewrites the cache, and carries the fresh status', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    await h.local.set({ [QWEN_PLAN_STATUS_STORAGE_KEY]: { status: 'exhausted', probedAt: TICK_NOW - 20 * 60_000 } }); // > 15 min
+    const transport = new QwenHybridTransport(probeAnswer(200));
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(transport.probeCalls()).toBe(1); // expired → exactly one probe
+    expect(h.local.snapshot()[QWEN_PLAN_STATUS_STORAGE_KEY]).toEqual({ status: 'available', probedAt: TICK_NOW });
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: { plan: { status: 'available' } } });
+  });
+
+  it('no plan key means no probe — the qwen result carries no plan status', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']); // AK/SK only
+    const transport = new QwenHybridTransport(probeAnswer(200));
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(transport.probeCalls()).toBe(0);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect('plan' in (stored.results.qwen as { usage: { plan?: unknown } }).usage).toBe(false);
+    expect(QWEN_PLAN_STATUS_STORAGE_KEY in h.local.snapshot()).toBe(false); // no cache written either
+  });
+
+  it('badge text is unchanged by plan status — the badge renders the balance', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    const transport = new QwenHybridTransport(probeAnswer(429, RESET_TEXT));
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(h.action.badgeTexts).toEqual(['¥100']); // identical to a plan-less tick
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toMatchObject({
+      status: 'ok',
+      usage: { value: 100.28, plan: { status: 'exhausted', resetAt: Date.UTC(2026, 8, 6, 10, 0, 0) } },
+    });
+  });
+
+  it('plan merges into ok and absent entries; the error arm wins', async () => {
+    // (a) absent: plan key only, no AK/SK — a plan-only value-less ok entry appears.
+    const planOnly = makeApi();
+    await savePlanKey(planOnly.local);
+    const planOnlyTransport = new QwenHybridTransport(probeAnswer(200));
+    await refreshTick(
+      planOnly.api,
+      createRefreshEngine(planOnly.api, { clock: new FakeClock(TICK_NOW), transport: planOnlyTransport }),
+      new FakeClock(TICK_NOW),
+      createQwenPlanStep(planOnly.api, { clock: new FakeClock(TICK_NOW), transport: planOnlyTransport }),
+    );
+
+    const planOnlySnapshot = planOnly.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(planOnlySnapshot.results.qwen).toEqual({
+      status: 'ok',
+      usage: { providerId: 'qwen', kind: 'balance', plan: { status: 'available' }, fetchedAt: TICK_NOW },
+    });
+    expect(planOnly.action.badgeTexts).toEqual([]); // the plan-only entry never writes a badge
+
+    // (b) error arm: the balance leg fails — the class entry stays, no plan merge.
+    const failing = makeApi();
+    await saveKeys(failing.local, ['qwen']);
+    await savePlanKey(failing.local);
+    const failingTransport = new QwenHybridTransport(
+      probeAnswer(200),
+      () => {
+        throw new HttpStatusError(401);
+      },
+    );
+    await refreshTick(
+      failing.api,
+      createRefreshEngine(failing.api, { clock: new FakeClock(TICK_NOW), transport: failingTransport }),
+      new FakeClock(TICK_NOW),
+      createQwenPlanStep(failing.api, { clock: new FakeClock(TICK_NOW), transport: failingTransport }),
+    );
+
+    const failingSnapshot = failing.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(failingSnapshot.results.qwen).toEqual({ status: 'error', errorClass: 'auth' }); // error wins
+  });
+
+  it('a probe transport failure keeps the cache and omits plan status; the balance is unaffected', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    const cached = { status: 'available', probedAt: TICK_NOW - 130 * 60_000 }; // expired
+    await h.local.set({ [QWEN_PLAN_STATUS_STORAGE_KEY]: cached });
+    const transport = new QwenHybridTransport(() => {
+      throw new TypeError('Failed to fetch'); // non-HTTP classification
+    });
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(h.action.badgeTexts).toEqual(['¥100']); // balance outcome unaffected
+    expect(h.local.snapshot()[QWEN_PLAN_STATUS_STORAGE_KEY]).toEqual(cached); // cache untouched
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect('plan' in (stored.results.qwen as { usage: { plan?: unknown } }).usage).toBe(false);
+  });
+
+  it('a probe answering 429 without parseable reset text still reports exhausted without resetAt', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKey(h.local);
+    const transport = new QwenHybridTransport(probeAnswer(429, 'HTTP 429: {"Code":"Throttling"}'));
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: { plan: { status: 'exhausted' } } });
+    expect('resetAt' in ((stored.results.qwen as { usage: { plan?: { resetAt?: unknown } } }).usage.plan ?? {})).toBe(false);
+    expect(h.local.snapshot()[QWEN_PLAN_STATUS_STORAGE_KEY]).toEqual({ status: 'exhausted', probedAt: TICK_NOW });
   });
 });
 
