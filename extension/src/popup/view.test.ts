@@ -372,6 +372,21 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     expect(mainA).toContain('class="bar '); // the compared output actually carries bars…
     expect(settingsA).toContain('Credential must not be empty.'); // …and guidance
   });
+
+  it('renders plan-carrying state deterministically — repeated renders stay byte-identical (verify W1 gap, hito-8)', () => {
+    const state = popupState({
+      snapshot: qwenPlanSnapshot({ status: 'exhausted', resetAt: NOW_MS + 2 * 3_600_000 }),
+      qwenPlanKey: { type: 'qwen-plan', maskedToken: '••••cdef' },
+      keyStates: KEYED_STATES,
+    });
+    const mainA = renderMain(state);
+    const settingsA = renderSettings({ ...state, view: 'settings' });
+
+    strictEqual(mainA, renderMain(state));
+    strictEqual(settingsA, renderSettings({ ...state, view: 'settings' }));
+    expect(mainA).toContain('Plan: exhausted'); // the compared output actually carries the plan line
+    expect(settingsA).toContain('id="key-input-qwen-plan"'); // …and the plan-key group
+  });
 });
 
 describe('renderSettings — key management inside the gear (popup-ui spec)', () => {
