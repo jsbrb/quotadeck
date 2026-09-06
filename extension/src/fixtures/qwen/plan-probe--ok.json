@@ -1,0 +1,14 @@
+{
+  "id": "chatcmpl-plan-probe-0001",
+  "object": "chat.completion",
+  "created": 1757107200,
+  "model": "qwen3.6-flash",
+  "choices": [
+    {
+      "index": 0,
+      "message": { "role": "assistant", "content": "h" },
+      "finish_reason": "length"
+    }
+  ],
+  "usage": { "prompt_tokens": 6, "completion_tokens": 1, "total_tokens": 7 }
+}
