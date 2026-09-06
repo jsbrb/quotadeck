@@ -14,6 +14,7 @@ import { HttpStatusError } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
 import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
 import { KeyStore } from './storage/key-store';
+import { writeQwenSite } from './storage/qwen-site-store';
 import { writeZaiPlatform } from './storage/zai-platform-store';
 import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
 import { FakeClock } from './testing/fake-clock';
@@ -138,6 +139,26 @@ class SignedQwenRouteTransport implements Transport {
         ? 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14'
         : request.url;
     return this.routes.fetch({ ...request, url });
+  }
+}
+
+/**
+ * Transport double for the qwen site-selection tests: captures the URL of
+ * every BSS dispatch (the signed query varies per run, so exact-URL routing
+ * cannot prove WHICH host was targeted — the hostname itself is the evidence)
+ * and serves the recorded CN fixture for either BSS host; the tolerant qwen
+ * parse accepts its shape from both sites.
+ */
+class QwenUrlCaptureTransport implements Transport {
+  readonly qwenHosts: string[] = [];
+
+  async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+    const host = new URL(request.url).hostname;
+    if (host === 'business.aliyuncs.com' || host === 'business.ap-southeast-1.aliyuncs.com') {
+      this.qwenHosts.push(host);
+      return FIXTURE_RESPONSES['qwen/query-account-balance--ok'];
+    }
+    throw new Error(`unexpected non-qwen dispatch: ${request.url}`);
   }
 }
 
@@ -274,9 +295,10 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
 });
 
 describe('background — buildTickQuery (usage-badge spec §Live refresh per tick)', () => {
-  it('derives { zaiPlatform, now, trailing-24h OpenAI window } from the injected clock — no months, no tier limits', () => {
-    expect(buildTickQuery(new FakeClock(TICK_NOW), 'zai')).toEqual({
+  it('derives { zaiPlatform, qwenSite, now, trailing-24h OpenAI window } from the injected clock — no months, no tier limits', () => {
+    expect(buildTickQuery(new FakeClock(TICK_NOW), 'zai', 'international')).toEqual({
       zaiPlatform: 'zai',
+      qwenSite: 'international',
       now: TICK_NOW,
       startTime: START_TIME,
       endTime: END_TIME,
@@ -284,8 +306,9 @@ describe('background — buildTickQuery (usage-badge spec §Live refresh per tic
   });
 
   it('carries the stored platform selection through to the query', () => {
-    expect(buildTickQuery(new FakeClock(TICK_NOW), 'zhipu')).toEqual({
+    expect(buildTickQuery(new FakeClock(TICK_NOW), 'zhipu', 'china')).toEqual({
       zaiPlatform: 'zhipu',
+      qwenSite: 'china',
       now: TICK_NOW,
       startTime: START_TIME,
       endTime: END_TIME,
@@ -392,6 +415,48 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['32%']);
+  });
+});
+
+describe('background — Qwen Site Selection (usage-badge spec §Live refresh per tick)', () => {
+  it('targets the international BSS host by default when no site preference is stored', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenUrlCaptureTransport();
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(transport.qwenHosts).toEqual(['business.ap-southeast-1.aliyuncs.com']);
+    expect(h.action.badgeTexts).toEqual(['¥100']); // the cycle completed over the intl host
+  });
+
+  it('targets business.aliyuncs.com when the china site preference is stored', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await writeQwenSite(h.local, 'china');
+    const transport = new QwenUrlCaptureTransport();
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(transport.qwenHosts).toEqual(['business.aliyuncs.com']);
+  });
+
+  it('re-reads the site preference per tick — a change between ticks switches the host', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenUrlCaptureTransport();
+    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW)); // no preference → intl default
+    await writeQwenSite(h.local, 'china');
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW)); // china now stored
+
+    expect(transport.qwenHosts).toEqual([
+      'business.ap-southeast-1.aliyuncs.com',
+      'business.aliyuncs.com',
+    ]);
   });
 });
 

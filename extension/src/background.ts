@@ -12,14 +12,16 @@
 // - One-Shot Refresh Alarm: `refresh-now` (created by the popup) drives the
 //   SAME refresh tick; the periodic registration and cadence stay untouched.
 // - Live refresh per tick: every alarm tick reads the ZAI platform
-//   preference (qd:pref:zai-platform), derives the whole UsageQuery from the
-//   injected Clock + platform (buildTickQuery) and refreshes each keyed
+//   preference (qd:pref:zai-platform) and the Qwen site preference
+//   (qd:pref:qwen-site), derives the whole UsageQuery from the injected
+//   Clock + both selections (buildTickQuery) and refreshes each keyed
 //   provider live; each success updates the badge (registry order, last
 //   result wins).
 // - Error State + Taxonomy: a failed provider renders ERROR_BADGE_TEXT for
 //   every class; the cycle snapshot carries only its ErrorClass (AD-13/21).
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
+import type { QwenSite } from './core/qwen-sites';
 import type { ZaiPlatform } from './core/zai-platforms';
 import { ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
 import { AllowlistNetworkClient } from './network/client';
@@ -30,6 +32,7 @@ import { createDefaultRegistry } from './providers';
 import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
+import { readQwenSite } from './storage/qwen-site-store';
 import { SnapshotStore, type ProviderSnapshotEntry } from './storage/snapshot-store';
 import { readZaiPlatform } from './storage/zai-platform-store';
 
@@ -53,16 +56,19 @@ const OPENAI_WINDOW_SECONDS = 24 * 3_600;
 
 /**
  * Derives the provider-agnostic tick query from the injected clock and the
- * ZAI platform preference (spec §Live refresh per tick — no wall-clock reads
- * inside provider logic): the selected platform determines the base URL of
- * every ZAI monitor request (AD-28), and the OpenAI window is the trailing
- * 24h. The query carries NO billing months and NO tier limits (hito-4).
+ * stored preference selections (spec §Live refresh per tick — no wall-clock
+ * reads inside provider logic): the selected ZAI platform determines the base
+ * URL of every ZAI monitor request (AD-28), the selected Qwen site determines
+ * the base URL of every Qwen BSS request (AD-28 mirror, default
+ * international), and the OpenAI window is the trailing 24h. The query
+ * carries NO billing months and NO tier limits (hito-4).
  */
-export function buildTickQuery(clock: Clock, zaiPlatform: ZaiPlatform): UsageQuery {
+export function buildTickQuery(clock: Clock, zaiPlatform: ZaiPlatform, qwenSite: QwenSite): UsageQuery {
   const now = clock.now();
   const endTime = Math.floor(now / 1000);
   return {
     zaiPlatform,
+    qwenSite,
     now,
     startTime: endTime - OPENAI_WINDOW_SECONDS,
     endTime,
@@ -97,7 +103,8 @@ export function createRefreshEngine(browser: BrowserApi, options: WorkerOptions 
  */
 export async function refreshTick(browser: BrowserApi, engine: RefreshEngine, clock: Clock): Promise<void> {
   const zaiPlatform = await readZaiPlatform(browser.storage.local); // qd:pref:zai-platform (AD-28)
-  const query = buildTickQuery(clock, zaiPlatform);
+  const qwenSite = await readQwenSite(browser.storage.local); // qd:pref:qwen-site (AD-28 mirror)
+  const query = buildTickQuery(clock, zaiPlatform, qwenSite);
   const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {};
   await engine.refreshAll(query, {
     onUsage: (usage) => {
