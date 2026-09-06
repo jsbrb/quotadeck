@@ -34,10 +34,13 @@ export class QwenProvider implements Provider {
       throw new Error(`Qwen requires qwenSite 'international' | 'china', got ${JSON.stringify(site)}.`);
     }
     // RPC-style BSS call: action and API version travel as query parameters.
+    // Format=JSON is mandatory on the international site — POP defaults to XML
+    // there (live-found 2026-09-06: ResponseParseError without it); china
+    // returned JSON either way.
     return {
       method: 'GET',
       url: `${qwenBssBaseUrl(site)}/`,
-      query: { Action: 'QueryAccountBalance', Version: '2017-12-14' },
+      query: { Action: 'QueryAccountBalance', Version: '2017-12-14', Format: 'JSON' },
     };
   }
 

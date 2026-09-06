@@ -79,14 +79,14 @@ describe('QwenProvider site selection (spec §Qwen Parsing — site-selected bas
 
     expect(request.method).toBe('GET');
     expect(request.url).toBe('https://business.ap-southeast-1.aliyuncs.com/');
-    expect(request.query).toEqual({ Action: 'QueryAccountBalance', Version: '2017-12-14' });
+    expect(request.query).toEqual({ Action: 'QueryAccountBalance', Version: '2017-12-14', Format: 'JSON' });
   });
 
   it('targets the china BSS base when qwenSite is china', () => {
     const request = new QwenProvider().firstRequest({ qwenSite: 'china' });
 
     expect(request.url).toBe('https://business.aliyuncs.com/');
-    expect(request.query).toEqual({ Action: 'QueryAccountBalance', Version: '2017-12-14' });
+    expect(request.query).toEqual({ Action: 'QueryAccountBalance', Version: '2017-12-14', Format: 'JSON' });
   });
 
   it('throws before any dispatch when qwenSite is neither international nor china', () => {
