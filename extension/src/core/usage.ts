@@ -102,8 +102,8 @@ export const ERROR_BADGE_TEXT = 'ERR';
 /**
  * Badge background for a 5h-window percentage (hito-10 threshold alerting).
  * Pure and deterministic over the UNCAPPED input (137 stays red): the band
- * deepens as quota runs out — neutral slate <50, orange ≥50, deep orange
- * ≥80, red ≥90. `undefined` (no percentage) renders neutral.
+ * deepens as quota runs out — light neutral slate <50, orange ≥50, deep
+ * orange ≥80, red ≥90. `undefined` (no percentage) renders neutral.
  */
 export function badgeBackgroundColor(percentage: number | undefined): string {
   if (percentage !== undefined && percentage >= 90) {
@@ -115,7 +115,21 @@ export function badgeBackgroundColor(percentage: number | undefined): string {
   if (percentage !== undefined && percentage >= 50) {
     return '#F97316';
   }
-  return '#334155';
+  return '#E2E8F0';
+}
+
+/**
+ * Badge text color paired with `badgeBackgroundColor` (hito-10): the two
+ * functions mirror the SAME band comparisons. Below 50 — and for an absent
+ * percentage — the badge sits on the light slate `#E2E8F0`, so text renders
+ * near-black `#0F172A` for tiny-badge legibility; from 50 upward the bands
+ * are saturated, so text renders white.
+ */
+export function badgeTextColor(percentage: number | undefined): string {
+  if (percentage !== undefined && percentage >= 50) {
+    return '#FFFFFF';
+  }
+  return '#0F172A';
 }
 
 const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = {

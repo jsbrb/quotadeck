@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   badgeBackgroundColor,
+  badgeTextColor,
   ERROR_BADGE_TEXT,
   formatBadgeText,
   type MonitorWindows,
@@ -145,10 +146,10 @@ describe('formatBadgeText', () => {
 });
 
 describe('badgeBackgroundColor — usage threshold colors (hito-10)', () => {
-  it('renders neutral below 50 and for an absent percentage', () => {
-    expect(badgeBackgroundColor(undefined)).toBe('#334155');
-    expect(badgeBackgroundColor(0)).toBe('#334155');
-    expect(badgeBackgroundColor(49)).toBe('#334155');
+  it('renders neutral light slate below 50 and for an absent percentage', () => {
+    expect(badgeBackgroundColor(undefined)).toBe('#E2E8F0');
+    expect(badgeBackgroundColor(0)).toBe('#E2E8F0');
+    expect(badgeBackgroundColor(49)).toBe('#E2E8F0');
   });
 
   it('crosses to orange exactly at 50', () => {
@@ -170,5 +171,25 @@ describe('badgeBackgroundColor — usage threshold colors (hito-10)', () => {
   it('is deterministic: identical input yields identical color across calls', () => {
     expect(badgeBackgroundColor(85)).toBe(badgeBackgroundColor(85));
     expect(badgeBackgroundColor(undefined)).toBe(badgeBackgroundColor(undefined));
+  });
+});
+
+describe('badgeTextColor — pairs with the badgeBackgroundColor bands (hito-10)', () => {
+  it('renders near-black on the neutral band: absent percentage or below 50', () => {
+    expect(badgeTextColor(undefined)).toBe('#0F172A');
+    expect(badgeTextColor(0)).toBe('#0F172A');
+    expect(badgeTextColor(49)).toBe('#0F172A');
+  });
+
+  it('renders white on the saturated bands from exactly 50 upward', () => {
+    expect(badgeTextColor(50)).toBe('#FFFFFF');
+    expect(badgeTextColor(79)).toBe('#FFFFFF');
+    expect(badgeTextColor(137)).toBe('#FFFFFF'); // UNCAPPED input (AD-26)
+  });
+
+  it('is deterministic: identical input yields identical color across calls', () => {
+    expect(badgeTextColor(85)).toBe(badgeTextColor(85));
+    expect(badgeTextColor(undefined)).toBe(badgeTextColor(undefined));
+    expect(badgeTextColor(49)).not.toBe(badgeTextColor(50)); // the 49/50 boundary decides the band
   });
 });

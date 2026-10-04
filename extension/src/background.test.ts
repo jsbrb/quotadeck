@@ -479,7 +479,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
 });
 
 describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
-  it('success tick sets the background from the 5h percentage and white text color beside the badge text', async () => {
+  it('success tick sets background + text color from the 5h percentage band beside the badge text', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai']);
     const engine = createRefreshEngine(h.api, {
@@ -490,8 +490,8 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['32%']);
-    expect(h.action.badgeBackgrounds).toEqual(['#334155']); // 32 < 50 → neutral band, success path still writes color + white text
-    expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // 32 < 50 → light neutral band with dark text
+    expect(h.action.badgeTextColors).toEqual(['#0F172A']);
   });
 
   it('an uncapped 137% tick colors the badge red', async () => {
@@ -509,7 +509,7 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
     expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
   });
 
-  it('error tick sets the neutral background beside the ERR text and never a threshold color (retained kimi graph)', async () => {
+  it('error tick sets the neutral light background and dark text beside the ERR text, never a threshold color (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     const engine = engineForProviders(h.api, ['kimi'], {
@@ -520,8 +520,8 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(h.action.badgeTexts).toEqual(['ERR']);
-    expect(h.action.badgeBackgrounds).toEqual(['#334155']); // neutral, not a threshold band
-    expect(h.action.badgeTextColors).toEqual([]); // no text-color write on the error arm
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // neutral light band, not a threshold band
+    expect(h.action.badgeTextColors).toEqual(['#0F172A']); // dark text — ERR must not end up white-on-light
   });
 });
 

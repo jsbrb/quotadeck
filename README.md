@@ -37,11 +37,11 @@ specs and design.
    clock; the badge shows the last successful result — for ZAI the 5h
    percentage (uncapped above 100) with the plan level as fallback.
 4. The badge background is threshold-colored from that 5h percentage, so the
-   state reads at a glance: neutral slate `#334155` below 50%, orange
-   `#F97316` from 50%, deep orange `#EA580C` from 80%, red `#DC2626` from 90%
-   (uncapped — 137% is still red). Badge text renders white on every band; a
-   failed refresh shows `ERR` on the neutral slate until the next successful
-   tick (≤1 minute).
+   state reads at a glance: light slate `#E2E8F0` below 50% with near-black
+   text `#0F172A`, orange `#F97316` from 50%, deep orange `#EA580C` from 80%,
+   and red `#DC2626` from 90% (uncapped — 137% is still red), with white text
+   from 50% upward. A failed refresh shows `ERR` on the same light band with
+   near-black text until the next successful tick (≤1 minute).
 5. Clicking the toolbar action opens the popup on the consumption view: the
    ZAI monitor block (plan level, the 5h window with its uncapped percentage,
    used/total and reset countdown, the weekly window, and the MCP window with
