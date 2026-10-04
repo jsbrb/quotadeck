@@ -1,0 +1,46 @@
+{
+  "object": "list",
+  "has_more": true,
+  "next_page": "costs_page2_cursor_9f3ab2c1",
+  "results": [
+    {
+      "object": "organization.cost.item",
+      "start_time": "2026-08-04",
+      "end_time": "2026-08-05",
+      "amount": {
+        "value": "10.50",
+        "currency": "usd"
+      },
+      "line_item": {
+        "model": "gpt-5.3",
+        "usage_type": "input_tokens"
+      }
+    },
+    {
+      "object": "organization.cost.item",
+      "start_time": "2026-08-05",
+      "end_time": "2026-08-06",
+      "amount": {
+        "value": "4.25",
+        "currency": "usd"
+      },
+      "line_item": {
+        "model": "gpt-5.3",
+        "usage_type": "output_tokens"
+      }
+    },
+    {
+      "object": "organization.cost.item",
+      "start_time": "2026-08-06",
+      "end_time": "2026-08-07",
+      "amount": {
+        "value": "2.00",
+        "currency": "usd"
+      },
+      "line_item": {
+        "model": "gpt-5.3",
+        "usage_type": "input_tokens"
+      }
+    }
+  ]
+}

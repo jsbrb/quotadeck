@@ -1,0 +1,21 @@
+{
+  "code": 200,
+  "msg": "Operation successful",
+  "data": {
+    "limits": [
+      {
+        "type": "TIME_LIMIT",
+        "unit": 3,
+        "number": 4,
+        "currentValue": 3,
+        "usage": 60,
+        "usageDetails": [
+          { "modelCode": "web-search", "usage": 2 },
+          { "modelCode": "deep-research", "usage": 1 }
+        ]
+      }
+    ],
+    "level": "Pro"
+  },
+  "success": true
+}

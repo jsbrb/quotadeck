@@ -1,0 +1,9 @@
+{
+  "code": 0,
+  "message": "ok",
+  "data": {
+    "available_balance": 88.88,
+    "voucher_balance": 11.12,
+    "cash_balance": 77.76
+  }
+}

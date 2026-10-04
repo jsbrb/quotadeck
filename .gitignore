@@ -5,6 +5,9 @@ node_modules/
 dist/
 build/
 
+# Store packaging artifact (built from dist/, never committed)
+extension/*.zip
+
 # Local agent tooling
 .atl/
 

@@ -1,0 +1,9 @@
+{
+  "RequestId": "8C1D4E79-2A7F-4B63-9D50-1F6E8A2C4B71",
+  "Code": "200",
+  "Success": true,
+  "Data": {
+    "AvailableAmount": "0.00",
+    "Currency": "USD"
+  }
+}
