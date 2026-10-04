@@ -19,6 +19,13 @@ describe('milestone copy (AD-24)', () => {
     );
   });
 
+  it('declares the minimum Chrome version the badge color APIs require (review R3-1)', () => {
+    const manifest = JSON.parse(read('../public/manifest.json')) as { minimum_chrome_version?: string };
+    // setBadgeTextColor ships in Chrome 110 (hito-10); the manifest must gate
+    // older installs instead of throwing inside every success tick.
+    expect(manifest.minimum_chrome_version).toBe('110');
+  });
+
   it('no shipped artifact still calls the milestone fixture-only', () => {
     for (const [label, source] of [
       ['README', read('../../README.md')],
