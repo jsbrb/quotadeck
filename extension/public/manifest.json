@@ -1,11 +1,23 @@
 {
   "manifest_version": 3,
   "name": "quotadeck",
-  "version": "0.1.0",
-  "description": "Provider usage and balance badge",
+  "version": "0.2.0",
+  "description": "Track your GLM Coding Plan usage live — 5-hour and weekly token windows, MCP quota and balance in one toolbar badge.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
     "default_title": "quotadeck",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "background": {
     "service_worker": "background.js"

@@ -13,7 +13,10 @@ const read = (relative: string): string => readFileSync(join(here, relative), 'u
 describe('milestone copy (AD-24)', () => {
   it('the manifest description announces live provider usage', () => {
     const manifest = JSON.parse(read('../public/manifest.json')) as { description: string };
-    expect(manifest.description).toBe('Provider usage and balance badge');
+    // Store listing copy (hito-10): GLM Coding Plan usage, verbatim from the manifest.
+    expect(manifest.description).toBe(
+      'Track your GLM Coding Plan usage live — 5-hour and weekly token windows, MCP quota and balance in one toolbar badge.',
+    );
   });
 
   it('no shipped artifact still calls the milestone fixture-only', () => {
