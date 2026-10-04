@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { Credential, ProviderId, UsageQuery } from '../core/provider';
+import type { Credential, Provider, ProviderId, UsageQuery } from '../core/provider';
 import type { NormalizedUsage } from '../core/usage';
 import { ProviderRegistry } from '../core/registry';
 import { FIXTURE_RESPONSES } from '../fixtures';
-import { createDefaultRegistry } from '../providers';
+import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from '../providers';
 import { AllowlistNetworkClient } from '../network/client';
 import { KeyStore } from '../storage/key-store';
 import { FakeBrowser } from '../testing/fake-browser';
@@ -23,14 +23,19 @@ const QUERY: UsageQuery = {
   endTime: 1754179200,
 };
 
-/** Registry containing exactly the given ids, in the default registration order. */
+/** Concrete class per id — the default registry only registers SHIPPED_PROVIDER_IDS (hito-10). */
+const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
+  zai: () => new ZaiProvider(),
+  qwen: () => new QwenProvider(),
+  openai: () => new OpenAiProvider(),
+  kimi: () => new KimiProvider(),
+};
+
+/** Registry containing exactly the given ids, in the given (pinned-subset) order. */
 function keyedRegistry(ids: readonly ProviderId[]): ProviderRegistry {
-  const full = createDefaultRegistry();
   const registry = new ProviderRegistry();
-  for (const id of full.ids()) {
-    if (ids.includes(id)) {
-      registry.register(full.get(id));
-    }
+  for (const id of ids) {
+    registry.register(PROVIDER_CLASSES[id]());
   }
   return registry;
 }
@@ -200,7 +205,7 @@ describe('RefreshEngine — credential threading (AD-17/19)', () => {
   };
 
   it('refreshAll reads the qwen pair via readCredential(id, type) and threads it to send as a signed query', async () => {
-    const registry = new ProviderRegistry().register(createDefaultRegistry().get('qwen'));
+    const registry = new ProviderRegistry().register(new QwenProvider());
     const transport = new RecordingTransport([FIXTURE_RESPONSES['qwen/query-account-balance--ok']]);
     const keys = new KeyStore(new FakeBrowser().local);
     await keys.saveCredential('qwen', QWEN_PAIR);
@@ -224,7 +229,7 @@ describe('RefreshEngine — credential threading (AD-17/19)', () => {
   });
 
   it('threads the raw ZAI credential so the client attaches it verbatim', async () => {
-    const registry = new ProviderRegistry().register(createDefaultRegistry().get('zai'));
+    const registry = new ProviderRegistry().register(new ZaiProvider());
     const transport = new RecordingTransport([FIXTURE_RESPONSES['zai/monitor--pro-plan']]);
     const keys = new KeyStore(new FakeBrowser().local);
     await keys.saveCredential('zai', TEST_CREDENTIALS.zai!);
@@ -245,7 +250,7 @@ describe('RefreshEngine — credential threading (AD-17/19)', () => {
   });
 
   it('skips qwen when only a legacy plain string is stored — zero dispatch, zero errors', async () => {
-    const registry = new ProviderRegistry().register(createDefaultRegistry().get('qwen'));
+    const registry = new ProviderRegistry().register(new QwenProvider());
     const transport = new RecordingTransport(); // empty queue: any dispatch would throw
     const browser = new FakeBrowser();
     await browser.local.set({ 'qd:key:qwen': 'legacy-hito2-string-key' }); // pre-Credential shape

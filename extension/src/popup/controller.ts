@@ -28,7 +28,7 @@
 // provider class, endpoint URL or parse code enters the popup bundle.
 import { validateCredential } from '../core/credentials';
 import type { Credential, CredentialType, ProviderId } from '../core/provider';
-import { PROVIDER_METADATA } from '../core/provider-metadata';
+import { PROVIDER_METADATA, SHIPPED_PROVIDER_IDS } from '../core/provider-metadata';
 import type { QwenSite } from '../core/qwen-sites';
 import type { ZaiPlatform } from '../core/zai-platforms';
 import type { BrowserApi } from '../platform/browser-api';
@@ -64,7 +64,12 @@ function slotCredentialType(slot: CredentialSlot): CredentialType {
 }
 
 export function startPopup(deps: PopupDeps): void {
-  const providers: readonly PopupProvider[] = PROVIDER_METADATA; // popup-safe metadata (AD-24)
+  // Shipped-subset composition (hito-10): the card/settings list is the
+  // SHIPPED_PROVIDER_IDS slice of the popup-safe metadata — keyed state for
+  // unshipped providers never renders (AD-24 metadata, pinned order kept).
+  const providers: readonly PopupProvider[] = PROVIDER_METADATA.filter((metadata) =>
+    SHIPPED_PROVIDER_IDS.includes(metadata.id),
+  );
   const metadataFor = (id: ProviderId) => PROVIDER_METADATA.find((metadata) => metadata.id === id)!;
   const keys = new KeyStore(deps.browser.storage.local);
   const snapshots = new SnapshotStore(deps.browser.storage.local);

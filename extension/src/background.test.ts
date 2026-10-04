@@ -8,13 +8,19 @@ import {
   REFRESH_PERIOD_MINUTES,
   startWorker,
   USAGE_REFRESH_ALARM,
+  type WorkerOptions,
 } from './background';
-import type { Credential, ProviderId } from './core/provider';
+import { SystemClock } from './core/clock';
+import type { Credential, Provider, ProviderId } from './core/provider';
+import { ProviderRegistry } from './core/registry';
 import { FIXTURE_RESPONSES } from './fixtures';
-import { HttpStatusError } from './network/fetch-transport';
+import { AllowlistNetworkClient } from './network/client';
+import { HttpStatusError, FetchTransport } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
+import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from './providers';
 import { QWEN_PLAN_PROBE_HOST } from './providers/qwen-plan-probe';
 import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
+import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
 import { QWEN_PLAN_STATUS_STORAGE_KEY } from './storage/qwen-plan-store';
 import { writeQwenSite } from './storage/qwen-site-store';
@@ -115,6 +121,37 @@ async function saveKeys(local: FakeStorageArea, ids: readonly ProviderId[]): Pro
   for (const id of ids) {
     await keys.saveCredential(id, TEST_CREDENTIALS[id]);
   }
+}
+
+/** Concrete class per id — mirrors providers/index.ts wiring for explicit test registries. */
+const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
+  zai: () => new ZaiProvider(),
+  qwen: () => new QwenProvider(),
+  openai: () => new OpenAiProvider(),
+  kimi: () => new KimiProvider(),
+};
+
+/**
+ * Engine graph over an EXPLICIT provider set (hito-10): the default registry
+ * ships zai only, so retained non-zai integration coverage composes its own
+ * registry from the provider classes — same engine graph as production, no
+ * production seam involved.
+ */
+function engineForProviders(
+  browser: BrowserApi,
+  ids: readonly ProviderId[],
+  options: WorkerOptions = {},
+): RefreshEngine {
+  const registry = new ProviderRegistry();
+  for (const id of ids) {
+    registry.register(PROVIDER_CLASSES[id]());
+  }
+  return new RefreshEngine({
+    registry,
+    client: new AllowlistNetworkClient(options.transport ?? new FetchTransport()),
+    keys: new KeyStore(browser.storage.local),
+    clock: options.clock ?? new SystemClock(),
+  });
 }
 
 /**
@@ -247,9 +284,9 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
 });
 
 describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
-  it('firing refresh-now runs the shared refresh tick: badges render and exactly one snapshot write lands', async () => {
+  it('firing refresh-now runs the shared refresh tick: the shipped zai badge renders and exactly one snapshot write lands', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS);
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only shipped providers register (hito-10)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -260,14 +297,14 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
     h.alarms.fire(REFRESH_NOW_ALARM);
     await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
 
-    expect(h.action.badgeTexts).toEqual(['32%', '¥100', '$20', '¥89']); // identical to a periodic tick
+    expect(h.action.badgeTexts).toEqual(['32%']); // zai ships alone — one badge per tick
     expect(h.alarms.creates).toEqual([USAGE_REFRESH_ALARM]); // the worker registers ONLY the periodic alarm
     await expect(h.alarms.get(REFRESH_NOW_ALARM)).resolves.toBeUndefined();
   });
 
   it('leaves the periodic schedule unchanged after a refresh-now fire: still registered, period 1, no duplicate create', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ['kimi']);
+    await saveKeys(h.local, ['zai']);
     startWorker(h.api, { clock: new FixedClock(), transport: new FixtureTransport(liveRoutes()) });
     h.fireInstalled();
     await flushTasks();
@@ -284,7 +321,7 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
 
   it('ignores unknown alarm names: no badge writes, no snapshot write', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS);
+    await saveKeys(h.local, ['zai']);
     startWorker(h.api, { clock: new FixedClock(), transport: new FixtureTransport(liveRoutes()) });
     h.fireInstalled();
     await flushTasks();
@@ -320,9 +357,9 @@ describe('background — buildTickQuery (usage-badge spec §Live refresh per tic
 });
 
 describe('background — Badge Rendering + refresh per tick (usage-badge spec)', () => {
-  it('updates the badge on every tick: one deterministic text per keyed provider, last result wins, stable across repeated ticks', async () => {
+  it('the shipped worker badges the shipped subset only: one zai text per tick, stable across repeated ticks', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS);
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only zai registers (hito-10)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -330,12 +367,28 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['32%', '¥100', '$20', '¥89'];
+    const perTick = ['32%'];
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(perTick));
 
-    h.alarms.fire(USAGE_REFRESH_ALARM); // repeated tick, identical fixture results
+    h.alarms.fire(USAGE_REFRESH_ALARM); // repeated tick, identical fixture result
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]));
+  });
+
+  it('refreshes keyed providers sequentially in registry order and accumulates one text per provider per tick (retained multi-provider graph)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai', 'kimi']);
+    const engine = engineForProviders(h.api, ['zai', 'kimi'], {
+      clock: new FixedClock(),
+      transport: new FixtureTransport(liveRoutes()),
+    });
+
+    const perTick = ['32%', '¥89']; // registry order: zai then kimi — last result wins deterministically
+    await refreshTick(h.api, engine, new FixedClock());
+    expect(h.action.badgeTexts).toEqual(perTick);
+
+    await refreshTick(h.api, engine, new FixedClock()); // repeated tick, identical fixture results
+    expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
   });
 
   it('renders the 5h percentage uncapped — 137 stays 137%', async () => {
@@ -364,23 +417,27 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     expect(h.action.badgeTexts).toEqual(['Lite']); // absent pct → level (AD-26)
   });
 
-  it('refreshes only keyed providers — unkeyed providers leave the badge untouched', async () => {
+  it('refreshes only keyed providers — unkeyed providers leave the badge untouched (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
-    startWorker(h.api, { clock: new FixedClock(), transport: new FixtureTransport(liveRoutes()) });
+    const engine = engineForProviders(h.api, ['kimi'], {
+      clock: new FixedClock(),
+      transport: new FixtureTransport(liveRoutes()),
+    });
 
-    h.alarms.fire(USAGE_REFRESH_ALARM);
-    await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(['¥89']));
+    await refreshTick(h.api, engine, new FixedClock());
+
+    expect(h.action.badgeTexts).toEqual(['¥89']);
   });
 
-  it('dispatches live-shaped requests whose time parameters derive from the clock', async () => {
+  it('dispatches live-shaped requests whose time parameters derive from the clock (retained openai graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'openai']);
     // Routes are keyed ONLY at clock-derived URLs: the ZAI monitor route has
     // no time parameter (single-shot), the OpenAI pages match only when the
     // start/end window comes from the clock — any wall-clock or fixture-table
     // query misses.
-    const engine = createRefreshEngine(h.api, {
+    const engine = engineForProviders(h.api, ['zai', 'openai'], {
       clock: new FakeClock(TICK_NOW),
       transport: new FixtureTransport(liveRoutes()),
     });
@@ -452,10 +509,10 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
     expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
   });
 
-  it('error tick sets the neutral background beside the ERR text and never a threshold color', async () => {
+  it('error tick sets the neutral background beside the ERR text and never a threshold color (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
-    const engine = createRefreshEngine(h.api, {
+    const engine = engineForProviders(h.api, ['kimi'], {
       transport: new FixtureTransport({}), // no routes → every dispatch fails
       clock: new FakeClock(TICK_NOW),
     });
@@ -468,12 +525,12 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
   });
 });
 
-describe('background — Qwen Site Selection (usage-badge spec §Live refresh per tick)', () => {
+describe('background — Qwen Site Selection (usage-badge spec §Live refresh per tick; retained qwen graph)', () => {
   it('targets the international BSS host by default when no site preference is stored', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['qwen']);
     const transport = new QwenUrlCaptureTransport();
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
@@ -486,7 +543,7 @@ describe('background — Qwen Site Selection (usage-badge spec §Live refresh pe
     await saveKeys(h.local, ['qwen']);
     await writeQwenSite(h.local, 'china');
     const transport = new QwenUrlCaptureTransport();
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
@@ -497,7 +554,7 @@ describe('background — Qwen Site Selection (usage-badge spec §Live refresh pe
     const h = makeApi();
     await saveKeys(h.local, ['qwen']);
     const transport = new QwenUrlCaptureTransport();
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW)); // no preference → intl default
     await writeQwenSite(h.local, 'china');
@@ -510,7 +567,7 @@ describe('background — Qwen Site Selection (usage-badge spec §Live refresh pe
   });
 });
 
-describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan Probe Cadence)', () => {
+describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan Probe Cadence; retained qwen graph)', () => {
   /**
    * Transport double for the hybrid qwen legs: serves the recorded balance
    * fixture on either BSS host and a configurable probe outcome on the
@@ -562,7 +619,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     await savePlanKey(h.local);
     await h.local.set({ [QWEN_PLAN_STATUS_STORAGE_KEY]: { status: 'available', probedAt: TICK_NOW - 30 * 60_000 } });
     const transport = new QwenHybridTransport(probeAnswer(200));
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
@@ -577,7 +634,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     await savePlanKey(h.local);
     await h.local.set({ [QWEN_PLAN_STATUS_STORAGE_KEY]: { status: 'exhausted', probedAt: TICK_NOW - 20 * 60_000 } }); // > 15 min
     const transport = new QwenHybridTransport(probeAnswer(200));
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
@@ -591,7 +648,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     const h = makeApi();
     await saveKeys(h.local, ['qwen']); // AK/SK only
     const transport = new QwenHybridTransport(probeAnswer(200));
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
@@ -606,7 +663,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     await saveKeys(h.local, ['qwen']);
     await savePlanKey(h.local);
     const transport = new QwenHybridTransport(probeAnswer(429, RESET_TEXT));
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
@@ -625,7 +682,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     const planOnlyTransport = new QwenHybridTransport(probeAnswer(200));
     await refreshTick(
       planOnly.api,
-      createRefreshEngine(planOnly.api, { clock: new FakeClock(TICK_NOW), transport: planOnlyTransport }),
+      engineForProviders(planOnly.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport: planOnlyTransport }),
       new FakeClock(TICK_NOW),
       createQwenPlanStep(planOnly.api, { clock: new FakeClock(TICK_NOW), transport: planOnlyTransport }),
     );
@@ -649,7 +706,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     );
     await refreshTick(
       failing.api,
-      createRefreshEngine(failing.api, { clock: new FakeClock(TICK_NOW), transport: failingTransport }),
+      engineForProviders(failing.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport: failingTransport }),
       new FakeClock(TICK_NOW),
       createQwenPlanStep(failing.api, { clock: new FakeClock(TICK_NOW), transport: failingTransport }),
     );
@@ -667,7 +724,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     const transport = new QwenHybridTransport(() => {
       throw new TypeError('Failed to fetch'); // non-HTTP classification
     });
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
@@ -684,7 +741,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     const transport = new QwenHybridTransport(() => {
       throw new TypeError('Failed to fetch');
     });
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -700,7 +757,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     await saveKeys(h.local, ['qwen']);
     await savePlanKey(h.local);
     const transport = new QwenHybridTransport(probeAnswer(500, 'boom'));
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -717,7 +774,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     await saveKeys(h.local, ['qwen']);
     await savePlanKey(h.local);
     const transport = new QwenHybridTransport(probeAnswer(429, 'HTTP 429: {"Code":"Throttling"}'));
-    const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW), transport });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
@@ -729,7 +786,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
 });
 
 describe('background — default live transport (FetchTransport, AD-19)', () => {
-  it('dispatches through the real fetch when no transport is injected', async () => {
+  it('dispatches through the real fetch when no transport is injected (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     vi.stubGlobal('fetch', async () => ({
@@ -738,7 +795,7 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       json: async () => ({ data: { available_balance: '88.88' } }),
     }));
     try {
-      const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW) }); // no transport
+      const engine = engineForProviders(h.api, ['kimi'], { clock: new FakeClock(TICK_NOW) }); // no transport
       await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
     } finally {
       vi.unstubAllGlobals();
@@ -747,12 +804,12 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
     expect(h.action.badgeTexts).toEqual(['¥89']); // the live fetch answered
   });
 
-  it('a fetch-level network failure classifies as network and badges ERR', async () => {
+  it('a fetch-level network failure classifies as network and badges ERR (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')));
     try {
-      const engine = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW) });
+      const engine = engineForProviders(h.api, ['kimi'], { clock: new FakeClock(TICK_NOW) });
       await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
     } finally {
       vi.unstubAllGlobals();
@@ -763,9 +820,9 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
     expect(stored.results.kimi).toEqual({ status: 'error', errorClass: 'network' });
   });
 
-  it('hermetic proof: an injected transport serves the full four-provider tick with the global fetch forbidden', async () => {
+  it('hermetic proof: an injected transport serves the shipped tick with the global fetch forbidden', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS);
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10)
     vi.stubGlobal('fetch', () => {
       throw new Error('live network is forbidden in the hermetic suite');
     });
@@ -779,18 +836,18 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['32%', '¥100', '$20', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['32%']); // zai ships alone
   });
 });
 
 describe('background — Error State (usage-badge spec)', () => {
-  it('shows ERR after an injected failure and the next successful tick replaces it', async () => {
+  it('shows ERR after an injected failure and the next successful tick replaces it (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
 
     // Tick 1 — injected failure: a FixtureTransport with NO routes throws on
     // every fetch; there is no fallback, so the refresh fails.
-    const failing = createRefreshEngine(h.api, {
+    const failing = engineForProviders(h.api, ['kimi'], {
       transport: new FixtureTransport({}),
       clock: new FakeClock(TICK_NOW),
     });
@@ -803,7 +860,7 @@ describe('background — Error State (usage-badge spec)', () => {
       json: async () => ({ data: { available_balance: '88.88' } }),
     }));
     try {
-      const recovering = createRefreshEngine(h.api, { clock: new FakeClock(TICK_NOW) });
+      const recovering = engineForProviders(h.api, ['kimi'], { clock: new FakeClock(TICK_NOW) });
       await refreshTick(h.api, recovering, new FakeClock(TICK_NOW));
     } finally {
       vi.unstubAllGlobals();
@@ -812,7 +869,7 @@ describe('background — Error State (usage-badge spec)', () => {
     expect(h.action.badgeTexts).toEqual(['ERR', '¥89']);
   });
 
-  it('replaces the marker within the same tick when a later provider succeeds', async () => {
+  it('replaces the marker within the same tick when a later provider succeeds (retained zai+kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
     // Recorded ZAI failure fixture routed at the monitor URL — the
@@ -821,7 +878,7 @@ describe('background — Error State (usage-badge spec)', () => {
       ...liveRoutes(),
       [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--code-string-200'],
     };
-    const engine = createRefreshEngine(h.api, {
+    const engine = engineForProviders(h.api, ['zai', 'kimi'], {
       transport: new FixtureTransport(routes),
       clock: new FakeClock(TICK_NOW),
     });
@@ -848,10 +905,10 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
     ['server', () => new HttpStatusError(500)],
     ['network', () => new TypeError('Failed to fetch')],
     ['unknown', () => new Error('unmapped failure')],
-  ] as const)('classifies %s: badge ERR and the snapshot entry carries the class', async (expected, makeError) => {
+  ] as const)('classifies %s: badge ERR and the snapshot entry carries the class (retained kimi graph)', async (expected, makeError) => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
-    const engine = createRefreshEngine(h.api, {
+    const engine = engineForProviders(h.api, ['kimi'], {
       transport: new FailingTransport(makeError()),
       clock: new FakeClock(TICK_NOW),
     });
@@ -898,9 +955,9 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
 });
 
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
-  it('tick writes exactly one snapshot per completed cycle: ok entries carry the cycle usage incl. monitor windows', async () => {
+  it('tick writes exactly one snapshot per completed cycle: the shipped ok entry carries the monitor windows', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS);
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -908,7 +965,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['32%', '¥100', '$20', '¥89'];
+    const perTick = ['32%'];
     h.alarms.fire(USAGE_REFRESH_ALARM);
     // The snapshot write is the tick's LAST operation — once it lands, the
     // badge sequence is final, so both can be asserted deterministically.
@@ -920,7 +977,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
 
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    expect(Object.keys(stored.results)).toEqual([...ALL_KEYS]);
+    expect(Object.keys(stored.results)).toEqual(['zai']); // zai ships alone (hito-10)
     expect(stored.results.zai).toEqual({
       status: 'ok',
       usage: expect.objectContaining({
@@ -943,38 +1000,37 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
         },
       }),
     });
-    expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 100.28, currency: 'CNY' }) });
-    expect(stored.results.openai).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 20, currency: 'usd' }) });
-    expect(stored.results.kimi).toMatchObject({ status: 'ok', usage: expect.objectContaining({ value: 88.88, currency: 'CNY' }) });
   });
 
-  it('unkeyed providers have no snapshot entry and no credential material reaches the snapshot', async () => {
+  it('unkeyed providers have no snapshot entry and no credential material reaches the snapshot (retained zai+kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
-    startWorker(h.api, { clock: new FakeClock(TICK_NOW), transport: new FixtureTransport(liveRoutes()) });
+    const engine = engineForProviders(h.api, ['zai', 'kimi'], {
+      clock: new FixedClock(),
+      transport: new FixtureTransport(liveRoutes()),
+    });
 
-    h.alarms.fire(USAGE_REFRESH_ALARM);
-    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
+    await refreshTick(h.api, engine, new FixedClock());
 
     expect(h.action.badgeTexts).toEqual(['32%', '¥89']);
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    expect(Object.keys(stored.results)).toEqual(['zai', 'kimi']); // qwen + openai absent
+    expect(Object.keys(stored.results)).toEqual(['zai', 'kimi']); // unkeyed qwen + openai absent
     expect(JSON.stringify(stored)).not.toContain('fixture-milestone-key');
   });
 
-  it('a failed provider records its class entry while its badge path stays unchanged', async () => {
+  it('a failed provider records its class entry while its badge path stays unchanged (retained zai+kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
     const routes = {
       ...liveRoutes(),
       [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--code-string-200'],
     };
-    const engine = createRefreshEngine(h.api, {
+    const engine = engineForProviders(h.api, ['zai', 'kimi'], {
       transport: new FixtureTransport(routes),
-      clock: new FakeClock(TICK_NOW),
+      clock: new FixedClock(),
     });
 
-    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+    await refreshTick(h.api, engine, new FixedClock());
 
     expect(h.action.badgeTexts).toEqual(['ERR', '¥89']); // usage-badge behavior, byte-identical
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;

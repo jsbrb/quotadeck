@@ -18,3 +18,11 @@ export const PROVIDER_METADATA: readonly ProviderMetadata[] = [
   { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
   { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
 ];
+
+/**
+ * Providers shipping in the current build (hito-10 GLM-only store release):
+ * the single source of the shipping filter. The default registry, the popup
+ * composition, and the manifest host_permissions derivation all subset
+ * through this list; non-shipped implementations stay in source, unshipped.
+ */
+export const SHIPPED_PROVIDER_IDS: readonly ProviderId[] = ['zai'];

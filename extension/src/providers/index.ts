@@ -4,7 +4,7 @@
 // the engine refreshes in registration order, which makes the badge's "last
 // result wins" deterministic.
 import { ProviderRegistry } from '../core/registry';
-import { PROVIDER_METADATA } from '../core/provider-metadata';
+import { PROVIDER_METADATA, SHIPPED_PROVIDER_IDS } from '../core/provider-metadata';
 import type { Provider, ProviderId } from '../core/provider';
 import { KimiProvider } from './kimi';
 import { OpenAiProvider } from './openai';
@@ -21,11 +21,17 @@ const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
   kimi: () => new KimiProvider(),
 };
 
-/** Registry built from PROVIDER_METADATA in its pinned order. */
+/**
+ * Registry built from PROVIDER_METADATA in its pinned order, filtered to
+ * SHIPPED_PROVIDER_IDS (hito-10): non-shipped implementations stay in source
+ * but never register, so the worker refreshes only shipped providers.
+ */
 export function createDefaultRegistry(): ProviderRegistry {
   const registry = new ProviderRegistry();
   for (const { id } of PROVIDER_METADATA) {
-    registry.register(PROVIDER_CLASSES[id]());
+    if (SHIPPED_PROVIDER_IDS.includes(id)) {
+      registry.register(PROVIDER_CLASSES[id]());
+    }
   }
   return registry;
 }

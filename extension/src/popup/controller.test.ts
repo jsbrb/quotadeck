@@ -9,11 +9,9 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { QWEN_AK_SK_GUIDANCE, QWEN_PLAN_KEY_GUIDANCE } from '../core/credentials';
 import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
-import { QWEN_SITE_STORAGE_KEY } from '../storage/qwen-site-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
 import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY, SnapshotStore } from '../storage/snapshot-store';
 import { FakeBrowser, type FakeStorageArea } from '../testing/fake-browser';
@@ -48,7 +46,7 @@ const PROVIDER_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
   kimi: { type: 'bearer', token: 'sk-kimi-bbbb2222' },
 };
 
-/** Seeds every provider credential — the main view filter then keeps all cards. */
+/** Seeds every provider credential — the shipped-subset filter then keeps only the zai card (hito-10). */
 async function seedAllKeys(local: FakeStorageArea): Promise<void> {
   const keys = new KeyStore(local);
   for (const [id, credential] of Object.entries(PROVIDER_CREDENTIALS) as Array<[ProviderId, Credential]>) {
@@ -56,8 +54,9 @@ async function seedAllKeys(local: FakeStorageArea): Promise<void> {
   }
 }
 
-async function seedKey(local: FakeStorageArea, id: ProviderId, credential: string): Promise<void> {
-  await new KeyStore(local).saveCredential(id, { type: 'bearer', token: credential } as const);
+/** Seeds one raw ZAI credential (the only shipped slot). */
+async function seedZaiKey(local: FakeStorageArea, token: string): Promise<void> {
+  await new KeyStore(local).saveCredential('zai', { type: 'raw', token } as const);
 }
 
 async function seedSnapshot(local: FakeStorageArea, snapshot: CycleSnapshot): Promise<void> {
@@ -121,7 +120,7 @@ const LAST_CYCLE: CycleSnapshot = {
 };
 
 describe('controller — Current Cycle Data on Open, main view (popup-ui spec)', () => {
-  it('opens on the main view: usage, ZAI monitor block, per-class error label', async () => {
+  it('opens on the main view: usage, ZAI monitor block — and ONLY the shipped zai card (hito-10)', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, LAST_CYCLE);
     await seedAllKeys(h.local); // hito-6: cards render for keyed providers only
@@ -135,20 +134,25 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     expect(document.querySelector('.hero-percentage')?.textContent).toBe('137%'); // dual hero (hito-6)
     expect(text).toContain('Weekly: 42% · 5040 / 12000');
     expect(text).toContain('MCP: 3 / 60');
-    expect(text).toContain('$20.00');
-    expect(text).toContain('¥88.88');
-    expect(text).toContain('Auth failed'); // qwen error entry, per class (AD-21/22)
+    // Shipped-subset pin (hito-10): stored keys for qwen/openai/kimi never
+    // render — the card list is the shipped subset, not the keyed set.
+    expect(text).not.toContain('$20.00'); // openai unshipped
+    expect(text).not.toContain('¥88.88'); // kimi unshipped
+    expect(text).not.toContain('Auth failed'); // qwen unshipped — its error entry never renders
+    expect(text).not.toContain('Qwen (Alibaba Cloud BSS)');
+    expect(text).not.toContain('OpenAI');
+    expect(text).not.toContain('Kimi (Moonshot AI)');
   });
 
-  it('opens with an empty state per KEYED provider when no cycle has completed yet', async () => {
+  it('opens with an empty state per KEYED SHIPPED provider when no cycle has completed yet', async () => {
     const h = makePopupHarness();
-    await seedAllKeys(h.local); // keyed, no snapshot → "No cycle data yet" per card
+    await seedAllKeys(h.local); // keyed, no snapshot → one "No cycle data yet" card (zai only, hito-10)
     mountApp();
 
     await openPopup(h);
 
     const text = document.body.textContent ?? '';
-    expect(text.match(/No cycle data yet/g)).toHaveLength(4);
+    expect(text.match(/No cycle data yet/g)).toHaveLength(1);
   });
 
   it('keyless providers render no card at all on open — the noise card is gone (hito-6)', async () => {
@@ -181,8 +185,10 @@ describe('controller — Settings Gear Surface (popup-ui spec)', () => {
 
     document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('Settings'));
-    // One form per provider PLUS the qwen plan-key group (hito-8 dual credential).
-    expect(document.querySelectorAll('#app form.key-form')).toHaveLength(5);
+    // One form per SHIPPED provider (hito-10): the qwen section (and its
+    // plan-key group) rides the unshipped list — zai is the only form.
+    expect(document.querySelectorAll('#app form.key-form')).toHaveLength(1);
+    expect(document.querySelector('#app form.key-form')?.getAttribute('data-provider')).toBe('zai');
 
     document.querySelector<HTMLButtonElement>('[data-action="back"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('quotadeck'));
@@ -191,15 +197,15 @@ describe('controller — Settings Gear Surface (popup-ui spec)', () => {
 
   it('a stored key shows masked inside settings only — never in the main view', async () => {
     const h = makePopupHarness();
-    await seedKey(h.local, 'kimi', 'sk-test-1234567890abcdef');
+    await seedZaiKey(h.local, 'sk-zai-cccc3333');
     mountApp();
     await openPopup(h);
 
     expect(document.body.textContent).not.toContain('••••');
 
     document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
-    await vi.waitFor(() => expect(document.body.textContent).toContain('••••cdef'));
-    expect(document.body.textContent).not.toContain('sk-test-1234567890abcdef'); // full key never rendered
+    await vi.waitFor(() => expect(document.body.textContent).toContain('••••3333'));
+    expect(document.body.textContent).not.toContain('sk-zai-cccc3333'); // full key never rendered
   });
 });
 
@@ -211,72 +217,41 @@ describe('controller — Key Addition with Validation, inside the gear (popup-ui
     await vi.waitFor(() => expect(document.querySelector('#app form.key-form')).not.toBeNull());
   }
 
-  it('a valid openai key persists through the wrapper; input clears; masked state shows; full key absent from DOM', async () => {
+  it('a valid zai key persists through the wrapper; input clears; masked state shows; full key absent from DOM', async () => {
     const h = makePopupHarness();
     await openSettings(h);
 
-    const key = 'sk-admin-abcdefgh1234';
-    document.querySelector<HTMLInputElement>('#key-input-openai')!.value = key;
-    document.querySelector<HTMLButtonElement>('#key-add-openai')!.click();
+    const key = 'sk-zai-valid-abcdefgh1234';
+    document.querySelector<HTMLInputElement>('#key-input-zai')!.value = key;
+    document.querySelector<HTMLButtonElement>('#key-add-zai')!.click();
 
     await vi.waitFor(() => expect(document.body.textContent).toContain('••••1234'));
-    expect(h.local.snapshot()[storageKey('openai')]).toBe(key); // persisted via the KeyStore wrapper
-    expect(document.querySelector<HTMLInputElement>('#key-input-openai')!.value).toBe(''); // cleared on valid submit
+    expect(h.local.snapshot()[storageKey('zai')]).toBe(key); // persisted via the KeyStore wrapper
+    expect(document.querySelector<HTMLInputElement>('#key-input-zai')!.value).toBe(''); // cleared on valid submit
     expect(document.documentElement.textContent ?? '').not.toContain(key); // full-key DOM sweep
-  });
-
-  it('a qwen AK/SK pair submits from TWO fields, stores one JSON pair, masks both parts', async () => {
-    const h = makePopupHarness();
-    await openSettings(h);
-
-    const accessKeyId = 'LTAI5tPopupAccessKey';
-    const accessKeySecret = 'PopupPairSecret0000000000000';
-    document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value = accessKeyId;
-    document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value = accessKeySecret;
-    document.querySelector<HTMLButtonElement>('#key-add-qwen')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'));
-    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ accessKeyId, accessKeySecret }); // one JSON pair (AD-17)
-    expect(document.body.textContent).toContain('AccessKeySecret: ••••0000');
-    expect(document.documentElement.textContent ?? '').not.toContain(accessKeySecret); // full pair never in DOM
-    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value).toBe('');
-    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value).toBe('');
-  });
-
-  it('a DashScope sk- value in the qwen pair is rejected with the Alibaba guidance and nothing persists', async () => {
-    const h = makePopupHarness();
-    await openSettings(h);
-
-    document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value = 'LTAI5tValidAccessKey';
-    document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value = 'sk-dashscope-abcdef123456';
-    document.querySelector<HTMLButtonElement>('#key-add-qwen')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain(QWEN_AK_SK_GUIDANCE)); // rendered verbatim
-    expect(h.local.snapshot()[storageKey('qwen')]).toBeUndefined();
-    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value).toBe('sk-dashscope-abcdef123456'); // keeps text — still editing (AD-15)
   });
 
   it('an empty input is rejected with guidance and nothing is persisted', async () => {
     const h = makePopupHarness();
     await openSettings(h);
 
-    document.querySelector<HTMLInputElement>('#key-input-openai')!.value = '';
-    document.querySelector<HTMLButtonElement>('#key-add-openai')!.click();
+    document.querySelector<HTMLInputElement>('#key-input-zai')!.value = '';
+    document.querySelector<HTMLButtonElement>('#key-add-zai')!.click();
 
     await vi.waitFor(() => expect(document.body.textContent).toContain('Credential must not be empty.'));
-    expect(h.local.snapshot()[storageKey('openai')]).toBeUndefined();
+    expect(h.local.snapshot()[storageKey('zai')]).toBeUndefined();
   });
 
   it('a valid key clears a previously shown guidance message', async () => {
     const h = makePopupHarness();
     await openSettings(h);
 
-    document.querySelector<HTMLInputElement>('#key-input-kimi')!.value = '';
-    document.querySelector<HTMLButtonElement>('#key-add-kimi')!.click();
+    document.querySelector<HTMLInputElement>('#key-input-zai')!.value = '';
+    document.querySelector<HTMLButtonElement>('#key-add-zai')!.click();
     await vi.waitFor(() => expect(document.body.textContent).toContain('Credential must not be empty.'));
 
-    document.querySelector<HTMLInputElement>('#key-input-kimi')!.value = 'popup-milestone-key';
-    document.querySelector<HTMLButtonElement>('#key-add-kimi')!.click();
+    document.querySelector<HTMLInputElement>('#key-input-zai')!.value = 'popup-milestone-key';
+    document.querySelector<HTMLButtonElement>('#key-add-zai')!.click();
     await vi.waitFor(() => expect(document.body.textContent).toContain('••••-key'));
     expect(document.body.textContent).not.toContain('Credential must not be empty.');
   });
@@ -286,29 +261,13 @@ describe('controller — Key Addition with Validation, inside the gear (popup-ui
     await openSettings(h);
 
     const key = 'sk-enter-key-abcdef99887766';
-    const input = document.querySelector<HTMLInputElement>('#key-input-kimi')!;
+    const input = document.querySelector<HTMLInputElement>('#key-input-zai')!;
     input.value = key;
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
 
     await vi.waitFor(() => expect(document.body.textContent).toContain('••••7766'));
-    expect(h.local.snapshot()[storageKey('kimi')]).toBe(key);
+    expect(h.local.snapshot()[storageKey('zai')]).toBe(key);
     expect(document.documentElement.textContent ?? '').not.toContain(key);
-  });
-
-  it('Enter on a qwen pair input submits the pair from both fields', async () => {
-    const h = makePopupHarness();
-    await openSettings(h);
-
-    document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value = 'LTAI5tEnterAccessKeyId';
-    const sk = document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!;
-    sk.value = 'EnterPairSecret00000000000000000';
-    sk.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain('AccessKeyId: ••••eyId'));
-    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({
-      accessKeyId: 'LTAI5tEnterAccessKeyId',
-      accessKeySecret: 'EnterPairSecret00000000000000000',
-    });
   });
 });
 
@@ -360,7 +319,7 @@ describe('controller — ZAI Platform Selector (popup-ui spec §ZAI Platform Sel
 
   it('a platform switch never touches the credential namespace', async () => {
     const h = makePopupHarness();
-    await seedKey(h.local, 'kimi', 'sk-kimi-bbbb2222');
+    await seedZaiKey(h.local, 'sk-zai-isolated-9999');
     await openSettingsView(h);
 
     const select = document.querySelector<HTMLSelectElement>('#zai-platform-select')!;
@@ -368,181 +327,8 @@ describe('controller — ZAI Platform Selector (popup-ui spec §ZAI Platform Sel
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await vi.waitFor(() => expect(h.local.snapshot()[ZAI_PLATFORM_STORAGE_KEY]).toBe('zhipu'));
 
-    expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222'); // keys untouched
-    expect(document.body.textContent).toContain('••••2222'); // masked state intact
-  });
-});
-
-describe('controller — Qwen Site Selector (popup-ui spec §Qwen Site Selector)', () => {
-  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
-    mountApp();
-    await openPopup(h);
-    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
-    await vi.waitFor(() => expect(document.querySelector('#qwen-site-select')).not.toBeNull());
-  }
-
-  it('defaults to International with the unmasked default-marking label when no preference is stored', async () => {
-    const h = makePopupHarness();
-    await openSettingsView(h);
-
-    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
-    expect(select.value).toBe('international');
-    expect(select.selectedOptions[0]!.textContent).toBe('International (default)'); // label rendered unmasked
-  });
-
-  it('selecting China persists the preference and re-renders the selector on it', async () => {
-    const h = makePopupHarness();
-    await openSettingsView(h);
-
-    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
-    select.value = 'china';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-
-    await vi.waitFor(() => expect(h.local.snapshot()[QWEN_SITE_STORAGE_KEY]).toBe('china'));
-    const reRendered = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
-    expect(reRendered.value).toBe('china'); // the re-render reflects the persisted site
-  });
-
-  it('reads the stored preference on load — China shows selected after reopening the popup', async () => {
-    const h = makePopupHarness();
-    await h.local.set({ [QWEN_SITE_STORAGE_KEY]: 'china' });
-    await openSettingsView(h);
-
-    expect(document.querySelector<HTMLSelectElement>('#qwen-site-select')!.value).toBe('china');
-  });
-
-  it('an invalid stored preference defaults the selector to International (read-on-load contract)', async () => {
-    const h = makePopupHarness();
-    await h.local.set({ [QWEN_SITE_STORAGE_KEY]: 'singapore' });
-    await openSettingsView(h);
-
-    expect(document.querySelector<HTMLSelectElement>('#qwen-site-select')!.value).toBe('international');
-  });
-
-  it('a site switch never touches the credential namespace', async () => {
-    const h = makePopupHarness();
-    await seedKey(h.local, 'kimi', 'sk-kimi-bbbb2222');
-    await openSettingsView(h);
-
-    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
-    select.value = 'china';
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-    await vi.waitFor(() => expect(h.local.snapshot()[QWEN_SITE_STORAGE_KEY]).toBe('china'));
-
-    expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222'); // keys untouched
-    expect(document.body.textContent).toContain('••••2222'); // masked state intact
-  });
-});
-
-describe('controller — Qwen Plan Key Settings Group (popup-ui spec §Qwen Plan Key Settings Group, hito-8)', () => {
-  const PLAN_SLOT_KEY = `${KEY_STORAGE_PREFIX}qwen-plan`;
-  const PAIR_CREDENTIAL = PROVIDER_CREDENTIALS.qwen as Extract<Credential, { type: 'ak-sk' }>;
-
-  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
-    mountApp();
-    await openPopup(h);
-    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
-    await vi.waitFor(() => expect(document.querySelector('#key-input-qwen-plan')).not.toBeNull());
-  }
-
-  it('a valid sk-sp- key persists through the plan slot and displays masked; the stored pair is unchanged', async () => {
-    const h = makePopupHarness();
-    await new KeyStore(h.local).saveCredential('qwen', PAIR_CREDENTIAL); // pair stored first
-    await openSettingsView(h);
-
-    const planKey = 'sk-sp-plan-key-abcd1234';
-    document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value = planKey;
-    document.querySelector<HTMLButtonElement>('#key-add-qwen-plan')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
-    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBe(planKey); // persisted through the plan slot
-    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair untouched
-      accessKeyId: PAIR_CREDENTIAL.accessKeyId,
-      accessKeySecret: PAIR_CREDENTIAL.accessKeySecret,
-    });
-    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value).toBe(''); // cleared on valid submit
-    expect(document.documentElement.textContent ?? '').not.toContain(planKey); // full key never in DOM
-  });
-
-  it('a non-sk-sp value is rejected with the plan-key guidance and nothing persists', async () => {
-    const h = makePopupHarness();
-    await openSettingsView(h);
-
-    document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value = 'sk-ordinary-dashscope-key';
-    document.querySelector<HTMLButtonElement>('#key-add-qwen-plan')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).toContain(QWEN_PLAN_KEY_GUIDANCE));
-    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBeUndefined();
-    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value).toBe('sk-ordinary-dashscope-key'); // keeps text
-  });
-
-  it('plan guidance and the static AK/SK guidance are distinct — the pair copy never regresses', async () => {
-    expect(QWEN_PLAN_KEY_GUIDANCE).not.toBe(QWEN_AK_SK_GUIDANCE);
-  });
-
-  it('revoking the plan key leaves the AK/SK pair stored and displayed masked', async () => {
-    const h = makePopupHarness();
-    const keys = new KeyStore(h.local);
-    await keys.saveCredential('qwen', PAIR_CREDENTIAL);
-    await keys.saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
-    await openSettingsView(h);
-    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
-
-    document.querySelector<HTMLButtonElement>('#key-revoke-qwen-plan')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).not.toContain('••••1234'));
-    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBeUndefined();
-    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair survives the plan revoke
-      accessKeyId: PAIR_CREDENTIAL.accessKeyId,
-      accessKeySecret: PAIR_CREDENTIAL.accessKeySecret,
-    });
-    expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'); // still displayed masked
-  });
-
-  it('revoking the AK/SK pair leaves the plan key stored and displayed masked', async () => {
-    const h = makePopupHarness();
-    const keys = new KeyStore(h.local);
-    await keys.saveCredential('qwen', PAIR_CREDENTIAL);
-    await keys.saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
-    await openSettingsView(h);
-    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
-
-    document.querySelector<HTMLButtonElement>('#key-revoke-qwen')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).not.toContain('AccessKeyId: ••••sKey'));
-    expect(h.local.snapshot()[storageKey('qwen')]).toBeUndefined();
-    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBe('sk-sp-plan-key-abcd1234'); // plan survives the pair revoke
-    expect(document.body.textContent).toContain('Plan key: ••••1234');
-  });
-});
-
-describe('controller — plan-only qwen card (popup-ui spec §Qwen Plan Line, hito-8)', () => {
-  it('a stored plan key with no pair renders the qwen card showing the plan line and no balance', async () => {
-    const h = makePopupHarness();
-    await new KeyStore(h.local).saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
-    await seedSnapshot(h.local, {
-      results: {
-        qwen: {
-          status: 'ok',
-          usage: {
-            providerId: 'qwen',
-            kind: 'balance',
-            plan: { status: 'exhausted', resetAt: NOW_MS + 90 * 60_000 },
-            fetchedAt: NOW_MS,
-          },
-        },
-      },
-    });
-    mountApp();
-    await openPopup(h);
-
-    const qwen = document.querySelector('section[data-provider="qwen"]');
-    expect(qwen).not.toBeNull(); // the card renders on the plan key alone
-    const text = qwen!.textContent ?? '';
-    expect(text).toContain('Plan: exhausted · resets in 1h 30m');
-    expect(text).not.toContain('No cycle data yet');
-    expect(text).not.toContain('¥'); // no balance figure on a plan-only card
-    expect((qwen!.querySelector('.usage') as HTMLElement | null)?.textContent).toBe(''); // empty usage line, like monitor cards
+    expect(h.local.snapshot()[storageKey('zai')]).toBe('sk-zai-isolated-9999'); // keys untouched
+    expect(document.body.textContent).toContain('••••9999'); // masked state intact
   });
 });
 
@@ -665,8 +451,8 @@ describe('controller — Revocation from the Popup (popup-ui spec)', () => {
     h: { api: BrowserApi; local: FakeStorageArea },
     seeds: ReadonlyArray<[ProviderId, string]>,
   ): Promise<void> {
-    for (const [id, credential] of seeds) {
-      await seedKey(h.local, id, credential);
+    for (const [, credential] of seeds) {
+      await seedZaiKey(h.local, credential); // only zai seeds reach the rendered settings (hito-10)
     }
     mountApp();
     await openPopup(h);
@@ -674,30 +460,15 @@ describe('controller — Revocation from the Popup (popup-ui spec)', () => {
     await vi.waitFor(() => expect(document.querySelector('#app form.key-form')).not.toBeNull());
   }
 
-  it('revoking kimi removes its stored key and the settings view reflects the absence', async () => {
+  it('revoking zai removes its stored key and the settings view reflects the absence', async () => {
     const h = makePopupHarness();
-    await openSettingsWith(h, [['kimi', 'sk-kimi-bbbb2222']]);
-    await vi.waitFor(() => expect(document.body.textContent).toContain('••••2222'));
-
-    document.querySelector<HTMLButtonElement>('#key-revoke-kimi')!.click();
-
-    await vi.waitFor(() => expect(document.body.textContent).not.toContain('••••2222'));
-    expect(h.local.snapshot()[storageKey('kimi')]).toBeUndefined();
-  });
-
-  it('revoking zai leaves kimi stored and displayed (isolation per key-storage)', async () => {
-    const h = makePopupHarness();
-    await openSettingsWith(h, [
-      ['zai', 'sk-zai-aaaa1111'],
-      ['kimi', 'sk-kimi-bbbb2222'],
-    ]);
-    await vi.waitFor(() => expect(document.body.textContent).toContain('••••2222'));
+    await openSettingsWith(h, [['zai', 'sk-zai-aaaa1111']]);
+    await vi.waitFor(() => expect(document.body.textContent).toContain('••••1111'));
 
     document.querySelector<HTMLButtonElement>('#key-revoke-zai')!.click();
 
     await vi.waitFor(() => expect(document.body.textContent).not.toContain('••••1111'));
-    expect(document.body.textContent).toContain('••••2222');
-    expect(h.local.snapshot()[storageKey('kimi')]).toBe('sk-kimi-bbbb2222');
+    expect(h.local.snapshot()[storageKey('zai')]).toBeUndefined();
   });
 });
 
