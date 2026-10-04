@@ -23,7 +23,7 @@ import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
 import type { QwenSite } from './core/qwen-sites';
 import type { ZaiPlatform } from './core/zai-platforms';
-import { ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
+import { badgeBackgroundColor, ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
 import { AllowlistNetworkClient } from './network/client';
 import { FetchTransport } from './network/fetch-transport';
 import type { Transport } from './network/transport';
@@ -134,6 +134,10 @@ export async function refreshTick(
     onUsage: (usage) => {
       results[usage.providerId] = { status: 'ok', usage };
       browser.action.setBadgeText({ text: formatBadgeText(usage) });
+      // Threshold alerting (hito-10): background follows the UNCAPPED 5h
+      // percentage; white text stays legible on every band color.
+      browser.action.setBadgeBackgroundColor({ color: badgeBackgroundColor(usage.windows?.fiveHour?.percentage) });
+      browser.action.setBadgeTextColor({ color: '#FFFFFF' });
     },
     onError: (providerId, error) => {
       // Permanent diagnostics (hito-7): the worker console is the only
@@ -150,6 +154,9 @@ export async function refreshTick(
       // survives into the snapshot, and the badge shows ERR for every class.
       results[providerId] = { status: 'error', errorClass: classifyRefreshError(error) };
       browser.action.setBadgeText({ text: ERROR_BADGE_TEXT });
+      // Neutral background for ERR (hito-10): no percentage exists, so the
+      // band resolves to the neutral slate — never a threshold color.
+      browser.action.setBadgeBackgroundColor({ color: badgeBackgroundColor(undefined) });
     },
   });
   // Qwen plan probe (usage-badge §Qwen Plan Probe Cadence): tick-level step

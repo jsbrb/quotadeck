@@ -38,9 +38,11 @@ export interface BrowserStorageOnChanged {
   listen(listener: (changes: Record<string, StorageChange>, area: 'local' | 'sync') => void): void;
 }
 
-/** Badge surface: one setter, promise-based like the MV3 runtime. */
+/** Badge surface: text + color setters, promise-based like the MV3 runtime. */
 export interface BrowserAction {
   setBadgeText(options: { text: string }): Promise<void>;
+  setBadgeBackgroundColor(options: { color: string }): Promise<void>;
+  setBadgeTextColor(options: { color: string }): Promise<void>;
 }
 
 /** Worker lifecycle events that (re)ensure alarm registration. */
@@ -105,6 +107,8 @@ export class ChromeBrowserApi implements BrowserApi {
 
   readonly action: BrowserAction = {
     setBadgeText: (options) => chrome.action.setBadgeText({ text: options.text }),
+    setBadgeBackgroundColor: (options) => chrome.action.setBadgeBackgroundColor({ color: options.color }),
+    setBadgeTextColor: (options) => chrome.action.setBadgeTextColor({ color: options.color }),
   };
 
   readonly runtime: BrowserRuntime = {

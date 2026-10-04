@@ -421,6 +421,53 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
   });
 });
 
+describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
+  it('success tick sets the background from the 5h percentage and white text color beside the badge text', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      transport: new FixtureTransport({ [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--pro-plan'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['32%']);
+    expect(h.action.badgeBackgrounds).toEqual(['#334155']); // 32 < 50 → neutral band, success path still writes color + white text
+    expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
+  });
+
+  it('an uncapped 137% tick colors the badge red', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']);
+    const engine = createRefreshEngine(h.api, {
+      clock: new FakeClock(TICK_NOW),
+      transport: new FixtureTransport({ ...liveRoutes(), [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--over-100'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['137%']); // uncapped (AD-26)
+    expect(h.action.badgeBackgrounds).toEqual(['#DC2626']); // ≥90 red band
+    expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
+  });
+
+  it('error tick sets the neutral background beside the ERR text and never a threshold color', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['kimi']);
+    const engine = createRefreshEngine(h.api, {
+      transport: new FixtureTransport({}), // no routes → every dispatch fails
+      clock: new FakeClock(TICK_NOW),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['ERR']);
+    expect(h.action.badgeBackgrounds).toEqual(['#334155']); // neutral, not a threshold band
+    expect(h.action.badgeTextColors).toEqual([]); // no text-color write on the error arm
+  });
+});
+
 describe('background — Qwen Site Selection (usage-badge spec §Live refresh per tick)', () => {
   it('targets the international BSS host by default when no site preference is stored', async () => {
     const h = makeApi();

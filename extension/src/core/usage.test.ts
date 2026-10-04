@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  badgeBackgroundColor,
   ERROR_BADGE_TEXT,
   formatBadgeText,
   type MonitorWindows,
@@ -140,5 +141,34 @@ describe('formatBadgeText', () => {
     const first = formatBadgeText(input);
     expect(formatBadgeText(input)).toBe(first);
     expect(formatBadgeText(usage({ value: 9.87, currency: 'CNY' }))).toBe(first);
+  });
+});
+
+describe('badgeBackgroundColor — usage threshold colors (hito-10)', () => {
+  it('renders neutral below 50 and for an absent percentage', () => {
+    expect(badgeBackgroundColor(undefined)).toBe('#334155');
+    expect(badgeBackgroundColor(0)).toBe('#334155');
+    expect(badgeBackgroundColor(49)).toBe('#334155');
+  });
+
+  it('crosses to orange exactly at 50', () => {
+    expect(badgeBackgroundColor(50)).toBe('#F97316');
+    expect(badgeBackgroundColor(79)).toBe('#F97316');
+  });
+
+  it('crosses to deep orange exactly at 80', () => {
+    expect(badgeBackgroundColor(80)).toBe('#EA580C');
+    expect(badgeBackgroundColor(89)).toBe('#EA580C');
+  });
+
+  it('crosses to red exactly at 90 and stays red through 100 and uncapped values', () => {
+    expect(badgeBackgroundColor(90)).toBe('#DC2626');
+    expect(badgeBackgroundColor(100)).toBe('#DC2626');
+    expect(badgeBackgroundColor(137)).toBe('#DC2626'); // UNCAPPED input (AD-26)
+  });
+
+  it('is deterministic: identical input yields identical color across calls', () => {
+    expect(badgeBackgroundColor(85)).toBe(badgeBackgroundColor(85));
+    expect(badgeBackgroundColor(undefined)).toBe(badgeBackgroundColor(undefined));
   });
 });

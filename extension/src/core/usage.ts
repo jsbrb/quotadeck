@@ -99,6 +99,25 @@ export interface NormalizedUsage {
 /** Badge marker shown when a refresh failed; the next successful tick replaces it. */
 export const ERROR_BADGE_TEXT = 'ERR';
 
+/**
+ * Badge background for a 5h-window percentage (hito-10 threshold alerting).
+ * Pure and deterministic over the UNCAPPED input (137 stays red): the band
+ * deepens as quota runs out — neutral slate <50, orange ≥50, deep orange
+ * ≥80, red ≥90. `undefined` (no percentage) renders neutral.
+ */
+export function badgeBackgroundColor(percentage: number | undefined): string {
+  if (percentage !== undefined && percentage >= 90) {
+    return '#DC2626';
+  }
+  if (percentage !== undefined && percentage >= 80) {
+    return '#EA580C';
+  }
+  if (percentage !== undefined && percentage >= 50) {
+    return '#F97316';
+  }
+  return '#334155';
+}
+
 const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = {
   CNY: '¥',
   USD: '$',

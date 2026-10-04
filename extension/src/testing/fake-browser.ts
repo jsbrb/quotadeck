@@ -117,12 +117,22 @@ export class FakeStorageOnChanged implements BrowserStorageOnChanged {
   }
 }
 
-/** Records every badge text the worker sets, in order. */
+/** Records every badge text/color the worker sets, in order. */
 export class FakeAction {
   readonly badgeTexts: string[] = [];
+  readonly badgeBackgrounds: string[] = [];
+  readonly badgeTextColors: string[] = [];
 
   async setBadgeText(options: { text: string }): Promise<void> {
     this.badgeTexts.push(options.text);
+  }
+
+  async setBadgeBackgroundColor(options: { color: string }): Promise<void> {
+    this.badgeBackgrounds.push(options.color);
+  }
+
+  async setBadgeTextColor(options: { color: string }): Promise<void> {
+    this.badgeTextColors.push(options.color);
   }
 }
 
