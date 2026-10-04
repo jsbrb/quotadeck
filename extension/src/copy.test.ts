@@ -44,7 +44,7 @@ describe('milestone copy (AD-24)', () => {
     expect(readme).toContain('ZHIPU'); // the platform selector
     expect(readme).toContain('api.z.ai'); // monitor hosts named
     expect(readme).toContain('open.bigmodel.cn');
-    expect(readme).toContain('five provider hosts'); // host surface grew 4 -> 5, stated honestly
+    expect(readme).toContain('two shipped hosts'); // hito-10: host_permissions is the allowlist filtered to SHIPPED_PROVIDER_IDS
     expect(readme).toMatch(/raw key|verbatim/i); // raw-auth note: no Bearer on monitor hosts
   });
 });

@@ -1,19 +1,22 @@
 # quotadeck
 
-A browser extension badge that tracks AI provider usage and balances — ZAI
-(Zhipu AI), Qwen (Alibaba Cloud), OpenAI and Kimi (Moonshot AI).
+A browser extension badge that tracks AI provider usage and balances. The
+public Chrome Web Store release is a **GLM-only build**: only the ZAI (Zhipu
+AI) provider — the GLM Coding Plan — ships. The Qwen (Alibaba Cloud), OpenAI
+and Kimi (Moonshot AI) implementations are retained in source but stay
+unshipped: they never register in the worker, never render in the popup, and
+are granted no host permissions.
 
-**Status: live usage.** The extension is a working Manifest V3 service worker
-plus action popup that fetches real usage data from the four providers every
-minute through an allowlist-constrained network client. ZAI usage comes from
-the official monitor endpoint (`GET /api/monitor/usage/quota/limit`): plan
-level, the 5h and weekly token windows with an uncapped percentage, and the
-monthly MCP window. The vitest suite stays
+**Status: v0.2.0 — GLM-only store release.** The extension is a working
+Manifest V3 service worker plus action popup that fetches real usage data
+every minute through an allowlist-constrained network client. ZAI usage comes
+from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
+plan level, the 5h and weekly token windows with an uncapped percentage, and
+the monthly MCP window. The vitest suite stays
 hermetic (recorded fixtures + injected transports — no network in tests); live
 behavior is proven by contract tests over the request shapes and by a short
-maintainer live check. See
-[`openspec/changes/hito-4-zai-monitor/`](openspec/changes/hito-4-zai-monitor/)
-for the change specs and design.
+maintainer live check. See the `openspec/` change ledgers for the change
+specs and design.
 
 ## Load unpacked
 
@@ -23,38 +26,39 @@ for the change specs and design.
    npm --prefix extension run build
    ```
 2. Open `chrome://extensions`, enable **Developer mode**, click **Load
-    unpacked**, and select the `extension/dist` directory. The first load
-    after this milestone grants the new cross-origin host permissions
-    (`api.z.ai` and `open.bigmodel.cn` replace the retired `bigmodel.cn`
-    apex — see Security posture below) — reload the extension if you upgraded
-    from an earlier build; Chrome re-prompts for the host-permission change.
+     unpacked**, and select the `extension/dist` directory. The shipped
+     `host_permissions` cover exactly the two ZAI monitor hosts (`api.z.ai`
+     and `open.bigmodel.cn` — see Security posture below); if you upgrade
+     from an earlier multi-provider build, reload the extension so Chrome
+     re-prompts for the narrowed host permissions.
 3. The worker registers a `usage-refresh` alarm (1-minute period) on install
-   and on startup. Each tick fetches live usage for every provider with a
-   stored credential, with all time windows derived from an injectable clock;
-   the badge shows the last successful result — for ZAI the 5h percentage
-   (uncapped above 100) with the plan level as fallback.
-4. Clicking the toolbar action opens the popup on the consumption view: the
+   and on startup. Each tick fetches live usage for every shipped provider
+   with a stored credential, with all time windows derived from an injectable
+   clock; the badge shows the last successful result — for ZAI the 5h
+   percentage (uncapped above 100) with the plan level as fallback.
+4. The badge background is threshold-colored from that 5h percentage, so the
+   state reads at a glance: neutral slate `#334155` below 50%, orange
+   `#F97316` from 50%, deep orange `#EA580C` from 80%, red `#DC2626` from 90%
+   (uncapped — 137% is still red). Badge text renders white on every band; a
+   failed refresh shows `ERR` on the neutral slate until the next successful
+   tick (≤1 minute).
+5. Clicking the toolbar action opens the popup on the consumption view: the
    ZAI monitor block (plan level, the 5h window with its uncapped percentage,
    used/total and reset countdown, the weekly window, and the MCP window with
-   per-tool rows), OpenAI spend with per-model rows, and Qwen/Kimi balances —
-   exactly the data the badges rendered for that cycle. Failed providers show
-   a per-class error label (`Auth failed`, `Rate limited`, …) and the badge
-   shows `ERR` until the next successful refresh — a bad or revoked key
-   surfaces this way within one tick (≤1 minute). A ZAI auth failure also
+   per-tool rows) — exactly the data the badge rendered for that cycle.
+   Failed refreshes show a per-class error label (`Auth failed`,
+   `Rate limited`, …) in the card while the badge shows `ERR` — a bad or
+   revoked key surfaces this way within one tick. A ZAI auth failure also
    shows the wrong-platform guidance, since a Z.AI key under the ZHIPU
    selection (or vice versa) is the most likely cause.
-5. Manage keys through the **Settings** gear in the popup header (no console
-   needed): paste a credential and **Save key**, or press **Enter** in the
-   input. Invalid input is rejected with guidance — notably, DashScope `sk-`
-   keys are rejected for Qwen with the Alibaba Cloud AK/SK (RAM
-   `bss:DescribeAcccount`) hint — and stored keys display masked (`••••` +
-   at most 4 trailing characters per secret part; Qwen takes TWO fields,
-   AccessKeyId and AccessKeySecret). **Revoke** removes one provider's key
-   without touching the others. The ZAI section also carries the **platform
-   selector** (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as a
-   non-secret local preference and switches the base URL of every ZAI monitor
-   request (`api.z.ai` ↔ `open.bigmodel.cn`). The main view renders no key
-   forms.
+6. Manage keys through the **Settings** gear in the popup header (no console
+   needed): paste the ZAI credential and **Save key**, or press **Enter** in
+   the input. Invalid input is rejected with guidance, and stored keys
+   display masked (`••••` + at most 4 trailing characters). **Revoke**
+   removes the key. The ZAI section also carries the **platform selector**
+   (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as a non-secret local
+   preference and switches the base URL of every ZAI monitor request
+   (`api.z.ai` ↔ `open.bigmodel.cn`). The main view renders no key forms.
 
 ## Popup security notes
 
@@ -77,22 +81,25 @@ Run from the repository root:
 
 | Command | Description |
 | --- | --- |
-| `npm --prefix extension run build` | esbuild: bundle `extension/src/background.ts` → `extension/dist/background.js` and `extension/src/popup/main.ts` → `extension/dist/popup.js`, copy the MV3 manifest + `popup.html` |
+| `npm --prefix extension run build` | esbuild: bundle `extension/src/background.ts` → `extension/dist/background.js` and `extension/src/popup/main.ts` → `extension/dist/popup.js`, copy the MV3 manifest + `popup.html` + `icons/` |
 | `npm --prefix extension run test` | vitest: hermetic unit suite (no Chrome runtime, no network) |
 | `npm --prefix extension run typecheck` | `tsc --noEmit` (strict) |
+| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.2.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
 
 ## Security posture
 
 - **Zero runtime npm dependencies** — the toolchain (TypeScript, esbuild,
   vitest, happy-dom for the DOM test environment) is dev-only and nothing is
   bundled but first-party code.
-- **`host_permissions` = exactly the five provider hosts** (`api.z.ai`,
-  `open.bigmodel.cn`, `business.aliyuncs.com`, `api.openai.com`,
-  `api.moonshot.cn`). Live usage requires cross-origin fetch from the worker,
-  so the manifest grants the union of the per-provider allowlists and nothing
-  more; a sync test fails the build if the manifest and the allowlist ever
-  diverge. Requests are additionally suffix-checked per provider at dispatch
-  time.
+- **`host_permissions` = exactly the two shipped hosts** (`api.z.ai`,
+  `open.bigmodel.cn`) — the ZAI (GLM) allowlist entries only. Live usage
+  requires cross-origin fetch from the worker, so the manifest grants the
+  per-provider allowlist **filtered to the shipped providers**
+  (`SHIPPED_PROVIDER_IDS`) and nothing more: a sync test derives the expected
+  patterns from that shipped-filtered union and fails the build if the
+  manifest ever diverges, while the full multi-provider allowlist stays
+  single-sourced in [`docs/spike/endpoints.md`](docs/spike/endpoints.md).
+  Requests are additionally suffix-checked per provider at dispatch time.
 - **Credentials only in `chrome.storage.local`** under `qd:key:{providerId}`
   — never `storage.sync`, never `localStorage`. Bearer and admin keys attach
   exclusively as the `Authorization` header; the Qwen AccessKeySecret never
