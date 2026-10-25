@@ -179,7 +179,7 @@ Draw-Chip 'QUOTAS' $cx 592 240 44 $YELLOW $INK 16
 Draw-Chip 'KEYS' ($cx + 256) 592 240 44 $WHITE $INK 16
 
 # honest footer
-Draw-Text "v0.3.0  $DOT  Built by The North Code" $cx 648 15 $false $MUTED 'Consolas'
+Draw-Text "v0.4.0  $DOT  Built by The North Code" $cx 648 15 $false $MUTED 'Consolas'
 
 # Bottom trust line across the canvas
 Draw-TextCentered "Local-only key  $DOT  zero remote code  $DOT  no analytics  $DOT  uncapped thresholds" ($W / 2) 716 20 $true $INK 'Consolas'
