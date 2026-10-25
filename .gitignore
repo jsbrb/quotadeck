@@ -14,6 +14,9 @@ extension/*.zip
 # Internal task journals (local-only by maintainer decision, 2026-10-25)
 odd/
 
+# Internal spec process artifacts (local-only by maintainer decision, 2026-10-25)
+openspec/
+
 # Environment / secrets
 .env
 .env.*
