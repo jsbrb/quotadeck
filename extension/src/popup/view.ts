@@ -112,6 +112,8 @@ export interface PopupState {
   readonly zaiPlatform: ZaiPlatform;
   /** Selected Qwen BSS site (`qd:pref:qwen-site`); the controller reads/persists it. */
   readonly qwenSite: QwenSite;
+  /** Chosen badge provider (`qd:pref:badge-provider`); the controller reads/persists it (hito-12 WU-D2). */
+  readonly badgeProvider: ProviderId;
   /** Render instant (epoch ms) feeding countdowns — supplied by the controller. */
   readonly nowMs: number;
 }
@@ -429,6 +431,29 @@ function siteSelector(state: PopupState): string {
 }
 
 /**
+ * Badge provider selector (popup-ui §Badge Provider Selector; hito-12 WU-D2):
+ * rendered data-driven from the provider list the controller composes (the
+ * SHIPPED slice in production) — labels are display names, never secret
+ * material, so they render unmasked. The current choice carries the
+ * `selected` attribute; the controller persists changes through the
+ * badge-provider store.
+ */
+function badgeProviderSelector(state: PopupState): string {
+  const options = state.providers
+    .map(
+      (provider) =>
+        `<option value="${provider.id}"${provider.id === state.badgeProvider ? ' selected' : ''}>${escapeHtml(provider.displayName)}</option>`,
+    )
+    .join('');
+  return (
+    '<div class="badge-provider-field">' +
+    '<label for="badge-provider-select">Badge provider</label>' +
+    `<select id="badge-provider-select" data-action="badge-provider">${options}</select>` +
+    '</div>'
+  );
+}
+
+/**
  * Qwen plan key group (popup-ui §Qwen Plan Key Settings Group, hito-8): the
  * SECOND qwen field group — its own password input, save and revoke
  * controls, labeled `Plan key (sk-sp-)` and revoked via the plan slot
@@ -495,5 +520,5 @@ export function renderSettings(state: PopupState): string {
   const header =
     '<header class="popup-header"><h1>Settings</h1>' +
     '<button type="button" class="header-action" data-action="back">Back</button></header>';
-  return `${header}\n${sections}\n${BRANDING_FOOTER}`;
+  return `${header}\n${badgeProviderSelector(state)}\n${sections}\n${BRANDING_FOOTER}`;
 }

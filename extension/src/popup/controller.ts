@@ -33,6 +33,7 @@ import type { QwenSite } from '../core/qwen-sites';
 import type { ZaiPlatform } from '../core/zai-platforms';
 import type { BrowserApi } from '../platform/browser-api';
 import { KeyStore, type CredentialSlot, type MaskedCredential } from '../storage/key-store';
+import { DEFAULT_BADGE_PROVIDER, isBadgeProviderId, readBadgeProvider, writeBadgeProvider } from '../storage/badge-provider-store';
 import { readQwenSite, writeQwenSite } from '../storage/qwen-site-store';
 import { SnapshotStore, SNAPSHOT_STORAGE_KEY, type CycleSnapshot } from '../storage/snapshot-store';
 import { readZaiPlatform, writeZaiPlatform } from '../storage/zai-platform-store';
@@ -84,6 +85,8 @@ export function startPopup(deps: PopupDeps): void {
     zaiPlatform: ZaiPlatform;
     /** Selected Qwen BSS site; read from and persisted to `qd:pref:qwen-site`. */
     qwenSite: QwenSite;
+    /** Chosen badge provider; read from and persisted to `qd:pref:badge-provider` (hito-12 WU-D2). */
+    badgeProvider: ProviderId;
     /** Masked qwen plan key (`qd:key:qwen-plan`); `undefined` = none stored (hito-8). */
     planKeyState: MaskedCredential | undefined;
   } = {
@@ -93,6 +96,7 @@ export function startPopup(deps: PopupDeps): void {
     guidance: {},
     zaiPlatform: 'zai',
     qwenSite: 'international',
+    badgeProvider: DEFAULT_BADGE_PROVIDER,
     planKeyState: undefined,
   };
 
@@ -117,6 +121,7 @@ export function startPopup(deps: PopupDeps): void {
       guidance: state.guidance,
       zaiPlatform: state.zaiPlatform,
       qwenSite: state.qwenSite,
+      badgeProvider: state.badgeProvider,
       qwenPlanKey: state.planKeyState,
       nowMs: now(),
     };
@@ -256,7 +261,8 @@ export function startPopup(deps: PopupDeps): void {
     }
   });
 
-  // Preference selectors (AD-28 + qwen-site mirror): change-delegated
+  // Preference selectors (AD-28 + qwen-site mirror + badge-provider, hito-12
+  // WU-D2): change-delegated
   // handlers on the same root — the selects only exist in the settings view,
   // and persistence goes through the non-secret `qd:pref:*` wrappers, never
   // the key namespace.
@@ -287,15 +293,29 @@ export function startPopup(deps: PopupDeps): void {
         state.qwenSite = site;
         render();
       })();
+      return;
+    }
+    if (target.id === 'badge-provider-select') {
+      const providerId = (target as HTMLSelectElement).value;
+      if (!isBadgeProviderId(providerId)) {
+        return; // validation mirrors the store — ProviderId-wide; anything else is ignored
+      }
+      void (async (): Promise<void> => {
+        await writeBadgeProvider(deps.browser.storage.local, providerId);
+        state.badgeProvider = providerId;
+        render();
+      })();
     }
   });
 
   // Initial load: last completed cycle + masked key states (per provider AND
-  // the qwen plan slot, hito-8) + both preference selections, then first render.
+  // the qwen plan slot, hito-8) + all three preference selections, then
+  // first render.
   void (async (): Promise<void> => {
     state.snapshot = await snapshots.read();
     state.zaiPlatform = await readZaiPlatform(deps.browser.storage.local);
     state.qwenSite = await readQwenSite(deps.browser.storage.local);
+    state.badgeProvider = await readBadgeProvider(deps.browser.storage.local);
     for (const { id, credentialType } of providers) {
       state.keyStates[id] = await keys.readMaskedCredential(id, credentialType);
     }

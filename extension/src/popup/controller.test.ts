@@ -13,6 +13,7 @@ import { QWEN_AK_SK_GUIDANCE, QWEN_PLAN_KEY_GUIDANCE } from '../core/credentials
 import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
+import { BADGE_PROVIDER_STORAGE_KEY } from '../storage/badge-provider-store';
 import { QWEN_SITE_STORAGE_KEY } from '../storage/qwen-site-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
 import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY, SnapshotStore } from '../storage/snapshot-store';
@@ -448,6 +449,76 @@ describe('controller — Qwen Site Selector (popup-ui spec §Qwen Site Selector)
       accessKeySecret: pair.accessKeySecret,
     });
     expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'); // masked state intact
+  });
+});
+
+describe('controller — Badge Provider Selector (popup-ui spec §Badge Provider Selector; hito-12 WU-D2)', () => {
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#badge-provider-select')).not.toBeNull());
+  }
+
+  it('defaults to ZAI with the unmasked displayName label when no preference is stored', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    expect(select.value).toBe('zai');
+    expect(select.selectedOptions[0]!.textContent).toBe('ZAI (Zhipu AI)'); // label rendered unmasked
+  });
+
+  it('lists exactly the SHIPPED providers in registry order — data-driven, no unshipped options', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const options = [...document.querySelectorAll('#badge-provider-select option')];
+    expect(options.map((option) => option.getAttribute('value'))).toEqual(['zai', 'qwen']);
+    expect(options.map((option) => option.textContent)).toEqual(['ZAI (Zhipu AI)', 'Qwen (Alibaba Cloud BSS)']);
+  });
+
+  it('selecting Qwen persists the preference and re-renders the selector on it', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    select.value = 'qwen';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+    const reRendered = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    expect(reRendered.value).toBe('qwen'); // the re-render reflects the persisted choice
+  });
+
+  it('reads the stored preference on load — Qwen shows selected after reopening the popup', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'qwen' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('qwen');
+  });
+
+  it('an invalid stored preference defaults the selector to ZAI (read-on-load contract)', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'deepseek' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('zai');
+  });
+
+  it('a badge-provider switch never touches the credential namespace', async () => {
+    const h = makePopupHarness();
+    await seedZaiKey(h.local, 'sk-zai-isolated-8888');
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    select.value = 'qwen';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+
+    expect(h.local.snapshot()[storageKey('zai')]).toBe('sk-zai-isolated-8888'); // keys untouched
+    expect(document.body.textContent).toContain('••••8888'); // masked state intact
   });
 });
 

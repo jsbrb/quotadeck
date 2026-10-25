@@ -12,18 +12,22 @@
 // - One-Shot Refresh Alarm: `refresh-now` (created by the popup) drives the
 //   SAME refresh tick; the periodic registration and cadence stay untouched.
 // - Live refresh per tick: every alarm tick reads the ZAI platform
-//   preference (qd:pref:zai-platform) and the Qwen site preference
-//   (qd:pref:qwen-site), derives the whole UsageQuery from the injected
+//   preference (qd:pref:zai-platform), the Qwen site preference
+//   (qd:pref:qwen-site) and the badge provider preference
+//   (qd:pref:badge-provider), derives the whole UsageQuery from the injected
 //   Clock + both selections (buildTickQuery) and refreshes each keyed
-//   provider live; each success updates the badge (registry order, last
-//   result wins).
-// - Error State + Taxonomy: a failed provider renders ERROR_BADGE_TEXT for
-//   every class; the cycle snapshot carries only its ErrorClass (AD-13/21).
+//   provider live; at tick end ONE badge write renders the user-chosen
+//   provider (hito-12 WU-D2) — unchosen results only record into the
+//   snapshot.
+// - Error State + Taxonomy: a failed refresh persists ERROR_BADGE_TEXT only
+//   when its provider is the chosen one; every failure still carries its
+//   taxonomy class into the snapshot (AD-13/21).
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
+import { SHIPPED_PROVIDER_IDS } from './core/provider-metadata';
 import type { QwenSite } from './core/qwen-sites';
 import type { ZaiPlatform } from './core/zai-platforms';
-import { badgeBackgroundColor, badgeTextColor, ERROR_BADGE_TEXT, formatBadgeText } from './core/usage';
+import { badgeBackgroundColor, badgeTextColor, ERROR_BADGE_TEXT, formatBadgeText, formatPercentageBadgeText } from './core/usage';
 import { AllowlistNetworkClient } from './network/client';
 import { FetchTransport } from './network/fetch-transport';
 import type { Transport } from './network/transport';
@@ -33,6 +37,7 @@ import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
 import { QwenPlanStep } from './refresh/qwen-plan';
 import { QwenQuotaStep } from './refresh/qwen-quota';
+import { readBadgeProvider } from './storage/badge-provider-store';
 import { KeyStore } from './storage/key-store';
 import { QwenPlanStore } from './storage/qwen-plan-store';
 import { readQwenSite } from './storage/qwen-site-store';
@@ -76,6 +81,49 @@ export function buildTickQuery(clock: Clock, zaiPlatform: ZaiPlatform, qwenSite:
     startTime: endTime - OPENAI_WINDOW_SECONDS,
     endTime,
   };
+}
+
+/** The badge render the chosen provider's cycle entry resolves to (hito-12 WU-D2). */
+export interface ChosenBadge {
+  /** The single text written this tick — `''` clears the badge. */
+  readonly text: string;
+  /** Threshold-band percentage when one exists (zai 5h or qwen quota); `undefined` renders neutral. */
+  readonly percentage?: number;
+}
+
+/**
+ * Resolve the tick's ONE badge write (hito-12 WU-D2): the badge shows exactly
+ * ONE provider — the user's stored choice. Ratified rules:
+ * - an UNshipped choice (e.g. a stored 'kimi') behaves as absent — the badge
+ *   clears; validation stays ProviderId-wide, so re-shipping never
+ *   invalidates stored preferences;
+ * - an absent choice (no credentials / did not run) CLEARS the badge — `''`
+ *   on the neutral band, NOT `ERR`;
+ * - the chosen provider's error entry renders the ERR marker on the neutral
+ *   band (every class, unchanged hito-10 rendering);
+ * - a chosen qwen entry carries the quota percentage when present —
+ *   formatted through the SAME helper the zai 5h path uses (no rounding
+ *   games) — falls back to the balance rendering, and with neither figure
+ *   the honest badge is the empty clear;
+ * - anything else renders `formatBadgeText` with the zai 5h percentage
+ *   coloring the threshold band when present.
+ */
+export function resolveChosenBadge(
+  results: Partial<Record<ProviderId, ProviderSnapshotEntry>>,
+  chosen: ProviderId,
+): ChosenBadge {
+  const entry = SHIPPED_PROVIDER_IDS.includes(chosen) ? results[chosen] : undefined;
+  if (entry === undefined) {
+    return { text: '' };
+  }
+  if (entry.status === 'error') {
+    return { text: ERROR_BADGE_TEXT };
+  }
+  const usage = entry.usage;
+  if (usage.providerId === 'qwen' && usage.quota?.percentage !== undefined) {
+    return { text: formatPercentageBadgeText(usage.quota.percentage), percentage: usage.quota.percentage };
+  }
+  return { text: formatBadgeText(usage), percentage: usage.windows?.fiveHour?.percentage };
 }
 
 /** Test-visible injection points; production uses the live defaults. */
@@ -123,17 +171,20 @@ export function createQwenQuotaStep(browser: BrowserApi, options: WorkerOptions 
 }
 
 /**
- * One alarm tick: read the ZAI platform preference, derive the live query
- * from the clock + platform, refresh every keyed provider sequentially and
- * render each outcome — usage text per success, ERROR_BADGE_TEXT per failure
- * (replaced by the next success). The qwen plan probe step (hito-8) runs
- * AFTER refreshAll and BEFORE the snapshot write: its status merges into the
- * qwen entry only when that entry is ok or absent — the error arm wins, and
- * the badge is never re-rendered from plan status. The quota two-hop step
- * (hito-12 WU-C2) runs beside it with the EXACT same merge discipline —
- * error arm wins, absent entry synthesizes, badge untouched. Finally the
- * cycle's per-provider outcomes are persisted as ONE `qd:snapshot` write for
- * the popup (AD-13) — usage+windows+plan+quota on the ok arm, the classified
+ * One alarm tick: read the platform/site/badge-provider preferences, derive
+ * the live query from the clock + selections, refresh every keyed provider
+ * sequentially (recording every outcome into the cycle results), merge the
+ * qwen plan probe (hito-8) and quota two-hop (hito-12 WU-C2) steps, then
+ * make the tick's ONE badge write from the chosen provider's entry
+ * (`resolveChosenBadge`, hito-12 WU-D2) and persist the cycle snapshot.
+ * The plan probe runs AFTER refreshAll and BEFORE the snapshot write: its
+ * status merges into the qwen entry only when that entry is ok or absent —
+ * the error arm wins. The quota step runs beside it with the EXACT same
+ * merge discipline — error arm wins, absent entry synthesizes. Because both
+ * merges land BEFORE the badge resolution, a chosen qwen entry badges its
+ * quota percentage the same tick it first arrives. Finally the cycle's
+ * per-provider outcomes are persisted as ONE `qd:snapshot` write for the
+ * popup (AD-13) — usage+windows+plan+quota on the ok arm, the classified
  * ErrorClass on the error arm.
  */
 export async function refreshTick(
@@ -145,17 +196,14 @@ export async function refreshTick(
 ): Promise<void> {
   const zaiPlatform = await readZaiPlatform(browser.storage.local); // qd:pref:zai-platform (AD-28)
   const qwenSite = await readQwenSite(browser.storage.local); // qd:pref:qwen-site (AD-28 mirror)
+  const badgeProvider = await readBadgeProvider(browser.storage.local); // qd:pref:badge-provider (hito-12 WU-D2)
   const query = buildTickQuery(clock, zaiPlatform, qwenSite);
   const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {};
   await engine.refreshAll(query, {
     onUsage: (usage) => {
+      // WU-D2: successes only RECORD — the tick's single badge write happens
+      // after the merges, from the chosen provider's entry (see below).
       results[usage.providerId] = { status: 'ok', usage };
-      browser.action.setBadgeText({ text: formatBadgeText(usage) });
-      // Threshold alerting (hito-10): background + text color follow the
-      // UNCAPPED 5h percentage — near-black text on the light neutral band
-      // below 50, white text on the saturated bands above.
-      browser.action.setBadgeBackgroundColor({ color: badgeBackgroundColor(usage.windows?.fiveHour?.percentage) });
-      browser.action.setBadgeTextColor({ color: badgeTextColor(usage.windows?.fiveHour?.percentage) });
     },
     onError: (providerId, error) => {
       // Permanent diagnostics (hito-7): the worker console is the only
@@ -169,14 +217,9 @@ export async function refreshTick(
         error instanceof Error ? `${error.name}: ${error.message}` : error,
       );
       // AD-13/21: the thrown value is dropped — only its taxonomy class
-      // survives into the snapshot, and the badge shows ERR for every class.
+      // survives into the snapshot. The ERR badge belongs to the chosen
+      // provider alone (WU-D2): unchosen failures never move the badge.
       results[providerId] = { status: 'error', errorClass: classifyRefreshError(error) };
-      browser.action.setBadgeText({ text: ERROR_BADGE_TEXT });
-      // Neutral light band for ERR (hito-10): no percentage exists, so the
-      // band resolves to the neutral slate — never a threshold color — and
-      // the text renders near-black so ERR stays legible on the light band.
-      browser.action.setBadgeBackgroundColor({ color: badgeBackgroundColor(undefined) });
-      browser.action.setBadgeTextColor({ color: badgeTextColor(undefined) });
     },
   });
   // Qwen plan probe (usage-badge §Qwen Plan Probe Cadence): tick-level step
@@ -200,8 +243,9 @@ export async function refreshTick(
   // overwrites it), an ok entry gains the quota field and keeps everything
   // else, an absent entry synthesizes a quota-only ok entry. The minted
   // session token lived and died inside the step — the snapshot carries only
-  // the mapped window. Badge is not re-rendered (quota rendering is a later
-  // unit).
+  // the mapped window. The merges land BEFORE the tick's single badge write,
+  // so a chosen qwen entry renders its quota percentage the same tick
+  // (hito-12 WU-D2).
   if (quotaStep !== undefined) {
     const quota = await quotaStep.resolve(clock.now(), qwenSite);
     if (quota !== undefined) {
@@ -213,6 +257,18 @@ export async function refreshTick(
       }
     }
   }
+  // The tick's ONE badge write (hito-12 WU-D2): the chosen provider's entry
+  // resolves after the merges and before the snapshot write. Threshold
+  // alerting (hito-10) keeps its shape — background + text color follow the
+  // chosen percentage (zai 5h, or the quota window for qwen): near-black
+  // text on the light neutral band below 50, white text on the saturated
+  // bands above; no percentage (error, balance-only, cleared) renders the
+  // neutral slate with near-black text, so the marker and the empty badge
+  // both stay legible.
+  const badge = resolveChosenBadge(results, badgeProvider);
+  browser.action.setBadgeText({ text: badge.text });
+  browser.action.setBadgeBackgroundColor({ color: badgeBackgroundColor(badge.percentage) });
+  browser.action.setBadgeTextColor({ color: badgeTextColor(badge.percentage) });
   await new SnapshotStore(browser.storage.local).write({ results });
 }
 

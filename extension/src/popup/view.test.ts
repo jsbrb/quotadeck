@@ -92,6 +92,7 @@ function popupState(overrides: Partial<PopupState> = {}): PopupState {
     nowMs: NOW_MS,
     zaiPlatform: 'zai',
     qwenSite: 'international',
+    badgeProvider: 'zai',
     qwenPlanKey: undefined,
     ...overrides,
   };
@@ -479,6 +480,31 @@ describe('renderSettings — Qwen Site Selector (popup-ui spec §Qwen Site Selec
     const china = sectionFor(renderSettings(popupState({ view: 'settings', qwenSite: 'china' })), 'qwen');
     expect(china).toContain('<option value="china" selected>');
     expect(china).not.toContain('<option value="international" selected>');
+  });
+});
+
+describe('renderSettings — Badge Provider Selector (popup-ui spec §Badge Provider Selector; hito-12 WU-D2)', () => {
+  it('renders exactly one top-level selector with unmasked displayName options from the provider list', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+
+    expect(html.match(/id="badge-provider-select"/g)).toHaveLength(1); // once, not per section
+    expect(html).toContain('<label for="badge-provider-select">Badge provider</label>');
+    expect(html).toContain('<option value="zai" selected>ZAI (Zhipu AI)</option>'); // default choice carries selected
+    expect(html).toContain('<option value="qwen">Qwen (Alibaba Cloud BSS)</option>');
+    // options come from state.providers — data-driven, never hardcoded:
+    expect(html).toContain('<option value="openai">OpenAI</option>');
+    expect(html).toContain('<option value="kimi">Kimi (Moonshot AI)</option>');
+  });
+
+  it('marks the stored choice selected, not the default', () => {
+    const html = renderSettings(popupState({ view: 'settings', badgeProvider: 'qwen' }));
+    // Scoped to the badge select itself: the ZAI platform selector renders
+    // its own `<option value="zai" selected>` and must not confuse the pin.
+    const start = html.indexOf('id="badge-provider-select"');
+    const select = html.slice(start, html.indexOf('</select>', start));
+
+    expect(select).toContain('<option value="qwen" selected>');
+    expect(select).not.toContain('<option value="zai" selected>');
   });
 });
 

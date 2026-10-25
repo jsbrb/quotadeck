@@ -173,6 +173,16 @@ function compactThousands(magnitude: number): string {
 }
 
 /**
+ * Integer-display badge text for a percentage (hito-12 WU-D2): UNCAPPED
+ * passthrough through the SAME rounding the ZAI 5h badge path has always
+ * used — single-sourced so the qwen quota badge can never drift from it
+ * (no rounding games, no new rules).
+ */
+export function formatPercentageBadgeText(percentage: number): string {
+  return `${Math.round(percentage)}%`;
+}
+
+/**
  * Renders a NormalizedUsage (or `null` for a failed refresh) as badge text.
  * Pure and deterministic: the same input yields the same string on every call.
  *
@@ -187,7 +197,7 @@ export function formatBadgeText(usage: NormalizedUsage | null): string {
   if (usage.windows !== undefined) {
     const percentage = usage.windows.fiveHour?.percentage;
     if (percentage !== undefined) {
-      return `${Math.round(percentage)}%`;
+      return formatPercentageBadgeText(percentage);
     }
     return usage.windows.level ?? '';
   }
