@@ -61,6 +61,17 @@ const qwenUsage: NormalizedUsage = {
   fetchedAt: FETCHED_AT,
 };
 
+// hito-13 WU-A: the DeepSeek wallet rides the usage additively, exactly like
+// `quota` does — figures are the DERIVED wallet (see core/usage.ts).
+const deepseekUsage: NormalizedUsage = {
+  providerId: 'deepseek',
+  kind: 'balance',
+  value: 2,
+  currency: 'USD',
+  wallet: { currency: 'USD', total: 2, consumed: 0, percentage: 0 },
+  fetchedAt: FETCHED_AT,
+};
+
 describe('SnapshotStore', () => {
   let browser: FakeBrowser;
   let store: SnapshotStore;
@@ -400,6 +411,47 @@ describe('SnapshotStore', () => {
   ])('a malformed quota report reads as undefined: %s', async (_label, quota) => {
     await browser.local.set({
       [SNAPSHOT_STORAGE_KEY]: { results: { qwen: { status: 'ok', usage: { ...qwenUsage, quota } } } },
+    });
+
+    expect(await store.read()).toBeUndefined();
+  });
+
+  it('deepseek ok entries round-trip with the derived wallet in every live shape (hito-13 WU-A)', async () => {
+    for (const wallet of [
+      { currency: 'USD', total: 2, consumed: 0, percentage: 0 }, // fresh-account pair
+      { currency: 'CNY', total: 10, consumed: 6, percentage: 60 }, // derived consumed share
+      { currency: 'USD', total: 2, consumed: 4, percentage: 200 }, // UNCAPPED passthrough survives storage untouched
+      { currency: 'USD', total: 0, consumed: 0 }, // zero-total honest absence (percentage omitted)
+    ] as const) {
+      const snapshot: CycleSnapshot = {
+        results: { deepseek: { status: 'ok', usage: { ...deepseekUsage, wallet } } },
+      };
+      await store.write(snapshot);
+      // Same lastKnown mirroring as the quota claim: the wallet fields
+      // round-trip VERBATIM, pinned as full deep equality against the shape.
+      expect(await store.read()).toEqual({
+        results: snapshot.results,
+        lastKnown: { deepseek: snapshot.results.deepseek },
+      });
+      await browser.local.remove(SNAPSHOT_STORAGE_KEY); // isolate per form
+    }
+  });
+
+  it.each([
+    ['wallet is not an object', 'wallet-string'],
+    ['wallet currency is not a string', { currency: 840, total: 2, consumed: 0 }],
+    ['wallet total is a string', { currency: 'USD', total: '2.00', consumed: 0 }],
+    ['wallet total is NaN', { currency: 'USD', total: Number.NaN, consumed: 0 }],
+    ['wallet total is infinite', { currency: 'USD', total: Number.POSITIVE_INFINITY, consumed: 0 }],
+    ['wallet consumed is not a number', { currency: 'USD', total: 2, consumed: null }],
+    ['wallet consumed is infinite', { currency: 'USD', total: 2, consumed: Number.NEGATIVE_INFINITY }],
+    ['wallet percentage is a string', { currency: 'USD', total: 2, consumed: 0, percentage: '60' }],
+    ['wallet percentage is NaN', { currency: 'USD', total: 2, consumed: 0, percentage: Number.NaN }],
+  ])('a malformed wallet report reads as undefined: %s', async (_label, wallet) => {
+    await browser.local.set({
+      [SNAPSHOT_STORAGE_KEY]: {
+        results: { deepseek: { status: 'ok', usage: { ...deepseekUsage, wallet } } },
+      },
     });
 
     expect(await store.read()).toBeUndefined();

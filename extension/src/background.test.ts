@@ -20,7 +20,7 @@ import { FIXTURE_RESPONSES } from './fixtures';
 import { AllowlistNetworkClient } from './network/client';
 import { HttpStatusError, FetchTransport } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
-import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from './providers';
+import { DeepSeekProvider, KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from './providers';
 import { QWEN_PLAN_PROBE_HOST } from './providers/qwen-plan-probe';
 import { QWEN_TOKEN_MINT_HOST, QWEN_TOKEN_PLAN_GATEWAY_HOST } from './providers/qwen-token-plan';
 import type { AlarmCreateInfo, BrowserApi, WorkerBrowserApi } from './platform/browser-api';
@@ -144,6 +144,7 @@ const TEST_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
   qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tFixtureAccessKey', accessKeySecret: 'fixture-milestone-secret' },
   openai: { type: 'openai-admin-read', token: 'fixture-milestone-key' },
   kimi: { type: 'bearer', token: 'fixture-milestone-key' },
+  deepseek: { type: 'bearer', token: 'fixture-milestone-key' },
 };
 
 async function saveKeys(local: FakeStorageArea, ids: readonly ProviderId[]): Promise<void> {
@@ -159,6 +160,7 @@ const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
   qwen: () => new QwenProvider(),
   openai: () => new OpenAiProvider(),
   kimi: () => new KimiProvider(),
+  deepseek: () => new DeepSeekProvider(),
 };
 
 /**

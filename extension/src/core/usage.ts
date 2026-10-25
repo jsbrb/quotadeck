@@ -83,6 +83,25 @@ export interface TokenPlanQuota {
   readonly fetchedAt: number;
 }
 
+/**
+ * DeepSeek pay-as-you-go wallet (hito-13 WU-A; live capture 2026-10-25,
+ * evidence docs/spike/endpoints.md §DeepSeek balance). Every figure is
+ * DERIVED — DeepSeek exposes no usage-history endpoint, only decimal-string
+ * balances: `total = topped_up + granted` (the gift credits are part of the
+ * denominator), `consumed = total - total_balance`, and
+ * `percentage = consumed / total * 100` — UNCAPPED passthrough, rounded only
+ * at render time. `percentage` is OMITTED when `total === 0` (honest
+ * absence: an empty wallet carries no meaningful share). Known caveat:
+ * expired grants silently count as consumed.
+ */
+export interface WalletUsage {
+  /** ISO currency code from the parsed balance_infos entry (CNY or USD). */
+  readonly currency: string;
+  readonly total: number;
+  readonly consumed: number;
+  readonly percentage?: number;
+}
+
 /** The single result shape every provider folds into. */
 export interface NormalizedUsage {
   readonly providerId: ProviderId;
@@ -113,6 +132,11 @@ export interface NormalizedUsage {
    * `formatBadgeText` ignores it (quota badge rendering is a later unit).
    */
   readonly quota?: TokenPlanQuota;
+  /**
+   * DeepSeek wallet (hito-13 WU-A); optional like `quota` — `formatBadgeText`
+   * ignores it (wallet badge/card rendering is a later unit, WU-C/WU-D).
+   */
+  readonly wallet?: WalletUsage;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */
   readonly fetchedAt: number;
 }

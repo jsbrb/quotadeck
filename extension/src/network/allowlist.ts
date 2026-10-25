@@ -33,6 +33,8 @@ export const PROVIDER_ALLOWLIST: AllowlistConfig = {
   },
   openai: { hosts: ['api.openai.com'], verification: 'official' },
   kimi: { hosts: ['api.moonshot.cn'], verification: 'official' },
+  // hito-13 WU-A: the pay-as-you-go wallet surface; shipped (manifest host) in WU-B.
+  deepseek: { hosts: ['api.deepseek.com'], verification: 'official' },
 };
 
 /**

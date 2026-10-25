@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CredentialType, ProviderId } from '../core/provider';
-import { PROVIDER_METADATA } from '../core/provider-metadata';
+import { PROVIDER_METADATA, SHIPPED_PROVIDER_IDS } from '../core/provider-metadata';
 import { FIXTURE_RESPONSES } from '../fixtures';
 import { createDefaultRegistry, ENGINE_DISPATCHED_PROVIDER_IDS, QwenProvider } from './index';
 
@@ -13,12 +13,21 @@ const EXPECTED_CREDENTIALS: Readonly<Record<ProviderId, CredentialType>> = {
   qwen: 'ak-sk',
   openai: 'openai-admin-read',
   kimi: 'bearer',
+  deepseek: 'bearer',
 };
 
+/** The ids createDefaultRegistry actually registers: the shipped ∩ dispatched filter. */
+const REGISTERED_IDS = PROVIDER_METADATA.filter(
+  ({ id }) => SHIPPED_PROVIDER_IDS.includes(id) && ENGINE_DISPATCHED_PROVIDER_IDS.includes(id),
+).map(({ id }) => id);
+
 describe('createDefaultRegistry (AD-6; hito-10 shipping filter, hito-12 WU-L engine dispatch)', () => {
-  it('registers exactly the ENGINE_DISPATCHED_PROVIDER_IDS in pinned order — zai only (WU-L: qwen is quota-only via the tick-level steps)', () => {
-    expect(ENGINE_DISPATCHED_PROVIDER_IDS).toEqual(['zai']);
-    expect(createDefaultRegistry().ids()).toEqual([...ENGINE_DISPATCHED_PROVIDER_IDS]);
+  it('registers exactly the SHIPPED ∩ ENGINE_DISPATCHED intersection in PROVIDER_METADATA order', () => {
+    expect(createDefaultRegistry().ids()).toEqual(REGISTERED_IDS);
+  });
+
+  it('pins ENGINE_DISPATCHED_PROVIDER_IDS: zai + deepseek (hito-13 WU-A — registry-dispatched like zai, never a tick step)', () => {
+    expect(ENGINE_DISPATCHED_PROVIDER_IDS).toEqual(['zai', 'deepseek']);
   });
 
   it('qwen no longer registers — the BSS balance dispatch is suspended by product decision 2026-10-25 (WU-L)', () => {
@@ -27,11 +36,11 @@ describe('createDefaultRegistry (AD-6; hito-10 shipping filter, hito-12 WU-L eng
     expect(QwenProvider).toBeDefined(); // the class stays in source for a future pay-as-you-go balance
   });
 
-  it('is built from the engine-dispatched subset of PROVIDER_METADATA: ids, displayNames and credential types all match', () => {
+  it('is built from the registered subset of PROVIDER_METADATA: ids, displayNames and credential types all match', () => {
     const registry = createDefaultRegistry();
-    const dispatched = PROVIDER_METADATA.filter((entry) => ENGINE_DISPATCHED_PROVIDER_IDS.includes(entry.id));
-    expect(registry.ids()).toEqual(dispatched.map((entry) => entry.id));
-    for (const entry of dispatched) {
+    const registered = PROVIDER_METADATA.filter((entry) => REGISTERED_IDS.includes(entry.id));
+    expect(registry.ids()).toEqual(registered.map((entry) => entry.id));
+    for (const entry of registered) {
       const provider = registry.get(entry.id);
       expect(provider.displayName).toBe(entry.displayName);
       expect(provider.credentialType).toBe(entry.credentialType);
@@ -58,9 +67,11 @@ describe('createDefaultRegistry (AD-6; hito-10 shipping filter, hito-12 WU-L eng
     expect(zai.parsePage(FIXTURE_RESPONSES['zai/monitor--pro-plan'].body, null).done).toBe(true);
   });
 
-  it('rejects unshipped ids — openai/kimi stay in source but never register (qwen rejection pinned above, WU-L)', () => {
+  it('rejects unshipped ids — they stay in source but never register (openai/kimi; deepseek until WU-B ships it with its allowlist host)', () => {
     const registry = createDefaultRegistry();
-    for (const id of ['openai', 'kimi'] as const) {
+    const unshipped = PROVIDER_METADATA.map(({ id }) => id).filter((id) => !SHIPPED_PROVIDER_IDS.includes(id));
+    expect(unshipped.length).toBeGreaterThan(0); // the filter stays a real filter
+    for (const id of unshipped) {
       expect(() => registry.get(id)).toThrow(new RegExp(`Unknown provider id: ${id}`));
     }
   });

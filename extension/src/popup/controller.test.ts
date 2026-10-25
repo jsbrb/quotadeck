@@ -47,6 +47,7 @@ const PROVIDER_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
   qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tPopupAccessKey', accessKeySecret: 'PopupPairSecret0000000000000' },
   openai: { type: 'openai-admin-read', token: 'sk-admin-abcdefgh1234' },
   kimi: { type: 'bearer', token: 'sk-kimi-bbbb2222' },
+  deepseek: { type: 'bearer', token: 'sk-deepseek-eeee5555' },
 };
 
 /** Seeds every provider credential — the shipped-subset filter then keeps the zai and qwen cards (hito-12). */

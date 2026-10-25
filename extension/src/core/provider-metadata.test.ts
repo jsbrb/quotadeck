@@ -5,10 +5,11 @@ import { PROVIDER_METADATA, SHIPPED_PROVIDER_IDS } from './provider-metadata';
 // imports THIS module only — provider classes (and their endpoint constants)
 // never enter the popup bundle. providers/index.ts builds the registry from it.
 describe('PROVIDER_METADATA (AD-24)', () => {
-  it('pins the AD-6 order zai, qwen, openai, kimi with credential types', () => {
+  it('pins the AD-6 order zai, qwen, deepseek, openai, kimi with credential types (hito-13: deepseek third)', () => {
     expect(PROVIDER_METADATA).toEqual([
       { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'raw' },
       { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
+      { id: 'deepseek', displayName: 'DeepSeek', credentialType: 'bearer' },
       { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
       { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
     ]);
@@ -17,12 +18,12 @@ describe('PROVIDER_METADATA (AD-24)', () => {
   it('covers every provider id exactly once', () => {
     const ids = PROVIDER_METADATA.map((entry) => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect([...ids].sort()).toEqual(['kimi', 'openai', 'qwen', 'zai']);
+    expect([...ids].sort()).toEqual(['deepseek', 'kimi', 'openai', 'qwen', 'zai']);
   });
 });
 
-describe('SHIPPED_PROVIDER_IDS (hito-12 qwen re-ship)', () => {
-  it('ships exactly zai then qwen in AD-6 order — the single source of the shipping filter', () => {
+describe('SHIPPED_PROVIDER_IDS (hito-12 qwen re-ship; hito-13 deepseek pending)', () => {
+  it('ships exactly zai then qwen in AD-6 order — deepseek flips on in WU-B with its manifest host (hito-13)', () => {
     expect(SHIPPED_PROVIDER_IDS).toEqual(['zai', 'qwen']);
   });
 

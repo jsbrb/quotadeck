@@ -10,12 +10,17 @@ import type { NormalizedUsage } from './usage';
 import type { QwenSite } from './qwen-sites';
 import type { ZaiPlatform } from './zai-platforms';
 
-/** Stable provider identifiers. Also the registry key and the allowlist scope. */
-export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi';
+/**
+ * Stable provider identifiers. Also the registry key and the allowlist scope.
+ * `deepseek` (hito-13) is PAY-AS-YOU-GO: no coding plan exists, so usage is
+ * the pre-paid wallet on `GET /user/balance` — figures are derived into
+ * `NormalizedUsage.wallet` (no reset countdowns, no days-remaining).
+ */
+export type ProviderId = 'zai' | 'qwen' | 'openai' | 'kimi' | 'deepseek';
 
 /**
  * Credential shapes the four vendors accept:
- * - `bearer` — Kimi API tokens (`Authorization: Bearer <key>`).
+ * - `bearer` — Kimi API tokens and DeepSeek API keys (`Authorization: Bearer <key>`).
  * - `ak-sk` — Alibaba Cloud AccessKeyId/AccessKeySecret (Qwen via BSS; DashScope
  *   `sk-` keys are rejected — see core/credentials.ts).
  * - `openai-admin-read` — OpenAI admin key with read scope (`sk-admin-...`).

@@ -251,6 +251,10 @@ AD-5), scoped per provider. This block must stay structurally identical to
   "kimi": {
     "hosts": ["api.moonshot.cn"],
     "verification": "official"
+  },
+  "deepseek": {
+    "hosts": ["api.deepseek.com"],
+    "verification": "official"
   }
 }
 ```

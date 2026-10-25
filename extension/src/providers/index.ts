@@ -6,12 +6,13 @@
 import { ProviderRegistry } from '../core/registry';
 import { PROVIDER_METADATA, SHIPPED_PROVIDER_IDS } from '../core/provider-metadata';
 import type { Provider, ProviderId } from '../core/provider';
+import { DeepSeekProvider } from './deepseek';
 import { KimiProvider } from './kimi';
 import { OpenAiProvider } from './openai';
 import { QwenProvider } from './qwen';
 import { ZaiProvider } from './zai';
 
-export { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider };
+export { DeepSeekProvider, KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider };
 
 /** Concrete class per metadata id — metadata stays free of implementations. */
 const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
@@ -21,6 +22,10 @@ const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
   qwen: () => new QwenProvider(),
   openai: () => new OpenAiProvider(),
   kimi: () => new KimiProvider(),
+  // hito-13 WU-A: registered once SHIPPED_PROVIDER_IDS gains 'deepseek' —
+  // WU-B adds the allowlist host in the same unit, keeping the shipped
+  // manifest = allowlist ∩ SHIPPED invariant green at every commit.
+  deepseek: () => new DeepSeekProvider(),
 };
 
 /**
@@ -33,8 +38,13 @@ const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
  * (background.ts). SHIPPED_PROVIDER_IDS deliberately KEEPS qwen — popup
  * visibility, the badge-provider choice and the manifest host pinning all
  * subset through it.
+ *
+ * deepseek joins as REGISTRY-DISPATCHED (hito-13 WU-A): a plain balance
+ * provider like zai — the engine's page pipeline parses it, never a
+ * tick-level step. It actually registers once SHIPPED_PROVIDER_IDS gains it
+ * (WU-B, together with the allowlist host — see PROVIDER_CLASSES above).
  */
-export const ENGINE_DISPATCHED_PROVIDER_IDS: readonly ProviderId[] = ['zai'];
+export const ENGINE_DISPATCHED_PROVIDER_IDS: readonly ProviderId[] = ['zai', 'deepseek'];
 
 /**
  * Registry built from PROVIDER_METADATA in its pinned order, filtered to the

@@ -132,6 +132,9 @@ export const SETTINGS_GUIDANCE: Readonly<Record<ProviderId, string>> = {
   openai: 'Use an admin API key (sk-admin-, read scope) from your organization settings; regular project keys are rejected.',
   kimi: 'Use an API key from the Kimi console; CN and international keys are not interchangeable.',
   zai: 'Use your coding-plan API key — the same key your coding tools use. The platform selector chooses Z.AI (international) or ZHIPU (bigmodel.cn); keys are platform-bound.',
+  // hito-13: pay-as-you-go wallet — the balance endpoint is the only account surface.
+  deepseek:
+    'Use your DeepSeek API key (sk-...) from platform.deepseek.com — the balance endpoint is read-only and never spends credit.',
 };
 
 /** Everything a render needs — the controller assembles it from stores. */

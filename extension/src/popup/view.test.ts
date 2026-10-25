@@ -34,6 +34,7 @@ const PROVIDERS: readonly PopupProvider[] = [
   { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
   { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
   { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
+  // deepseek joins the rendered set in WU-B/WU-D, when it ships and renders its card.
 ];
 
 const NOW_MS = 1_754_000_000_000;
@@ -49,6 +50,7 @@ const KEYED_STATES: Readonly<Record<ProviderId, MaskedCredential>> = {
   qwen: { type: 'ak-sk', maskedAccessKeyId: '••••AK00', maskedAccessKeySecret: '••••0000' },
   openai: { type: 'openai-admin-read', maskedToken: '••••1234' },
   kimi: { type: 'bearer', maskedToken: '••••cdef' },
+  deepseek: { type: 'bearer', maskedToken: '••••ds00' },
 };
 
 /** Full monitor payload (AD-26/27): level, both windows, MCP with two tools. */
