@@ -159,6 +159,25 @@ describe('formatResetCountdown — pure reset countdown (AD-22)', () => {
     expect(formatResetCountdown(NOW_MS, NOW_MS)).toBe('0m');
     expect(formatResetCountdown(NOW_MS - 60_000, NOW_MS)).toBe('0m');
   });
+
+  it('renders windows over 24h as days + hours + minutes', () => {
+    // 215h29m = 12929 min = 8 days + 1409 min = 8d 23h 29m (the qwen token-plan
+    // monthly window shape the user reported as "Resets in 215h 29m").
+    expect(formatResetCountdown(NOW_MS + 215 * 3_600_000 + 29 * 60_000, NOW_MS)).toBe('8d 23h 29m');
+    expect(formatResetCountdown(NOW_MS + 48 * 3_600_000, NOW_MS)).toBe('2d 0h 0m');
+    expect(formatResetCountdown(NOW_MS + 25 * 3_600_000 + 61_000, NOW_MS)).toBe('1d 1h 2m'); // ceil(25h0m1s) = 1502 min
+  });
+
+  it('splits the 24h boundary on the RAW remaining time: 23h59m59s stays hours, 24h0m0s flips to days', () => {
+    // ceil(23h59m59s) = 1440 min — the boundary must NOT be the ceil'd minutes,
+    // or this case would wrongly render "1d 0h 0m".
+    expect(formatResetCountdown(NOW_MS + 23 * 3_600_000 + 59 * 60_000 + 59_000, NOW_MS)).toBe('24h 0m');
+    expect(formatResetCountdown(NOW_MS + 24 * 3_600_000, NOW_MS)).toBe('1d 0h 0m'); // exactly 24h → days form
+  });
+
+  it('keeps windows of 24h or less in the established hours form', () => {
+    expect(formatResetCountdown(NOW_MS + 23 * 3_600_000 + 59 * 60_000, NOW_MS)).toBe('23h 59m');
+  });
 });
 
 describe('renderMain — Settings Gear Surface (popup-ui spec)', () => {
@@ -707,6 +726,34 @@ describe('renderSettings — Qwen Plan Key Settings Group (popup-ui spec, hito-8
     // Site: intl default on ap-southeast-1, china selects China.
     expect(qwen).toContain('ap-southeast-1');
     expect(qwen).toContain('China');
+  });
+});
+
+describe('renderSettings — stacked qwen credential form (user-reported squeeze fix)', () => {
+  it('renders the qwen pair fields stacked: one labeled field per line, controls on their own row', () => {
+    const qwen = sectionFor(renderSettings(popupState({ view: 'settings' })), 'qwen');
+    const formStart = qwen.indexOf('<form class="key-form" data-provider="qwen">');
+    const pairForm = qwen.slice(formStart, qwen.indexOf('</form>', formStart));
+
+    expect(pairForm).toContain('<label for="key-input-qwen-ak">Access Key ID</label>');
+    expect(pairForm).toContain('<label for="key-input-qwen-sk">Access Key Secret</label>');
+    expect((pairForm.match(/class="credential-field"/g) ?? []).length).toBe(2); // one row per field
+    expect(pairForm.indexOf('class="form-actions"')).toBeGreaterThan(pairForm.lastIndexOf('class="credential-field"')); // controls AFTER the fields
+    const actions = pairForm.slice(pairForm.indexOf('class="form-actions"'));
+    expect(actions).toContain('id="key-add-qwen"');
+    expect(actions).toContain('id="key-revoke-qwen"');
+    expect((actions.match(/<input/g) ?? []).length).toBe(0); // the controls row carries no field
+  });
+
+  it('renders the plan-key group stacked the same way — its label owns a full-width row above its field', () => {
+    const qwen = sectionFor(renderSettings(popupState({ view: 'settings' })), 'qwen');
+    const groupStart = qwen.indexOf('data-provider="qwen-plan"');
+    const group = qwen.slice(groupStart, qwen.indexOf('</form>', groupStart));
+
+    expect(group).toContain('<label for="key-input-qwen-plan">Plan key (sk-sp-)</label>');
+    expect((group.match(/class="credential-field"/g) ?? []).length).toBe(1);
+    expect((group.match(/class="form-actions"/g) ?? []).length).toBe(1);
+    expect(group.indexOf('class="form-actions"')).toBeGreaterThan(group.lastIndexOf('class="credential-field"'));
   });
 });
 

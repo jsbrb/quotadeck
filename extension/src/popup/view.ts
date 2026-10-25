@@ -163,11 +163,22 @@ export function formatUsageText(usage: NormalizedUsage): string {
 /**
  * Pure reset countdown (AD-22): whole hours plus ceiling minutes from now to
  * resetAt ("2h 0m", "45m"); an elapsed or due reset collapses to "0m".
+ * Windows over 24h render day-granular ("8d 23h 29m" — the qwen token-plan
+ * monthly window) while 24h and below keep the hours form. The boundary
+ * splits on the RAW remaining time — exactly 24h flips to "1d 0h 0m" but
+ * 23h59m59s (which ceils to 1440 minutes) stays in the hours form.
  */
 export function formatResetCountdown(resetAt: number, nowMs: number): string {
-  const remainingMinutes = Math.ceil((resetAt - nowMs) / 60_000);
-  if (remainingMinutes <= 0) {
+  const remainingMs = resetAt - nowMs;
+  if (remainingMs <= 0) {
     return '0m';
+  }
+  const remainingMinutes = Math.ceil(remainingMs / 60_000);
+  if (remainingMs >= 24 * 3_600_000) {
+    const days = Math.floor(remainingMinutes / (24 * 60));
+    const hours = Math.floor((remainingMinutes % (24 * 60)) / 60);
+    const minutes = remainingMinutes % 60;
+    return `${days}d ${hours}h ${minutes}m`;
   }
   const hours = Math.floor(remainingMinutes / 60);
   const minutes = remainingMinutes % 60;
@@ -413,15 +424,42 @@ function maskedLines(masked: MaskedCredential): string[] {
     : [`<p class="key-state">Stored key: ${escapeHtml(masked.maskedToken)}</p>`];
 }
 
+/**
+ * One labeled credential field row: the label sits above its OWN full-width
+ * input (user-reported squeeze fix) — never two fields sharing a row.
+ */
+function credentialField(providerId: string, suffix: string, label: string, name: string, placeholder: string): string {
+  return (
+    '<div class="credential-field">' +
+    `<label for="key-input-${providerId}-${suffix}">${label}</label>` +
+    `<input type="password" autocomplete="off" id="key-input-${providerId}-${suffix}" name="${name}" placeholder="${placeholder}" />` +
+    '</div>'
+  );
+}
+
 /** Credential inputs: TWO password fields for the ak-sk pair, one otherwise (AD-17). */
 function credentialInputs(provider: PopupProvider): string {
   if (provider.credentialType === 'ak-sk') {
+    // Stacked pair (user-reported squeeze fix): Access Key ID on its own
+    // labeled line, then Access Key Secret — labels above their own
+    // full-width fields so nothing truncates.
     return (
-      `<input type="password" autocomplete="off" id="key-input-${provider.id}-ak" name="accessKeyId" placeholder="AccessKeyId" />` +
-      `<input type="password" autocomplete="off" id="key-input-${provider.id}-sk" name="accessKeySecret" placeholder="AccessKeySecret" />`
+      credentialField(provider.id, 'ak', 'Access Key ID', 'accessKeyId', 'AccessKeyId') +
+      credentialField(provider.id, 'sk', 'Access Key Secret', 'accessKeySecret', 'AccessKeySecret')
     );
   }
   return `<input type="password" autocomplete="off" id="key-input-${provider.id}" name="credential" placeholder="Credential" />`;
+}
+
+/** Save + revoke controls; the ak-sk pair stacks them on their own row after the fields. */
+function credentialActions(provider: PopupProvider): string {
+  const buttons =
+    `<button type="submit" id="key-add-${provider.id}">Save key</button>` +
+    `<button type="button" class="revoke" id="key-revoke-${provider.id}" data-revoke="${provider.id}">Revoke</button>`;
+  if (provider.credentialType === 'ak-sk') {
+    return `<div class="form-actions">${buttons}</div>`;
+  }
+  return buttons;
 }
 
 /**
@@ -492,6 +530,9 @@ function badgeProviderSelector(state: PopupState): string {
  * controls, labeled `Plan key (sk-sp-)` and revoked via the plan slot
  * (`data-revoke="qwen-plan"`), independent of the AK/SK pair above it. The
  * masked state renders inside the group; the controller owns persistence.
+ * Stacked like the pair (user-reported squeeze fix): the label owns a row
+ * above its full-width field and the controls sit on their own row — the
+ * group shares the `.key-form` flex row that squeezed them side by side.
  */
 function planKeyGroup(state: PopupState): string {
   const masked = state.qwenPlanKey;
@@ -502,10 +543,14 @@ function planKeyGroup(state: PopupState): string {
   return (
     maskedLine +
     '<form class="key-form plan-key-form" data-provider="qwen-plan">' +
+    '<div class="credential-field">' +
     '<label for="key-input-qwen-plan">Plan key (sk-sp-)</label>' +
     '<input type="password" autocomplete="off" id="key-input-qwen-plan" name="credential" placeholder="sk-sp-..." />' +
+    '</div>' +
+    '<div class="form-actions">' +
     '<button type="submit" id="key-add-qwen-plan">Save plan key</button>' +
     '<button type="button" class="revoke" id="key-revoke-qwen-plan" data-revoke="qwen-plan">Revoke plan key</button>' +
+    '</div>' +
     '</form>'
   );
 }
@@ -524,8 +569,7 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
   parts.push(
     `<form class="key-form" data-provider="${provider.id}">` +
       credentialInputs(provider) +
-      `<button type="submit" id="key-add-${provider.id}">Save key</button>` +
-      `<button type="button" class="revoke" id="key-revoke-${provider.id}" data-revoke="${provider.id}">Revoke</button>` +
+      credentialActions(provider) +
       '</form>',
   );
   if (provider.id === 'zai') {

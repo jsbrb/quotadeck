@@ -204,6 +204,25 @@
         flex: 1;
         min-width: 0;
       }
+      /* Stacked qwen credential fields (user-reported squeeze fix): each
+         .credential-field takes a full flex line — label above its own
+         full-width input — and .form-actions puts the save/revoke controls
+         on their own line. Single-field forms (zai/openai/kimi) render no
+         such wrappers and keep the compact row. */
+      .credential-field {
+        display: flex;
+        flex: 1 1 100%;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .credential-field label {
+        color: #57606a;
+      }
+      .form-actions {
+        display: flex;
+        flex: 1 1 100%;
+        gap: 4px;
+      }
       .key-form button {
         border: none;
         border-radius: 6px;

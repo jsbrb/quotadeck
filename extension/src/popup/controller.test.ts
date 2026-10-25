@@ -630,6 +630,30 @@ describe('controller — Qwen Plan Key Settings Group (popup-ui spec §Qwen Plan
   });
 });
 
+describe('controller — stacked qwen settings form (user-reported squeeze fix)', () => {
+  it('renders one labeled field per row for the qwen pair and the plan group, controls on their own rows', async () => {
+    const h = makePopupHarness();
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#key-input-qwen-plan')).not.toBeNull());
+
+    for (const formId of ['qwen', 'qwen-plan'] as const) {
+      const form = document.querySelector<HTMLFormElement>(`form[data-provider="${formId}"]`)!;
+      const fields = form.querySelectorAll('.credential-field');
+      expect(fields.length).toBe(formId === 'qwen' ? 2 : 1); // one row per credential field
+      for (const field of fields) {
+        expect(field.querySelectorAll('input')).toHaveLength(1); // never two fields sharing a row
+        expect(field.querySelector('label')).not.toBeNull(); // each field carries its own label
+      }
+      const actions = form.querySelectorAll('.form-actions');
+      expect(actions).toHaveLength(1); // controls live on their own line after the fields
+      expect(actions[0]!.querySelectorAll('button')).toHaveLength(2); // save + revoke together
+      expect(actions[0]!.querySelectorAll('input')).toHaveLength(0); // no field inside the controls row
+    }
+  });
+});
+
 describe('controller — plan-only qwen card (popup-ui spec §Qwen Plan Line, hito-8)', () => {
   it('a stored plan key with no pair renders the qwen card showing the plan line and no balance', async () => {
     const h = makePopupHarness();
