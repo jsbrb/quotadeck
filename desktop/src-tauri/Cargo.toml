@@ -4,6 +4,11 @@ version = "0.1.0"
 description = "QuotaDeck desktop tray app - AI provider quota monitor without the browser"
 edition = "2021"
 
+[features]
+# Embeds frontendDist assets so plain `cargo build` binaries load the bundled
+# frontend instead of the tauri dev server (http://localhost:5173).
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
