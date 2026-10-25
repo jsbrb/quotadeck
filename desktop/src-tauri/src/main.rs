@@ -50,6 +50,7 @@ fn anchor_flyout(window: &tauri::WebviewWindow) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // A second launch surfaces the existing flyout instead of forking
             // a duplicate tray app.
