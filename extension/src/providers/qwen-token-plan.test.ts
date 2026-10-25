@@ -1,9 +1,18 @@
-// Qwen token-plan quota parse tests (hito-12 T3; evidence:
-// docs/spike/endpoints.md §Qwen token-plan quota — session-token surface —
-// discovered-live, the 2026-10-25 maintainer live capture). PURE unit layer:
-// the module takes an already-parsed body and answers a UsageWindow-shaped
-// result — dispatch and the console access token belong to the background
-// composition, never to this module.
+// Qwen token-plan quota parse tests (hito-12 T3, envelope contract corrected
+// in WU-G; evidence: docs/spike/endpoints.md §Qwen token-plan quota —
+// session-token surface — discovered-live). PURE unit layer: the module takes
+// an already-parsed body and answers a UsageWindow-shaped result — dispatch
+// and the console access token belong to the background composition, never to
+// this module.
+//
+// The parser contract is pinned by the REAL live usage capture (2026-10-25,
+// international account): the inner success object carries
+// { msg, code: 'SUCCESS', data, requestId, success: true } with NO failed
+// field on this surface (failed:false belongs to the coding-plan commodity
+// API — a DIFFERENT surface — so a PRESENT failed must be false defensively
+// while an absent one is accepted). A live body-level failure answers INSIDE
+// HTTP 200 with data.success:false + errorCode and NO DataV2 at all (the
+// recorded --failed-envelope fixture).
 import { describe, expect, it } from 'vitest';
 import { ProviderApiError } from '../core/provider';
 import { FIXTURE_RESPONSES } from '../fixtures';
@@ -15,41 +24,57 @@ import {
   tokenPlanUsageRequest,
 } from './qwen-token-plan';
 
-/** Live-capture payload (COMPLETE surface): 11.72% used, monthly reset instant. */
-const LIVE_PAYLOAD = { per1MonthPercentage: 0.1172, per1MonthResetTime: 1_793_721_600_000 };
+/** Real live payload (COMPLETE surface): raw float fraction + monthly reset instant. */
+const LIVE_PAYLOAD = { per1MonthPercentage: 0.14557322303961778, per1MonthResetTime: 1_793_721_600_000 };
 
-/** Wraps a payload in the live-shaped success envelope (code defaults to string "200"). */
+/** The mapped expectation for LIVE_PAYLOAD: 0.14557322303961778 × 100 is EXACT under IEEE-754. */
+const LIVE_USAGE = { percentage: 14.557322303961778, resetAt: 1_793_721_600_000 };
+
+/** Wraps a payload in the REAL live success envelope — the inner has NO failed field. */
 function envelope(payload: unknown, code: unknown = '200'): unknown {
   return {
     code,
     data: {
       DataV2: {
         ret: ['SUCCESS::interface call succeeded'],
-        data: { data: payload, success: true, failed: false },
+        data: { msg: 'Success.', code: 'SUCCESS', data: payload, success: true },
       },
       success: true,
       httpStatus: 200,
+      errorCode: '',
+      api: 'zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage',
+      errorMsg: '',
     },
     httpStatusCode: '200',
     successResponse: true,
   };
 }
 
-describe('parseTokenPlanUsage — live envelope and mapping (docs/spike/endpoints.md)', () => {
-  it('maps the 0..1 USED fraction to the 0-100 convention and carries resetAt verbatim', () => {
+describe('parseTokenPlanUsage — REAL live envelope mapping (2026-10-25 capture)', () => {
+  it('maps the live capture: USED fraction × 100, resetAt verbatim, nothing synthesized', () => {
     const usage = parseTokenPlanUsage(FIXTURE_RESPONSES['qwen/token-plan-usage--ok'].body);
 
-    expect(usage.percentage).toBe(11.72); // 0.1172 × 100 — exact under IEEE-754
+    expect(usage.percentage).toBe(14.557322303961778); // 0.14557322303961778 × 100 — exact under IEEE-754
     expect(usage.resetAt).toBe(1_793_721_600_000);
     // NEVER synthesizes used/total/remaining: at most these two keys exist.
     expect(Object.keys(usage).sort()).toEqual(['percentage', 'resetAt']);
   });
 
-  it('accepts the gateway code as numeric 200 or string "200" (qwen.ts-style tolerance)', () => {
-    const expected = { percentage: 11.72, resetAt: 1_793_721_600_000 };
+  it('the recorded inner success object pins the surface: success true, code SUCCESS, NO failed field', () => {
+    const body = FIXTURE_RESPONSES['qwen/token-plan-usage--ok'].body as {
+      data: { DataV2: { data: Record<string, unknown> } };
+    };
+    const inner = body.data.DataV2.data;
 
-    expect(parseTokenPlanUsage(envelope(LIVE_PAYLOAD, '200'))).toStrictEqual(expected);
-    expect(parseTokenPlanUsage(envelope(LIVE_PAYLOAD, 200))).toStrictEqual(expected);
+    expect(inner.success).toBe(true);
+    expect(inner.code).toBe('SUCCESS');
+    expect(inner.msg).toBe('Success.');
+    expect('failed' in inner).toBe(false); // failed:false belongs to the coding-plan surface
+  });
+
+  it('accepts the gateway code as numeric 200 or string "200" (qwen.ts-style tolerance)', () => {
+    expect(parseTokenPlanUsage(envelope(LIVE_PAYLOAD, '200'))).toStrictEqual(LIVE_USAGE);
+    expect(parseTokenPlanUsage(envelope(LIVE_PAYLOAD, 200))).toStrictEqual(LIVE_USAGE);
   });
 
   it('passes an over-1 fraction through UNCAPPED (server 1.5 stays 150, never clamped)', () => {
@@ -79,7 +104,7 @@ describe('parseTokenPlanUsage — honest absence', () => {
     // The live capture answers JSON NUMBERS; decimal strings are not a known
     // serialization of this surface, so a typed string stays absent.
     expect(
-      parseTokenPlanUsage(envelope({ per1MonthPercentage: '0.1172', per1MonthResetTime: '1793721600000' })),
+      parseTokenPlanUsage(envelope({ per1MonthPercentage: '0.14557322303961778', per1MonthResetTime: '1793721600000' })),
     ).toStrictEqual({});
   });
 
@@ -89,32 +114,54 @@ describe('parseTokenPlanUsage — honest absence', () => {
   });
 });
 
-describe('parseTokenPlanUsage — status-first envelope validation', () => {
-  it('the recorded failed envelope (code "400") throws ProviderApiError (server per AD-21)', () => {
+describe('parseTokenPlanUsage — status-first validation (real live contract)', () => {
+  it('the recorded Bad Request failure (data.success:false, NO DataV2) throws ProviderApiError (server per AD-21)', () => {
     const body = FIXTURE_RESPONSES['qwen/token-plan-usage--failed-envelope'].body;
 
     expect(() => parseTokenPlanUsage(body)).toThrow(ProviderApiError);
-    expect(() => parseTokenPlanUsage(body)).toThrow(/code must be 200/i);
+    expect(() => parseTokenPlanUsage(body)).toThrow(/data.success must be true/i);
   });
 
-  it('inner success:false or failed:true rejects as ProviderApiError even with code "200"', () => {
-    const notSuccess = {
+  it('inner success:false or absent rejects — the inner flag is required', () => {
+    const innerFalse = {
       code: '200',
-      data: { DataV2: { data: { data: LIVE_PAYLOAD, success: false, failed: false } }, success: true },
+      data: { DataV2: { data: { msg: 'Success.', code: 'SUCCESS', data: LIVE_PAYLOAD, success: false } }, success: true },
     };
-    const failedFlag = {
+    const innerAbsent = {
+      code: '200',
+      data: { DataV2: { data: { msg: 'Success.', code: 'SUCCESS', data: LIVE_PAYLOAD } }, success: true },
+    };
+
+    expect(() => parseTokenPlanUsage(innerFalse)).toThrow(ProviderApiError);
+    expect(() => parseTokenPlanUsage(innerFalse)).toThrow(/inner success must be true/i);
+    expect(() => parseTokenPlanUsage(innerAbsent)).toThrow(ProviderApiError);
+  });
+
+  it('a PRESENT failed must be false: failed:true rejects; failed:false (the coding-plan commodity shape) still parses', () => {
+    const failedTrue = {
       code: '200',
       data: { DataV2: { data: { data: LIVE_PAYLOAD, success: true, failed: true } }, success: true },
     };
+    const failedFalse = {
+      code: '200',
+      data: { DataV2: { data: { data: LIVE_PAYLOAD, success: true, failed: false } }, success: true },
+    };
 
-    expect(() => parseTokenPlanUsage(notSuccess)).toThrow(ProviderApiError);
-    expect(() => parseTokenPlanUsage(notSuccess)).toThrow(/success must be true/i);
-    expect(() => parseTokenPlanUsage(failedFlag)).toThrow(ProviderApiError);
-    expect(() => parseTokenPlanUsage(failedFlag)).toThrow(/failed must be false/i);
+    expect(() => parseTokenPlanUsage(failedTrue)).toThrow(ProviderApiError);
+    expect(() => parseTokenPlanUsage(failedTrue)).toThrow(/failed must be false/i);
+    expect(parseTokenPlanUsage(failedFalse)).toStrictEqual(LIVE_USAGE);
   });
 
-  it('a non-200 code rejects even when the inner flags say success', () => {
+  it('a data.success:true envelope WITHOUT DataV2 rejects', () => {
+    const noDataV2 = { code: '200', data: { success: true, httpStatus: 200, errorCode: '', errorMsg: '' } };
+
+    expect(() => parseTokenPlanUsage(noDataV2)).toThrow(ProviderApiError);
+    expect(() => parseTokenPlanUsage(noDataV2)).toThrow(/DataV2/i);
+  });
+
+  it('a non-200 code rejects even when the flags say success', () => {
     expect(() => parseTokenPlanUsage(envelope(LIVE_PAYLOAD, '500'))).toThrow(ProviderApiError);
+    expect(() => parseTokenPlanUsage(envelope(LIVE_PAYLOAD, '500'))).toThrow(/code must be 200/i);
   });
 
   it('a non-object body rejects — the envelope cannot be validated', () => {

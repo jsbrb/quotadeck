@@ -917,10 +917,10 @@ describe('background — Qwen Quota Two-Hop Step (hito-12 WU-C2; retained qwen g
       usage: {
         value: 100.28,
         plan: { status: 'available' },
-        quota: { percentage: 11.72, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
+        quota: { percentage: 14.557322303961778, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
       },
     });
-    expect(h.action.badgeTexts).toEqual(['12%']); // quota percentage 11.72 through the zai-path formatter — chosen qwen (WU-D2)
+    expect(h.action.badgeTexts).toEqual(['15%']); // quota percentage 14.56 through the zai-path formatter — chosen qwen (WU-D2)
     expect(transport.quotaCalls()).toEqual({ mint: 1, gateway: 1 });
   });
 
@@ -1001,7 +1001,7 @@ describe('background — Qwen Quota Two-Hop Step (hito-12 WU-C2; retained qwen g
       usage: {
         providerId: 'qwen',
         kind: 'balance',
-        quota: { percentage: 11.72, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
+        quota: { percentage: 14.557322303961778, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
         fetchedAt: TICK_NOW, // the plan-only synthesis discipline, field-for-field
       },
     });
@@ -1317,8 +1317,8 @@ describe('background — Badge Provider Choice (hito-12 WU-D2, single badge writ
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW), undefined, createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
 
-    expect(h.action.badgeTexts).toEqual(['12%']); // quota percentage 11.72 through the shared zai-path formatter
-    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // 11.72 < 50 → neutral band from the QUOTA percentage
+    expect(h.action.badgeTexts).toEqual(['15%']); // quota percentage 14.56 through the shared zai-path formatter
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // 14.56 < 50 → neutral band from the QUOTA percentage
   });
 
   it('the threshold band follows the quota percentage — 84% renders the deep-orange band', async () => {

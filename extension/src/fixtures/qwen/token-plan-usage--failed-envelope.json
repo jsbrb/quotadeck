@@ -1,15 +1,10 @@
 {
-  "code": "400",
+  "code": "200",
   "data": {
-    "DataV2": {
-      "ret": ["FAIL_BIZ::request failed"],
-      "data": {
-        "success": false,
-        "failed": true
-      }
-    },
     "success": false,
-    "httpStatus": 200
+    "httpStatus": 200,
+    "errorCode": "Bad Request",
+    "errorMsg": "Bad Request"
   },
   "httpStatusCode": "200",
   "successResponse": true

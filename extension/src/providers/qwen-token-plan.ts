@@ -9,13 +9,20 @@
 // the value is never logged, never placed in url/query/body, never persisted.
 // Dispatch belongs to the background composition.
 //
-// Envelope validation is STATUS-FIRST: the payload lives at
-// `data.DataV2.data.data`, and success requires the gateway `code` to be 200
-// or "200" (the per-site tolerance qwen.ts applies to BSS envelopes) AND the
-// inner `success: true` AND `failed: false`. Any non-success throws
-// ProviderApiError (classifies as `server` per AD-21); a successful envelope
-// with a missing or garbage payload answers with honest absent fields, never
-// a crash.
+// Envelope validation is STATUS-FIRST, pinned by the REAL live usage capture
+// of 2026-10-25 (docs/spike/endpoints.md §Qwen token-plan quota): the payload
+// lives at `data.DataV2.data.data`, and success requires the gateway `code`
+// to be 200 or "200" (the per-site tolerance qwen.ts applies to BSS
+// envelopes) AND `data.success === true` AND `data.DataV2` present AND the
+// inner `data.DataV2.data.success === true`. This surface carries NO inner
+// `failed` field — the earlier `failed: false` capture belonged to the
+// coding-plan commodity API, a DIFFERENT surface — so a PRESENT `failed`
+// must be false (defensive) while an absent one is accepted. A live
+// body-level failure answers INSIDE HTTP 200 as data.success:false +
+// errorCode with NO DataV2 (the recorded --failed-envelope fixture). Any
+// non-success throws ProviderApiError (classifies as `server` per AD-21); a
+// successful envelope with a missing or garbage payload answers with honest
+// absent fields, never a crash.
 //
 // Semantics (COMPLETE surface — exactly two fields): `per1MonthPercentage` is
 // a 0..1 USED fraction mapped to the 0-100 window convention (× 100) and
@@ -53,18 +60,29 @@ export function parseTokenPlanUsage(body: unknown): UsageWindow {
     );
   }
   const data = asObject(root?.data);
-  const dataV2 = asObject(data?.DataV2);
-  const inner = asObject(dataV2?.data);
-  const success = inner?.success;
-  if (success !== true) {
+  const dataSuccess = data?.success;
+  if (dataSuccess !== true) {
     throw new ProviderApiError(
-      `Qwen token-plan usage failed: inner success must be true, got ${describeValue(success)}.`,
+      `Qwen token-plan usage failed: data.success must be true, got ${describeValue(dataSuccess)}.`,
     );
   }
-  const failed = inner?.failed;
-  if (failed !== false) {
+  const dataV2 = asObject(data?.DataV2);
+  if (dataV2 === null) {
+    throw new ProviderApiError('Qwen token-plan usage failed: data.success is true but data.DataV2 is missing.');
+  }
+  const inner = asObject(dataV2.data);
+  const innerSuccess = inner?.success;
+  if (innerSuccess !== true) {
     throw new ProviderApiError(
-      `Qwen token-plan usage failed: inner failed must be false, got ${describeValue(failed)}.`,
+      `Qwen token-plan usage failed: inner success must be true, got ${describeValue(innerSuccess)}.`,
+    );
+  }
+  // ABSENT failed is the real surface (live 2026-10-25); a present one must
+  // be false — defensive acceptance of the coding-plan commodity shape.
+  const failed = inner?.failed;
+  if (failed !== undefined && failed !== false) {
+    throw new ProviderApiError(
+      `Qwen token-plan usage failed: inner failed must be false when present, got ${describeValue(failed)}.`,
     );
   }
   // A successful envelope with a missing/garbage payload reports honestly:

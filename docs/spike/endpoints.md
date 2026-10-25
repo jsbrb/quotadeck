@@ -131,6 +131,14 @@ Verification levels:
   `switchAgent` is omitted entirely (live probe: omitted = SUCCESS,
   `switchAgent: 0` = `BailianGateway.Workspace.NotAuthorised`) — the body is static,
   no account identifiers.
+- Envelope keys (pinned by the REAL live usage capture, 2026-10-25, first pass through the
+  extension): success gates on the gateway `code` "200" AND `data.success === true`; the payload
+  lives at `data.DataV2.data.data`, whose inner wrapper is `{ "msg": "Success.", "code": "SUCCESS",
+  "data": { ...payload... }, "requestId": "...", "success": true }` — this surface carries **NO
+  `failed` field** (the earlier `failed: false` capture belonged to the coding-plan commodity API,
+  a DIFFERENT surface). A live body-level failure answers INSIDE HTTP 200 as
+  `{ "code": "200", "data": { "success": false, "httpStatus": 200, "errorCode": "Bad Request", "errorMsg": "Bad Request" }, "httpStatusCode": "200", "successResponse": true }`
+  — `data.success: false` with NO `DataV2`.
 - Response semantics (COMPLETE surface — exactly two fields):
   `{ "per1MonthPercentage": 0.1172, "per1MonthResetTime": 1793721600000 }`.
   - `per1MonthPercentage` is a **0..1 USED fraction** — NOT remaining (live cross-check:

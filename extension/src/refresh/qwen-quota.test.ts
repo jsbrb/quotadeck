@@ -21,11 +21,11 @@ const SENTINEL_A = 'sess-quota-transient-token-aaaa';
 const SENTINEL_B = 'sess-quota-transient-token-bbbb';
 const PAIR = { type: 'ak-sk', accessKeyId: 'LTAI5tQuotaFixtureAccessKey', accessKeySecret: 'quota-fixture-secret-never-real' } as const;
 
-/** Success envelope wrapper for the live-shaped gateway body (T3 parse). */
+/** Success envelope wrapper for the live-shaped gateway body (T3 parse, WU-G data.success gate). */
 function envelope(payload: unknown): unknown {
   return {
     code: '200',
-    data: { DataV2: { data: { data: payload, success: true, failed: false } } },
+    data: { success: true, DataV2: { data: { data: payload, success: true, failed: false } } },
   };
 }
 
