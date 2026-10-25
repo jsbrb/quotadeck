@@ -119,33 +119,42 @@ function errorCard(id: ProviderId, entry: Extract<ProviderSnapshotEntry, { statu
     </section>`;
 }
 
-function absentCard(id: ProviderId): string {
-  return `
-    <section class="card card-muted">
-      <h2 class="provider-name">${escapeHtml(displayName(id))}</h2>
-      <p class="row">NO KEY — SET ONE IN THE EXTENSION OR THE KEYS VIEW</p>
-    </section>`;
-}
-
-/** Full flyout body for a cycle snapshot. */
+/**
+ * Full flyout body for a cycle snapshot (S8): ONLY providers with a stored
+ * key render — the tick persists one entry per keyed provider, so keyless
+ * providers simply have no card. Cards follow the stable registry/metadata
+ * order; unknown-but-keyed ids (future providers) append after. With zero
+ * keys the honest strip is one small hint card.
+ */
 export function renderSnapshot(snapshot: CycleSnapshot, now: number): string {
-  const ids = new Set<ProviderId>([
+  const keyed = Object.keys(snapshot.results) as ProviderId[];
+  const ordered = [
     ...(PROVIDER_METADATA.map((entry) => entry.id) as ProviderId[]),
-    ...Object.keys(snapshot.results) as ProviderId[],
-  ]);
+    ...keyed,
+  ].filter((id, index, all) => snapshot.results[id] !== undefined && all.indexOf(id) === index);
+
+  if (ordered.length === 0) {
+    return '<section class="placeholder">NO KEYS YET — ADD ONE IN THE KEYS TAB</section>';
+  }
   const cards: string[] = [];
-  for (const id of ids) {
+  for (const id of ordered) {
     const entry = snapshot.results[id];
     if (entry === undefined) {
-      cards.push(absentCard(id));
-    } else if (entry.status === "ok") {
+      continue;
+    }
+    if (entry.status === "ok") {
       cards.push(okCard(id, entry.usage));
     } else {
       const lastKnownAt = snapshot.lastKnown?.[id]?.usage.fetchedAt;
       cards.push(errorCard(id, entry, lastKnownAt, now));
     }
   }
-  return cards.join("\n") || '<section class="placeholder">NO CYCLE YET</section>';
+  return cards.join("\n");
+}
+
+/** Number of cards the current snapshot renders (strip width driver). */
+export function keyedCount(snapshot: CycleSnapshot): number {
+  return Object.keys(snapshot.results).length;
 }
 
 /** Full-body error state (the tick itself failed, e.g. storage unavailable). */

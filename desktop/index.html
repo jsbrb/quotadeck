@@ -61,14 +61,32 @@
       main {
         flex: 1;
         padding: 14px;
-        overflow-y: auto;
+        overflow: hidden;
+      }
+      #cards {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        gap: 12px;
+        align-items: stretch;
+      }
+      #keys {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 14px;
+        align-items: start;
+      }
+      #keys .card {
+        width: auto;
+        margin: 0;
       }
       .card {
         border: 2px solid var(--ink);
         background: #ffffff;
         box-shadow: var(--shadow-offset) var(--shadow-offset) 0 var(--ink);
-        padding: 12px;
-        margin-bottom: 14px;
+        padding: 8px 10px;
+        width: 190px;
+        flex: 0 0 auto;
       }
       .card-error {
         background: #fff7ed;

@@ -14,7 +14,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
-    Manager, Rect, WindowEvent,
+    Manager, WindowEvent,
 };
 
 mod prefs;
@@ -46,10 +46,9 @@ fn set_tray_badge(app: tauri::AppHandle, band: String, tooltip: String) {
     let _ = tray.set_tooltip(Some(tooltip.as_str()));
 }
 
-/// Estimated taskbar height used to anchor the flyout above it. Refined in
-/// WU-D when the flyout anchors to the real tray icon position.
-const TASKBAR_ESTIMATE: i32 = 48;
-const FLYOUT_MARGIN: i32 = 12;
+/// Small margin from the screen's right edge so the strip border stays
+/// visible against the screen border.
+const FLYOUT_MARGIN: i32 = 8;
 
 #[tauri::command]
 fn set_pinned(app: tauri::AppHandle, pinned: bool) {
@@ -67,28 +66,24 @@ fn anchor_flyout(window: &tauri::WebviewWindow) {
     let Ok(Some(monitor)) = window.current_monitor() else {
         return;
     };
-    let screen = monitor.size();
+    let area = monitor.work_area();
     let win = window.outer_size().unwrap_or_default();
-    let x = (screen.width as i32 - win.width as i32 - FLYOUT_MARGIN).max(0);
-    let y = (screen.height as i32 - win.height as i32 - TASKBAR_ESTIMATE).max(0);
+    let right = area.position.x + area.size.width as i32;
+    let bottom = area.position.y + area.size.height as i32;
+    let x = (right - FLYOUT_MARGIN - win.width as i32).max(area.position.x);
+    let y = (bottom - win.height as i32).max(area.position.y);
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
-/// Anchors the flyout right above the tray icon the user clicked, clamped to
-/// the monitor — the menubar-popover placement, now from the real icon rect.
-fn anchor_near_tray(window: &tauri::WebviewWindow, rect: &Rect) {
-    let Ok(Some(monitor)) = window.current_monitor() else {
-        return;
-    };
-    let scale = monitor.scale_factor();
-    let pos = rect.position.to_physical::<f64>(scale);
-    let size = rect.size.to_physical::<f64>(scale);
-    let screen = monitor.size();
-    let win = window.outer_size().unwrap_or_default();
-    let max_x = (screen.width as i32 - win.width as i32).max(0);
-    let x = (pos.x as i32 + size.width as i32 / 2 - win.width as i32 / 2).clamp(0, max_x);
-    let y = (pos.y as i32 - win.height as i32 - 8).max(0);
-    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+/// Resizes the flyout (logical px from the frontend's deterministic strip
+/// math) and re-docks it in the same step, so growth never displaces the
+/// bottom-right anchor.
+#[tauri::command]
+fn reflow_flyout(app: tauri::AppHandle, width: f64, height: f64) {
+    if let Some(window) = app.get_webview_window("flyout") {
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+        anchor_flyout(&window);
+    }
 }
 
 fn main() {
@@ -126,13 +121,15 @@ fn main() {
                     if let TrayIconEvent::Click {
                         button: MouseButton::Left,
                         button_state: MouseButtonState::Up,
-                        rect,
                         ..
                     } = event
                     {
                         let app = tray.app_handle();
                         if let Some(window) = app.get_webview_window("flyout") {
-                            anchor_near_tray(&window, &rect);
+                            // Fixed dock (S9): the strip always shows at the
+                            // bottom-right, regardless of which tray slot the
+                            // icon sits in.
+                            anchor_flyout(&window);
                             let _ = window.show();
                             let _ = window.set_focus();
                         }
@@ -155,6 +152,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             set_pinned,
             set_tray_badge,
+            reflow_flyout,
             prefs::prefs_read_all,
             prefs::prefs_write_all,
             secrets::secrets_read_all,

@@ -14,8 +14,8 @@
       {
         "label": "flyout",
         "title": "QuotaDeck",
-        "width": 340,
-        "height": 520,
+        "width": 700,
+        "height": 170,
         "resizable": false,
         "decorations": false,
         "skipTaskbar": true,

@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { SystemClock } from "@shared/core/clock";
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
 import { createDesktopTransport } from "./lib/desktop-transport";
-import { displayName, renderSnapshot, renderTickError } from "./lib/render";
+import { displayName, keyedCount, renderSnapshot, renderTickError } from "./lib/render";
 import { setupKeysView } from "./lib/keys-view";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
 import { resolveChosenBand } from "./lib/tray-badge";
@@ -28,11 +28,39 @@ pinButton?.addEventListener("click", () => {
   void invoke("set_pinned", { pinned });
 });
 
+// Strip sizing (S9): deterministic width from the keyed card count — no DOM
+// measurement feedback loops. KEYS gets its own taller transient window.
+const CARD_WIDTH = 190;
+const CARD_GAP = 12;
+const STRIP_PAD_X = 28;
+const STRIP_HEIGHT = 170;
+const KEYS_WIDTH = 680;
+const KEYS_HEIGHT = 560;
+
+let activeQuotas = true;
+let lastKeyedCount = 0;
+
+function reflowQuotas(): void {
+  const count = Math.max(lastKeyedCount, 1);
+  const width = STRIP_PAD_X + count * CARD_WIDTH + (count - 1) * CARD_GAP;
+  void invoke("reflow_flyout", { width, height: STRIP_HEIGHT });
+}
+
+function reflowKeys(): void {
+  void invoke("reflow_flyout", { width: KEYS_WIDTH, height: KEYS_HEIGHT });
+}
+
 function showTab(quotas: boolean): void {
+  activeQuotas = quotas;
   cards?.classList.toggle("hidden", !quotas);
   keysView?.classList.toggle("hidden", quotas);
   tabQuotas?.classList.toggle("active", quotas);
   tabKeys?.classList.toggle("active", !quotas);
+  if (quotas) {
+    reflowQuotas();
+  } else {
+    reflowKeys();
+  }
 }
 
 tabQuotas?.addEventListener("click", () => showTab(true));
@@ -48,6 +76,10 @@ async function tick(): Promise<void> {
     const outcome = await runDesktopRefreshTick({ prefs, secrets, transport, clock });
     if (cards !== null) {
       cards.innerHTML = renderSnapshot(outcome.snapshot, clock.now());
+    }
+    lastKeyedCount = keyedCount(outcome.snapshot);
+    if (activeQuotas) {
+      reflowQuotas();
     }
     // The tray icon IS the desktop badge (WU-E): band color from the chosen
     // provider's threshold, figure in the tooltip.
