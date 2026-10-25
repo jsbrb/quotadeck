@@ -533,7 +533,7 @@ describe('renderSettings — Badge Provider Selector (popup-ui spec §Badge Prov
   });
 });
 
-describe('renderMain — Qwen Token Plan Quota Line (popup-ui spec §Qwen Token Plan Quota Line; hito-12 WU-D3)', () => {
+describe('renderMain — Qwen Token Plan twin card (popup-ui spec §Qwen Token Plan Quota Line; hito-12 WU-M: visual copy of the ZAI monitor card)', () => {
   /** A last cycle whose qwen entry carries the monthly quota window (WU-D3). */
   function qwenQuotaSnapshot(
     quota: { percentage?: number; resetAt?: number },
@@ -553,36 +553,55 @@ describe('renderMain — Qwen Token Plan Quota Line (popup-ui spec §Qwen Token 
     };
   }
 
-  it('renders the quota line with one-decimal percentage and display-time countdown — no hero is synthesized', () => {
+  it('renders the quota percentage as the card hero AND inside its monitor bar, with the resets line below (WU-M twin card)', () => {
     const html = renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 }) }));
     const qwen = sectionFor(html, 'qwen');
 
-    expect(qwen).toContain('class="quota-status"');
-    expect(qwen).toContain('Token Plan: 11.7% used · resets in <span class="countdown">1h 30m</span>'); // countdown from quota.resetAt at render time
-    expect(qwen).toContain('¥100.28'); // the balance line stays the leading figure
-    expect(qwen).not.toContain('hero-percentage'); // monetary card: the quota percentage is never a monitor hero
+    // Hero: same class, same Math.round, same threshold band as the ZAI primary (repeals the WU-D3 "no hero" pin).
+    expect(qwen).toContain('<p class="hero-percentage band-green">12%</p>'); // Math.round(11.72) = 12
+    // The SAME number again inside the monitor bar — the hito-6 dual-hero discipline, bar mirroring zai's exactly.
+    expect(qwen).toContain(
+      '<div class="bar band-green"><div class="bar-fill" style="width: 12%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">12%</span></div>',
+    );
+    // The line lost the figure to hero+bar, exactly as the ZAI 5h line did — window-label vocabulary kept.
+    expect(qwen).toContain('<p class="monitor-window">');
+    expect(qwen).toContain('Token Plan: Resets in <span class="countdown">1h 30m</span>'); // countdown from quota.resetAt at render time
+    expect(qwen).not.toContain('% used'); // the one-decimal in-line figure is repealed by the twin rule
+    expect(qwen).toContain('¥100.28'); // the balance stays below the hero
+    // Above all other card content, like the ZAI hero.
+    expect(qwen.indexOf('class="hero-percentage')).toBeLessThan(qwen.indexOf('class="usage"'));
+    expect(qwen.indexOf('class="hero-percentage')).toBeLessThan(qwen.indexOf('class="monitor"'));
   });
 
-  it('renders whole percentages without a decimal and keeps UNCAPPED values verbatim', () => {
+  it('renders whole percentages without a trailing .0; uncapped values exceed 100 in text while the bar fill caps — the ZAI bar discipline verbatim', () => {
     const whole = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 42, resetAt: NOW_MS + 2 * 3_600_000 }) })), 'qwen');
-    expect(whole).toContain('Token Plan: 42% used · resets in <span class="countdown">2h 0m</span>');
-    expect(whole).not.toContain('42.0%');
+    expect(whole).toContain('<p class="hero-percentage band-green">42%</p>');
+    expect(whole).toContain('style="width: 42%"');
+    expect(whole).not.toContain('42.0');
+    expect(whole).toContain('Token Plan: Resets in <span class="countdown">2h 0m</span>');
 
     const uncapped = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 127.3 }) })), 'qwen');
-    expect(uncapped).toContain('Token Plan: 127.3% used'); // the server's 127.3 renders 127.3 — never capped
+    expect(uncapped).toContain('<p class="hero-percentage band-red">127%</p>'); // the server's 127.3 rounds to 127 — never capped
+    expect(uncapped).toContain('style="width: 100%"'); // fill caps at 100 exactly like the ZAI 5h bar
+    expect(uncapped).toContain('<span class="bar-pct">127%</span>'); // in-bar text stays uncapped
+    // A percentage-only quota leaves the line with no parts — the bar renders alone (the windowLine discipline).
+    expect(uncapped).not.toContain('Token Plan');
   });
 
-  it('a reset instant without a percentage renders countdown-only — no figure is synthesized', () => {
+  it('a reset instant without a percentage renders the resets line only — no hero and no bar, nothing synthesized', () => {
     const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ resetAt: NOW_MS + 45 * 60_000 }) })), 'qwen');
 
-    expect(qwen).toContain('Token Plan: resets in <span class="countdown">45m</span>');
-    expect(qwen).not.toContain('% used');
+    expect(qwen).toContain('Token Plan: Resets in <span class="countdown">45m</span>');
+    expect(qwen).not.toContain('hero-percentage'); // honest absent: nothing is synthesized
+    expect(qwen).not.toContain('class="bar'); // ZAI's absent-pct window renders the line without a bar — mirrored
   });
 
   it('a quota with neither figure nor reset renders no line at all — the balance carries on', () => {
     const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({}) })), 'qwen');
 
     expect(qwen).not.toContain('Token Plan');
+    expect(qwen).not.toContain('hero-percentage');
+    expect(qwen).not.toContain('class="monitor"');
     expect(qwen).toContain('¥100.28');
   });
 
@@ -592,10 +611,10 @@ describe('renderMain — Qwen Token Plan Quota Line (popup-ui spec §Qwen Token 
     expect(qwen).toContain('<p class="usage"></p>'); // empty usage line — the established honest degradation
     expect(qwen).not.toContain('¥');
     expect(qwen).not.toContain('—'); // no invented placeholder
-    expect(qwen).toContain('Token Plan: 11.7% used');
+    expect(qwen).toContain('<p class="hero-percentage band-green">12%</p>'); // the quota pct leads the card (WU-L left no balance figure)
   });
 
-  it('quota and plan lines coexist — balance first, then quota, then the binary plan line', () => {
+  it('quota and plan lines coexist — hero first, balance, then the quota monitor block, then the binary plan line', () => {
     const snapshot: CycleSnapshot = {
       results: {
         qwen: {
@@ -611,10 +630,11 @@ describe('renderMain — Qwen Token Plan Quota Line (popup-ui spec §Qwen Token 
     };
     const qwen = sectionFor(renderMain(popupState({ snapshot })), 'qwen');
 
-    expect(qwen).toContain('Token Plan: 11.7% used');
+    expect(qwen).toContain('Token Plan: Resets in');
     expect(qwen).toContain('Plan: exhausted'); // the binary plan line is unchanged
+    expect(qwen.indexOf('class="hero-percentage')).toBeLessThan(qwen.indexOf('¥100.28')); // hero above ALL content
     expect(qwen.indexOf('¥100.28')).toBeLessThan(qwen.indexOf('Token Plan:'));
-    expect(qwen.indexOf('Token Plan:')).toBeLessThan(qwen.indexOf('Plan: exhausted')); // quota renders FIRST of the two lines
+    expect(qwen.indexOf('Token Plan:')).toBeLessThan(qwen.indexOf('Plan: exhausted')); // quota block renders FIRST of the two lines
   });
 
   it('repeated renders are byte-identical — the quota line is a pure function of state (W1-gap discipline)', () => {
@@ -1079,9 +1099,13 @@ describe('renderMain — dual hero percentage (popup-ui §Provider List Renderin
     expect(zai.indexOf('class="hero-percentage')).toBeLessThan(zai.indexOf('5h:'));
   });
 
-  it('renders NO hero on monetary cards — the balance stays the leading figure', () => {
+  it('renders NO hero on cards without a headline percentage — the balance stays the leading figure (narrowed by WU-M: a quota-carrying qwen IS a hero card)', () => {
     const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
 
+    // FULL_SNAPSHOT's qwen carries NO quota — with no headline percentage it
+    // stays hero-free (the twin-card hero for a quota-carrying qwen is pinned
+    // in the WU-M describe above; the plan-only/no-quota shapes stay pinned
+    // green in the plan-line describe).
     for (const id of ['qwen', 'openai', 'kimi'] as const) {
       expect(sectionFor(html, id)).not.toContain('hero-percentage');
     }

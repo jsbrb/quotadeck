@@ -23,7 +23,9 @@
 //   windows with the percentage uncapped, used/total, countdown via the pure
 //   `formatResetCountdown` from `windows.*.resetAt` rendered as a distinct
 //   `.countdown` element, and the monthly MCP window with per-tool rows);
-//   where a card's primary percentage exists (ZAI: the 5h window) it renders
+//   where a card's primary percentage exists (ZAI: the 5h window; qwen: the
+//   token-plan quota — hito-12 WU-M user-ratified twin-card rule, supersedes
+//   the WU-D3 line-only render) it renders
 //   TWICE — as the card's largest, boldest element (`.hero-percentage`,
 //   threshold-colored, hito-11) above all other card content, and as the
 //   same number inside its threshold bar (`.bar-pct`) — while secondary info
@@ -33,11 +35,13 @@
 //   bands from the rounded displayed percentage; visual fill caps at 100
 //   while percentage text stays uncapped; MCP fill derives from
 //   used/ceiling — presentation only, never a synthesized percentage);
+//   the qwen quota monitor block sits between the balance and the binary
+//   plan line: the `Token Plan:` line keeps only the countdown (derived at
+//   display time from `quota.resetAt`), a percentage-only quota renders the
+//   bar alone, a quota without a percentage renders the resets line without
+//   a bar or hero, and a quota without either field renders nothing;
 //   OpenAI renders per-model rows from `usage.breakdown` sorted by
-//   (model, usageType) for determinism; a qwen entry carrying the token-plan
-//   quota renders the `Token Plan:` line (hito-12 WU-D3 — percentage with at
-//   most one decimal, UNCAPPED, countdown derived at display time from
-//   `quota.resetAt`) between the balance and the binary plan line; failed
+//   (model, usageType) for determinism; failed
 //   providers render a
 //   per-class error label inside the same card structure (AD-21), and a ZAI
 //   auth failure additionally surfaces the static wrong-platform guidance
@@ -413,56 +417,64 @@ function planLine(plan: PlanInfo, state: PopupState): string {
 }
 
 /**
- * Qwen token-plan quota line (popup-ui §Qwen Token Plan Quota Line, hito-12
- * WU-D3): the monthly window carried by `usage.quota` (WU-C2 maps the
- * gateway's 0..1 fraction to the 0-100 convention at parse level — this line
- * renders it VERBATIM, uncapped, with at most one decimal: whole numbers
- * keep no decimal — no display-time rounding games). The countdown derives
- * from `quota.resetAt` at display time through the SAME pure
- * `formatResetCountdown` discipline as the plan line, rendered as the
- * established `.countdown` element. A reset instant without a percentage
- * renders the countdown only; a quota carrying neither field renders NO
- * line — nothing is synthesized. The line sits right below the balance and
- * ABOVE the binary plan line; the two coexist independently.
+ * Qwen token-plan quota monitor block (popup-ui §Qwen Token Plan Quota Line,
+ * hito-12 WU-M twin-card rule — user-ratified visual copy of the ZAI monitor
+ * card, supersedes the WU-D3 line-only render): the quota percentage lives in
+ * the card hero (usageBody) and again inside this bar's `bar-pct` overlay —
+ * the hito-6 dual-hero discipline verbatim, INCLUDING the fill cap at 100
+ * while the figure stays uncapped (127.3 renders 127 in text, 100% width).
+ * The line below therefore carries no figure at all — exactly what the ZAI
+ * 5h line lost — and keeps the window-label vocabulary: `Token Plan: Resets
+ * in <countdown>` via the SAME pure `formatResetCountdown` discipline,
+ * rendered as the established `.countdown` element. A percentage-only quota
+ * leaves the line with no parts, so the bar renders alone (the windowLine
+ * discipline — the number is already on the card twice); a reset instant
+ * without a percentage renders the line WITHOUT a bar (mirrors ZAI's
+ * absent-pct window); a quota carrying neither field renders NO block —
+ * nothing is synthesized. The block sits below the balance and ABOVE the
+ * binary plan line; the two coexist independently.
  */
-function quotaLine(quota: TokenPlanQuota, state: PopupState): string {
-  const figure = quota.percentage !== undefined ? `${quota.percentage.toFixed(1).replace(/\.0$/, '')}% used` : undefined;
-  const reset =
+function quotaMonitorBlock(quota: TokenPlanQuota, state: PopupState): string {
+  const line =
     quota.resetAt !== undefined
-      ? `resets in <span class="countdown">${formatResetCountdown(quota.resetAt, state.nowMs)}</span>`
-      : undefined;
-  if (figure === undefined && reset === undefined) {
-    return '';
+      ? `<p class="monitor-window">${ICONS.clock}Token Plan: Resets in <span class="countdown">${formatResetCountdown(quota.resetAt, state.nowMs)}</span></p>`
+      : '';
+  if (quota.percentage === undefined) {
+    // Honest absent: no hero, no bar — the resets line only (a quota
+    // carrying neither field renders no block at all, pinned in view tests).
+    return line === '' ? '' : `<div class="monitor">${line}</div>`;
   }
-  const body = figure !== undefined && reset !== undefined ? `${figure} · ${reset}` : (figure ?? reset ?? '');
-  return `<p class="quota-status">Token Plan: ${body}</p>`;
+  // Same bar the primary ZAI window builds: band from the rounded displayed
+  // percentage, fill capped at 100, the uncapped rounded figure inside it.
+  const barMarkup = bar(thresholdBand(quota.percentage), quota.percentage, `${Math.round(quota.percentage)}%`);
+  return `<div class="monitor">${line}${barMarkup}</div>`;
 }
 
 /**
  * The ok-arm card body (hero, balance, quota, plan, tier, monitor, breakdown) —
  * shared by the live ok entry and the LAST KNOWN frozen render (hito-11),
  * so a stale card shows exactly what the live card would have shown. The
- * quota line (hito-12 WU-D3) ports into this body: it travels with the
- * usage it belongs to, frozen LAST KNOWN renders included.
+ * quota monitor block (hito-12 WU-M) ports into this body: it travels with
+ * the usage it belongs to, frozen LAST KNOWN renders included.
  */
 function usageBody(usage: NormalizedUsage, state: PopupState): string {
   const parts: string[] = [];
   // Dual hero percentage (hito-6 §Provider List Rendering): where a card's
-  // primary percentage exists (ZAI: the 5h window), it renders as the
-  // card's largest, boldest element ABOVE all other card content, colored
-  // by its threshold band (hito-11); the same number repeats inside its
-  // threshold bar. Monetary cards have no primary percentage — their
-  // balance stays the leading figure, and no percentage is ever synthesized
-  // for them. The qwen card carries no primary percentage: its quota line
-  // stays a normal-weight secondary line (the hero/bar treatment is a
-  // later unit, not asserted here).
-  const heroPercentage = usage.windows?.fiveHour?.percentage;
+  // primary percentage exists it renders as the card's largest, boldest
+  // element ABOVE all other card content, colored by its threshold band
+  // (hito-11); the same number repeats inside its threshold bar. Sources:
+  // ZAI's 5h window, or — hito-12 WU-M twin-card rule, user-ratified — the
+  // qwen token-plan quota percentage. Precedence is windows.fiveHour first,
+  // then quota: a card never has two heroes and nothing is synthesized when
+  // both are absent (a plan-only or quota-less qwen stays hero-free, the
+  // balance remaining the leading figure).
+  const heroPercentage = usage.windows?.fiveHour?.percentage ?? usage.quota?.percentage;
   if (heroPercentage !== undefined) {
     parts.push(`<p class="hero-percentage ${thresholdBand(heroPercentage)}">${Math.round(heroPercentage)}%</p>`);
   }
   parts.push(`<p class="usage">${formatUsageText(usage)}</p>`);
   if (usage.quota !== undefined) {
-    parts.push(quotaLine(usage.quota, state)); // hito-12 WU-D3: below the balance, above the plan line
+    parts.push(quotaMonitorBlock(usage.quota, state)); // hito-12 WU-M: hero lives above, bar + resets line here
   }
   if (usage.plan !== undefined) {
     parts.push(planLine(usage.plan, state)); // hito-8: below the balance

@@ -70,9 +70,13 @@ encryption claims.
 5. Clicking the toolbar action opens the popup on the consumption view: the
    ZAI monitor block (plan level, the 5h window with its uncapped percentage,
    used/total and reset countdown, the weekly window, and the MCP window with
-   per-tool rows) and the Qwen card (the token-plan quota line —
-   e.g. `Token Plan: 11.7% used · resets in 1h 30m`, the percentage uncapped —
-   and the binary plan line; the card carries no balance figure) — the same
+    per-tool rows) and the Qwen card — the visual twin of the ZAI monitor
+    (hito-12): the token-plan quota percentage as the hero figure and again
+    inside its threshold bar (uncapped text, capped fill), the `Token Plan:`
+    line keeping only the countdown — e.g. `Token Plan: Resets in 1h 30m` —
+    plus the binary plan line; a quota without a percentage renders the
+    resets line alone, with no hero; the card carries no balance figure) —
+    the same
    data the tick persisted for that
    cycle. Failed refreshes show a per-class error label (`Auth failed`,
    `Rate limited`, …) in the card — the badge shows `ERR` only when the

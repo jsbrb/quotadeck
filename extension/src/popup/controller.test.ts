@@ -151,7 +151,7 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     expect(text).not.toContain('Kimi (Moonshot AI)');
   });
 
-  it('the qwen card renders the token-plan quota line from the snapshot with a display-time countdown (hito-12 WU-D3)', async () => {
+  it('the qwen card renders the token-plan quota as hero + in-bar figure + resets line (hito-12 WU-M twin card)', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, {
       results: {
@@ -173,7 +173,9 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     await openPopup(h);
 
     const qwen = document.querySelector('section[data-provider="qwen"]');
-    expect(qwen?.textContent).toContain('Token Plan: 11.7% used · resets in 1h 30m'); // countdown from the injected now
+    expect(qwen?.querySelector('.hero-percentage')?.textContent).toBe('12%'); // Math.round(11.72) — the twin card's hero
+    expect(qwen?.querySelector('.bar-pct')?.textContent).toBe('12%'); // the SAME figure inside the monitor bar
+    expect(qwen?.textContent).toContain('Token Plan: Resets in 1h 30m'); // countdown from the injected now (the in-line pct is repealed)
     expect(qwen?.textContent).toContain('¥100.28');
   });
 

@@ -204,14 +204,14 @@
       .tier,
       .no-cycle,
       .key-state,
-      .plan-status,
-      /* hito-12 quota line rides the design's normal-weight secondary lines
-         (never a hero — that treatment is a later unit). */
-      .quota-status {
+      .plan-status {
         color: #47464b;
         font: 600 11px/14px var(--font-mono);
         margin: 0 0 4px;
       }
+      /* hito-12 WU-M: the quota card is the ZAI monitor's visual twin — it
+         reuses .monitor, .monitor-window and .bar verbatim, so no quota-
+         specific rule exists. */
       .key-state {
         background: var(--paper);
         border: 2px solid var(--ink);
