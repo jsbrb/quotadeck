@@ -8,20 +8,25 @@
 // - Two views: `renderMain` (default consumption view) and `renderSettings`
 //   (all key management). The header of each carries the switch — a
 //   `data-action="open-settings"` gear on main, `data-action="back"` on
-//   settings — wired by the controller's click delegation.
+//   settings — wired by the controller's click delegation. The footer nav
+//   (hito-11) mirrors the switch: exactly two tabs — QUOTAS (active on main)
+//   and KEYS (active on settings) — wired to the SAME open-settings/back
+//   data-actions. Nothing else exists: no LOGS/STATS tabs, no fake telemetry.
 // - Main view: one provider CARD per KEYED provider in PopupState.providers
 //   order (PROVIDER_METADATA order in production, AD-6) — keyless providers
 //   render no card at all (hito-6); the settings view keeps every provider.
 //   The main header carries the refresh affordance
 //   (`data-action="refresh"`, hito-6 §Manual Refresh Control) next to the
-//   gear. ZAI renders its monitor block from `usage.windows` (plan level,
-//   5h/weekly windows with the percentage uncapped, used/total, countdown
-//   via the pure `formatResetCountdown` from `windows.*.resetAt` rendered
-//   as a distinct `.countdown` element, and the monthly MCP window with
-//   per-tool rows); where a card's primary percentage exists (ZAI: the 5h
-//   window) it renders TWICE — as the card's largest, boldest element
-//   (`.hero-percentage`) above all other card content, and as the same
-//   number inside its threshold bar (`.bar-pct`) — while secondary info
+//   gear, plus a real `PLAN · <level>` chip derived from the ZAI cycle entry
+//   (hito-11 — the design's LIVE badge is fake telemetry and never renders).
+//   ZAI renders its monitor block from `usage.windows` (plan level, 5h/weekly
+//   windows with the percentage uncapped, used/total, countdown via the pure
+//   `formatResetCountdown` from `windows.*.resetAt` rendered as a distinct
+//   `.countdown` element, and the monthly MCP window with per-tool rows);
+//   where a card's primary percentage exists (ZAI: the 5h window) it renders
+//   TWICE — as the card's largest, boldest element (`.hero-percentage`,
+//   threshold-colored, hito-11) above all other card content, and as the
+//   same number inside its threshold bar (`.bar-pct`) — while secondary info
 //   (window label, used/total, countdown) stays in normal weight below;
 //   every percentage-bearing window and the MCP window carry a
 //   threshold-colored bar (`band-green|band-amber|band-red`, contiguous
@@ -33,8 +38,12 @@
 //   per-class error label inside the same card structure (AD-21), and a ZAI
 //   auth failure additionally surfaces the static wrong-platform guidance
 //   (AD-27 — derived here from (provider, class), never transported in the
-//   snapshot). NO key forms appear in the main view — key state and forms
-//   live in settings only.
+//   snapshot). When the errored provider has a last-known success (WU2's
+//   `snapshot.lastKnown`), the card additionally renders that frozen usage
+//   dimmed under a `LAST KNOWN · T-<age>` chip — the age derives from the
+//   state's `nowMs` vs the entry's `fetchedAt`, never from Date.now().
+//   NO key forms appear in the main view — key state and forms live in
+//   settings only.
 // - Settings view: each provider section renders its static SETTINGS_GUIDANCE
 //   copy (popup-ui §Settings Guidance) before its input(s) — key-independent
 //   and distinct from validation errors. The ZAI section carries the
@@ -44,7 +53,13 @@
 //   from the pure QWEN_SITES table the same way; the controller owns
 //   persistence for both.
 // - Both views end with the shared branding footer (popup-ui §Branding
-//   Footer): "Built by The North Code" → https://www.thenorthcode.es/.
+//   Footer): "Built by The North Code" → https://www.thenorthcode.es/ —
+//   preceded (hito-11) by the honest version. The BrowserApi port exposes no
+//   runtime.getManifest, so plumbing the live version would widen the port
+//   disproportionately; POPUP_VERSION is a static constant pinned equal to
+//   the manifest version by a test that reads public/manifest.json.
+// - Icons (hito-11): inline 2px-stroke SVG paths only — no icon fonts, no
+//   remote references of any kind in rendered output.
 // - Every dynamic string is escaped (AD-3 spirit): provider-sourced levels,
 //   tool names, model names, guidance messages and masked keys all pass
 //   escapeHtml.
@@ -74,6 +89,15 @@ export interface PopupProvider {
  */
 export const ZAI_WRONG_PLATFORM_GUIDANCE =
   'This key may belong to the other platform — check the Z.AI/ZHIPU selection in Settings.';
+
+/**
+ * Static honest version for the footer (hito-11). The BrowserApi port has no
+ * runtime.getManifest (adding one for a footer string is disproportionate
+ * plumbing), so the version lives here as a constant — pinned equal to
+ * `public/manifest.json`'s version by a view test that reads the manifest,
+ * and bumped together with it at release (0.3.0 lands in the release chore).
+ */
+export const POPUP_VERSION = 'v0.2.0';
 
 /**
  * Static per-provider settings guidance (popup-ui spec §Settings Guidance):
@@ -126,11 +150,56 @@ const ERROR_CLASS_LABELS: Readonly<Record<ErrorClass, string>> = {
 };
 
 /**
- * Branding footer (popup-ui §Branding Footer): shared markup at the end of
- * both views — a plain anchor suffices per spec.
+ * Inline 2px-stroke icons (hito-11): hand-drawn paths, currentColor, no icon
+ * font and no remote reference. `aria-hidden` — every use sits beside real
+ * text or an aria-label.
  */
-const BRANDING_FOOTER =
-  '<footer class="popup-footer">Built by <a href="https://www.thenorthcode.es/" target="_blank" rel="noreferrer">The North Code</a></footer>';
+function svgIcon(paths: string): string {
+  return (
+    '<svg viewBox="0 0 24 24" class="icon" aria-hidden="true" focusable="false" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">' +
+    paths +
+    '</svg>'
+  );
+}
+
+const ICONS = {
+  gear: svgIcon('<circle cx="12" cy="12" r="3.5"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M19.1 4.9l-2.2 2.2M7.1 16.9l-2.2 2.2"/>'),
+  back: svgIcon('<path d="M20 12H4M10 6l-6 6 6 6"/>'),
+  refresh: svgIcon('<path d="M20.5 12a8.5 8.5 0 1 1-2.5-6M20.5 3v5.5H15"/>'),
+  clock: svgIcon('<circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/>'),
+  calendar: svgIcon('<path d="M4 6h16v15H4zM4 11h16M9 3v4M15 3v4"/>'),
+  plug: svgIcon('<path d="M9 3v5M15 3v5M7 8h10v4a5 5 0 0 1-10 0zM12 17v4"/>'),
+  key: svgIcon('<circle cx="8" cy="12" r="4"/><path d="M12 12h9M17 12v4M20 12v3"/>'),
+  shield: svgIcon('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>'),
+  bolt: svgIcon('<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>'),
+  gauge: svgIcon('<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-6.5"/>'),
+} as const;
+
+/**
+ * Branding footer (popup-ui §Branding Footer + hito-11 honest version):
+ * shared markup at the end of both views — real version constant + credit.
+ */
+function brandingFooter(): string {
+  return (
+    `<footer class="popup-footer"><span class="version">${POPUP_VERSION}</span> · Built by ` +
+    '<a href="https://www.thenorthcode.es/" target="_blank" rel="noreferrer">The North Code</a></footer>'
+  );
+}
+
+/**
+ * Footer tab bar (hito-11 §2-tab nav): exactly QUOTAS + KEYS, wired to the
+ * existing open-settings/back data-actions; the active tab carries no action.
+ */
+function tabBar(view: 'main' | 'settings'): string {
+  const tab = (icon: string, label: string, action: 'open-settings' | 'back' | undefined): string =>
+    action === undefined
+      ? `<button type="button" class="tab tab-active" aria-current="page">${icon}<span>${label}</span></button>`
+      : `<button type="button" class="tab" data-action="${action}">${icon}<span>${label}</span></button>`;
+  const quotas = tab(ICONS.gauge, 'QUOTAS', view === 'main' ? undefined : 'back');
+  const keys = tab(ICONS.key, 'KEYS', view === 'main' ? 'open-settings' : undefined);
+  return `<nav class="tabbar" aria-label="Views">${quotas}${keys}</nav>`;
+}
 
 /** Escapes the HTML-significant characters; defense-in-depth for provider-sourced text. */
 export function escapeHtml(text: string): string {
@@ -168,6 +237,23 @@ export function formatResetCountdown(resetAt: number, nowMs: number): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+/**
+ * Frozen-telemetry age chip text (hito-11 LAST KNOWN): whole-minute/hour/day
+ * age of a stored success at render time — deterministic over (fetchedAt,
+ * state.nowMs), never Date.now(). A future fetchedAt (clock skew) clamps to
+ * T-0M; nothing is synthesized beyond the elapsed figure itself.
+ */
+export function formatKnownAge(fetchedAt: number, nowMs: number): string {
+  const minutes = Math.max(0, Math.floor((nowMs - fetchedAt) / 60_000));
+  if (minutes < 60) {
+    return `T-${minutes}M`;
+  }
+  if (minutes < 2880) {
+    return `T-${Math.floor(minutes / 60)}H`;
+  }
+  return `T-${Math.floor(minutes / 1440)}D`;
+}
+
 /** Deterministic plain string order — no locale-dependent collation. */
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -195,11 +281,14 @@ export function thresholdBand(percentage: number): ThresholdBand {
  * uncapped): the visual fill caps at 100; width is presentation only. The
  * primary window's bar additionally carries the same uncapped percentage as
  * a `bar-pct` overlay (hito-6 — the figure renders twice: hero + in-bar).
+ * The `bar-ticks` overlay (hito-11) is the segmented 25/50/75/90% notch
+ * track — pure presentation, its notches are drawn by popup.css.
  */
 function bar(band: ThresholdBand, fillPercent: number, pctLabel?: string): string {
   const width = Math.min(Math.round(fillPercent), 100);
+  const ticks = '<span class="bar-ticks" aria-hidden="true"></span>';
   const pct = pctLabel === undefined ? '' : `<span class="bar-pct">${pctLabel}</span>`;
-  return `<div class="bar ${band}"><div class="bar-fill" style="width: ${width}%"></div>${pct}</div>`;
+  return `<div class="bar ${band}"><div class="bar-fill" style="width: ${width}%"></div>${ticks}${pct}</div>`;
 }
 
 /**
@@ -212,9 +301,10 @@ function bar(band: ThresholdBand, fillPercent: number, pctLabel?: string): strin
  * parts are simply omitted — nothing is synthesized. Percentage-bearing
  * lines carry a threshold bar (popup-ui §Threshold bands); windows without
  * one render the line only. A primary window whose line has no parts left
- * renders just its bar — the number is already on the card twice.
+ * renders just its bar — the number is already on the card twice. The icon
+ * (hito-11) adds no text, so every combined-textContent pin survives.
  */
-function windowLine(label: string, window: UsageWindow, state: PopupState, primary = false): string {
+function windowLine(label: string, window: UsageWindow, state: PopupState, primary = false, icon = ''): string {
   const parts: string[] = [];
   if (window.percentage !== undefined && !primary) {
     parts.push(`${Math.round(window.percentage)}%`);
@@ -230,7 +320,7 @@ function windowLine(label: string, window: UsageWindow, state: PopupState, prima
     // is unchanged, so pinned combined-text assertions keep holding.
     parts.push(`Resets in <span class="countdown">${formatResetCountdown(window.resetAt, state.nowMs)}</span>`);
   }
-  const line = parts.length === 0 ? '' : `<p class="monitor-window">${label}: ${parts.join(' · ')}</p>`;
+  const line = parts.length === 0 ? '' : `<p class="monitor-window">${icon}${label}: ${parts.join(' · ')}</p>`;
   if (window.percentage === undefined) {
     return line;
   }
@@ -245,13 +335,15 @@ function monitorBlock(usage: NormalizedUsage, state: PopupState): string {
     parts.push(`<p class="monitor-level">Level: ${escapeHtml(windows.level)}</p>`);
   }
   if (windows.fiveHour !== undefined) {
-    parts.push(windowLine('5h', windows.fiveHour, state, true)); // primary window (hito-6)
+    parts.push(windowLine('5h', windows.fiveHour, state, true, ICONS.bolt)); // primary window (hito-6)
   }
   if (windows.weekly !== undefined) {
-    parts.push(windowLine('Weekly', windows.weekly, state));
+    parts.push(windowLine('Weekly', windows.weekly, state, false, ICONS.calendar));
   }
   if (windows.mcp !== undefined) {
-    parts.push(`<p class="monitor-mcp">MCP: ${windows.mcp.used} / ${windows.mcp.ceiling}</p>`);
+    // Monthly MCP window (hito-11): the MONTHLY chip states the real cadence —
+    // the design mock's "PER MIN" label would be a lie.
+    parts.push(`<p class="monitor-mcp">${ICONS.plug}MCP: ${windows.mcp.used} / ${windows.mcp.ceiling}<span class="chip chip-mcp">MONTHLY</span></p>`);
     // MCP fill derives from used/ceiling at render time (popup-ui spec —
     // MCP bar from used/ceiling): presentation only, NO percentage is
     // synthesized for the window itself.
@@ -303,11 +395,61 @@ function planLine(plan: PlanInfo, state: PopupState): string {
   return `<p class="plan-status">Plan: exhausted · resets in <span class="countdown">${countdown}</span></p>`;
 }
 
+/**
+ * The ok-arm card body (hero, balance, plan, tier, monitor, breakdown) —
+ * shared by the live ok entry and the LAST KNOWN frozen render (hito-11),
+ * so a stale card shows exactly what the live card would have shown.
+ */
+function usageBody(usage: NormalizedUsage, state: PopupState): string {
+  const parts: string[] = [];
+  // Dual hero percentage (hito-6 §Provider List Rendering): where a card's
+  // primary percentage exists (ZAI: the 5h window), it renders as the
+  // card's largest, boldest element ABOVE all other card content, colored
+  // by its threshold band (hito-11); the same number repeats inside its
+  // threshold bar. Monetary cards have no primary percentage — their
+  // balance stays the leading figure, and no percentage is ever synthesized
+  // for them.
+  const heroPercentage = usage.windows?.fiveHour?.percentage;
+  if (heroPercentage !== undefined) {
+    parts.push(`<p class="hero-percentage ${thresholdBand(heroPercentage)}">${Math.round(heroPercentage)}%</p>`);
+  }
+  parts.push(`<p class="usage">${formatUsageText(usage)}</p>`);
+  if (usage.plan !== undefined) {
+    parts.push(planLine(usage.plan, state)); // hito-8: below the balance
+  }
+  if (usage.tier !== undefined) {
+    parts.push(`<p class="tier">Tier: ${escapeHtml(usage.tier)}</p>`);
+  }
+  if (usage.windows !== undefined) {
+    parts.push(monitorBlock(usage, state));
+  }
+  if (usage.breakdown !== undefined && usage.breakdown.length > 0) {
+    parts.push(modelRows(usage));
+  }
+  return parts.join('');
+}
+
+/**
+ * LAST KNOWN (frozen) block (hito-11): when the live cycle entry is an error
+ * and the snapshot carries a last-known success for the provider, render the
+ * real stale usage dimmed under a `LAST KNOWN · T-<age>` chip. The age is
+ * derived from (entry.fetchedAt, state.nowMs) — deterministic input, never
+ * Date.now(). No lastKnown entry → no block: nothing is synthesized.
+ */
+function lastKnownBlock(known: NormalizedUsage, state: PopupState): string {
+  const chip = `<span class="chip chip-known">${ICONS.clock}LAST KNOWN · ${formatKnownAge(known.fetchedAt, state.nowMs)}</span>`;
+  return `<div class="last-known">${chip}${usageBody(known, state)}</div>`;
+}
+
 function providerMainSection(provider: PopupProvider, state: PopupState): string {
   const entry = state.snapshot?.results[provider.id];
   // Card wrapper (popup-ui §Provider List Rendering): one card per provider —
-  // ok results and error cards share the same structure.
-  const parts: string[] = [`<section class="provider card" data-provider="${provider.id}">`];
+  // ok results and error cards share the same structure; the error card adds
+  // the `card-error` marker for the AUTH-FAILED-style treatment (hito-11).
+  const error = entry !== undefined && entry.status === 'error';
+  const parts: string[] = [
+    `<section class="provider card${error ? ' card-error' : ''}" data-provider="${provider.id}">`,
+  ];
   parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}</h2>`);
   if (entry === undefined) {
     parts.push('<p class="no-cycle">No cycle data yet</p>');
@@ -318,33 +460,25 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
     if (provider.id === 'zai' && entry.errorClass === 'auth') {
       parts.push(`<p class="guidance" role="alert">${escapeHtml(ZAI_WRONG_PLATFORM_GUIDANCE)}</p>`);
     }
+    const known = state.snapshot?.lastKnown?.[provider.id];
+    if (known !== undefined) {
+      parts.push(lastKnownBlock(known.usage, state));
+    }
   } else {
-    // Dual hero percentage (hito-6 §Provider List Rendering): where a card's
-    // primary percentage exists (ZAI: the 5h window), it renders as the
-    // card's largest, boldest element ABOVE all other card content; the same
-    // number repeats inside its threshold bar. Monetary cards have no
-    // primary percentage — their balance stays the leading figure, and no
-    // percentage is ever synthesized for them.
-    const heroPercentage = entry.usage.windows?.fiveHour?.percentage;
-    if (heroPercentage !== undefined) {
-      parts.push(`<p class="hero-percentage">${Math.round(heroPercentage)}%</p>`);
-    }
-    parts.push(`<p class="usage">${formatUsageText(entry.usage)}</p>`);
-    if (entry.usage.plan !== undefined) {
-      parts.push(planLine(entry.usage.plan, state)); // hito-8: below the balance
-    }
-    if (entry.usage.tier !== undefined) {
-      parts.push(`<p class="tier">Tier: ${escapeHtml(entry.usage.tier)}</p>`);
-    }
-    if (entry.usage.windows !== undefined) {
-      parts.push(monitorBlock(entry.usage, state));
-    }
-    if (entry.usage.breakdown !== undefined && entry.usage.breakdown.length > 0) {
-      parts.push(modelRows(entry.usage));
-    }
+    parts.push(usageBody(entry.usage, state));
   }
   parts.push('</section>');
   return parts.join('');
+}
+
+/** Real plan chip (hito-11): PLAN · <level> from the LIVE ZAI ok entry only. */
+function planChip(state: PopupState): string {
+  const entry = state.snapshot?.results.zai;
+  const level = entry !== undefined && entry.status === 'ok' ? entry.usage.windows?.level : undefined;
+  if (level === undefined) {
+    return ''; // no live level → no chip (the design's static LIVE badge never ships)
+  }
+  return `<span class="chip chip-plan">${ICONS.shield}PLAN · ${escapeHtml(level)}</span>`;
 }
 
 /** Renders the consumption view; deterministic for identical state. */
@@ -361,11 +495,13 @@ export function renderMain(state: PopupState): string {
   );
   const sections = keyedProviders.map((provider) => providerMainSection(provider, state)).join('\n');
   const header =
-    '<header class="popup-header"><h1>quotadeck</h1><div class="header-actions">' +
-    '<button type="button" class="header-action" data-action="refresh">Refresh</button>' +
-    '<button type="button" class="header-action" data-action="open-settings">Settings</button>' +
+    '<header class="popup-header"><div class="brand"><h1>quotadeck</h1>' +
+    planChip(state) +
+    '</div><div class="header-actions">' +
+    `<button type="button" class="header-action" data-action="refresh" aria-label="Refresh now">${ICONS.refresh}</button>` +
+    `<button type="button" class="header-action" data-action="open-settings" aria-label="Open settings">${ICONS.gear}</button>` +
     '</div></header>';
-  return `${header}\n${sections}\n${BRANDING_FOOTER}`;
+  return `${header}\n${sections}\n${tabBar('main')}\n${brandingFooter()}`;
 }
 
 /** Masked display lines: one per secret part — both parts for the qwen pair (AD-17). */
@@ -493,7 +629,9 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
 export function renderSettings(state: PopupState): string {
   const sections = state.providers.map((provider) => providerSettingsSection(provider, state)).join('\n');
   const header =
-    '<header class="popup-header"><h1>Settings</h1>' +
-    '<button type="button" class="header-action" data-action="back">Back</button></header>';
-  return `${header}\n${sections}\n${BRANDING_FOOTER}`;
+    '<header class="popup-header"><div class="brand"><h1>Settings</h1></div>' +
+    '<div class="header-actions">' +
+    `<button type="button" class="header-action" data-action="back" aria-label="Back to quotas">${ICONS.back}</button>` +
+    '</div></header>';
+  return `${header}\n${sections}\n${tabBar('settings')}\n${brandingFooter()}`;
 }
