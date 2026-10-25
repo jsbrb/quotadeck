@@ -6,7 +6,10 @@
 // headers or attach cookies even if it wanted to. The only component that
 // produces headers is `AllowlistNetworkClient`, which sets at most:
 // `Authorization` (token credentials) and `Content-Type: application/json`
-// whenever a JSON body dispatches (the label belongs to the body). The
+// whenever a JSON body dispatches (the label belongs to the body) — the
+// sanctioned ACS3 seam (hito-12) additionally emits the fixed
+// `host`/`x-acs-*` signing header set, still produced EXCLUSIVELY by the
+// client, never provider-authored. The
 // downstream `Transport` type carries headers but no cookie jar.
 //
 // Credential material therefore has exactly one legal path per kind — the
@@ -23,6 +26,22 @@
 import type { Credential } from '../core/provider';
 import { isQwenBssHost } from '../core/qwen-sites';
 
+/**
+ * Optional per-request signing discriminator (hito-12). ABSENT keeps the
+ * legacy ak-sk BSS RPC query path (AD-18) — byte-identical default. The
+ * `acs3` scheme routes an ak-sk request through the client's ACS3-HMAC-SHA256
+ * header seam (live-proven token mint, docs/spike/endpoints.md §Qwen
+ * token-plan quota): action/version ride the signed `x-acs-*` headers and an
+ * optional STS token is signed too. Meaningless on any other credential kind —
+ * the client refuses it before dispatch.
+ */
+export interface Acs3SigningMarker {
+  readonly scheme: 'acs3';
+  readonly action: string;
+  readonly version: string;
+  readonly securityToken?: string;
+}
+
 /** A request as built by a provider, BEFORE credentials are attached. */
 export interface ProviderRequest {
   readonly method: 'GET' | 'POST';
@@ -31,6 +50,8 @@ export interface ProviderRequest {
   readonly query?: Readonly<Record<string, string | number>>;
   /** Serialized request body (JSON). Must not contain credential material. */
   readonly body?: string;
+  /** Signing discriminator; undefined = the legacy BSS RPC query path (AD-18). */
+  readonly signing?: Acs3SigningMarker;
 }
 
 export type NetworkRejectionReason =

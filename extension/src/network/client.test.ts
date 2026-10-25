@@ -425,3 +425,129 @@ describe('signed qwen dispatch — secret never transmitted (O2: every surface a
     expect(JSON.stringify(sent).includes(QWEN_PAIR.accessKeySecret)).toBe(false);
   });
 });
+
+describe('AllowlistNetworkClient — acs3 header seam (hito-12 token mint)', () => {
+  // Synthetic pair shared with the acs3-signer known-answer vector — no real
+  // key material anywhere. The injected clock/nonce match the signer vector,
+  // so the client seam must emit byte-identical auth material.
+  const ACS3_PAIR = {
+    type: 'ak-sk',
+    accessKeyId: 'LTAISyntheticTestKeyNeverReal',
+    accessKeySecret: 'synthetic-secret-never-real',
+  } as const;
+  const MINT_URL = 'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken';
+  const EXPECTED_MINT_AUTHORIZATION =
+    'ACS3-HMAC-SHA256 Credential=LTAISyntheticTestKeyNeverReal,SignedHeaders=content-type;host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version,Signature=3e7c5352242a7c5989616e06f03f897e7f46d5aea358c7d6d26a68c4715b6317';
+
+  function mintRequest(overrides: Partial<ProviderRequest> = {}): ProviderRequest {
+    return {
+      method: 'POST',
+      url: MINT_URL,
+      body: '{}',
+      signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10' },
+      ...overrides,
+    };
+  }
+
+  function acs3Client(transport: RecordingTransport): AllowlistNetworkClient {
+    return new AllowlistNetworkClient(transport, {
+      clock: new FakeClock(1_792_929_600_000), // 2026-10-25T12:00:00Z
+      nonce: () => 'acs3-test-nonce-000000000001',
+    });
+  }
+
+  it('routes a marked ak-sk request through ACS3: authorization + x-acs-* headers, query-less URL untouched', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = acs3Client(transport);
+
+    const response = await client.send('qwen', mintRequest(), ACS3_PAIR);
+
+    expect(response).toBe(okResponse);
+    const sent = transport.requests[0]!;
+    expect(sent.url).toBe(MINT_URL); // no signed query — the headers carry the auth
+    expect(sent.method).toBe('POST');
+    expect(sent.body).toBe('{}');
+    expect(sent.headers.Authorization).toBe(EXPECTED_MINT_AUTHORIZATION);
+    expect(sent.headers.host).toBe('modelstudio.ap-southeast-1.aliyuncs.com');
+    expect(sent.headers['content-type']).toBe('application/json');
+    expect(sent.headers['x-acs-action']).toBe('GenerateCLIAccessToken');
+    expect(sent.headers['x-acs-version']).toBe('2026-02-10');
+    expect(sent.headers['x-acs-date']).toBe('2026-10-25T12:00:00Z'); // injected clock, millis stripped
+    expect(sent.headers['x-acs-signature-nonce']).toBe('acs3-test-nonce-000000000001'); // injected nonce
+    expect(sent.headers['x-acs-content-sha256']).toBe('44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a');
+  });
+
+  it('the AccessKeySecret appears in no acs3 dispatched surface', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = acs3Client(transport);
+
+    await client.send('qwen', mintRequest(), ACS3_PAIR);
+
+    const sent = transport.requests[0]!;
+    expect(JSON.stringify(sent)).not.toContain(ACS3_PAIR.accessKeySecret);
+    expect(sent.url).not.toContain(ACS3_PAIR.accessKeySecret);
+  });
+
+  it('passes an optional STS token into the signed headers', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = acs3Client(transport);
+
+    await client.send(
+      'qwen',
+      mintRequest({
+        signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10', securityToken: 'sts-synthetic-token' },
+      }),
+      ACS3_PAIR,
+    );
+
+    const sent = transport.requests[0]!;
+    expect(sent.headers['x-acs-security-token']).toBe('sts-synthetic-token');
+    expect(sent.headers.Authorization).toContain(';x-acs-security-token;x-acs-signature-nonce;');
+    expect(sent.headers.Authorization).not.toBe(EXPECTED_MINT_AUTHORIZATION);
+  });
+
+  it('rejects a marked request carrying query params — the seam signs the live-proven query-less mint only', async () => {
+    const transport = new RecordingTransport(); // empty queue: any fetch would throw
+    const client = acs3Client(transport);
+
+    await expect(client.send('qwen', mintRequest({ query: { foo: 'bar' } }), ACS3_PAIR)).rejects.toMatchObject({
+      name: 'NetworkRejectionError',
+      reason: 'credential-placement',
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects the acs3 marker on a non-ak-sk credential with zero I/O', async () => {
+    const transport = new RecordingTransport();
+    const client = acs3Client(transport);
+
+    await expect(
+      client.send('zai', mintRequest({ url: 'https://api.z.ai/api/monitor/usage/quota/limit' }), ZAI_CREDENTIAL),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects a marked request to an off-allowlist host — host check wins, zero I/O', async () => {
+    const transport = new RecordingTransport();
+    const client = acs3Client(transport);
+
+    await expect(
+      client.send('qwen', mintRequest({ url: 'https://evil.example.com/modelstudio/cli/generateAccessToken' }), ACS3_PAIR),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'host-not-allowed' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects the acs3 marker for a non-qwen provider — ak-sk stays qwen-only', async () => {
+    const transport = new RecordingTransport();
+    const client = acs3Client(transport);
+
+    await expect(
+      client.send('openai', mintRequest({ url: 'https://api.openai.com/modelstudio/cli/generateAccessToken' }), ACS3_PAIR),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
+  });
+});
+
+// LEGACY BYTE-STABILITY: the ak-sk requests WITHOUT the signing marker keep the
+// signed BSS query path untouched — every test in the `ak-sk attach (AD-19)`
+// and `signed qwen dispatch` blocks above runs unmodified against this seam.
