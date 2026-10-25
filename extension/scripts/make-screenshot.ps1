@@ -1,9 +1,10 @@
 # make-screenshot.ps1 - generates the 1280x800 Chrome Web Store listing
-# screenshot (hito-10 store packaging). Renders a promo graphic mirroring the
-# shipped UI: toolbar badge chip + popup card with the real section copy and
-# the ratified threshold colors. The PNG is a listing asset only - it never
-# ships inside the extension zip. Windows-only by design (System.Drawing,
-# zero npm deps). Run from the extension directory:
+# screenshot (hito-11 restyle). Renders a neo-brutalist promo mirroring the
+# shipped popup: warm-paper canvas, 2px ink borders, 0 radius, hard offset
+# shadows, uppercase mono chips, segmented threshold bars, the QUOTAS/KEYS
+# tab bar and the honest "Built by The North Code" footer. The PNG is a
+# listing asset only - it never ships inside the extension zip. Windows-only
+# by design (System.Drawing, zero npm deps). Run from the extension dir:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-screenshot.ps1
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -14,6 +15,15 @@ $outDir = Join-Path $PSScriptRoot '..\..\docs\store'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $outPath = Join-Path $outDir 'screenshot-1280x800.png'
 
+# DESIGN.md tokens (neo-brutalist developer instrument)
+$PAPER = '#FDFDF7'; $INK = '#18181B'; $YELLOW = '#FDE047'
+$GREEN = '#16A34A'; $AMBER = '#F59E0B'; $RED = '#DC2626'
+$MUTED = '#52525B'; $INDIGO = '#4F46E5'; $WHITE = '#FFFFFF'
+$BAND = $AMBER  # 72% hero band for the showcase (>=70 amber)
+# Middle dot by codepoint - PS 5.1 reads .ps1 as ANSI, so a literal UTF-8
+# middle dot in source renders as mojibake (Â·). Build it at runtime instead.
+$DOT = [string][char]0xB7
+
 function FromHex([string]$hex) {
     return [System.Drawing.Color]::FromArgb(255,
         [Convert]::ToInt32($hex.Substring(1, 2), 16),
@@ -21,136 +31,158 @@ function FromHex([string]$hex) {
         [Convert]::ToInt32($hex.Substring(5, 2), 16))
 }
 
-function New-RoundedPath([float]$x, [float]$y, [float]$w, [float]$h, [float]$r) {
-    $d = $r * 2
-    $p = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $p.AddArc($x, $y, $d, $d, 180, 90)
-    $p.AddArc($x + $w - $d, $y, $d, $d, 270, 90)
-    $p.AddArc($x + $w - $d, $y + $h - $d, $d, $d, 0, 90)
-    $p.AddArc($x, $y + $h - $d, $d, $d, 90, 90)
-    $p.CloseFigure()
-    return $p
-}
-
-function Draw-CenteredLine([string]$text, [float]$y, [float]$size, [bool]$bold, [string]$hex) {
-    Draw-CenteredAt $text ($W / 2) $y $size $bold $hex $W
-}
-
-function Draw-CenteredAt([string]$text, [float]$cx, [float]$y, [float]$size, [bool]$bold, [string]$hex, [float]$maxw) {
+function Draw-Text([string]$text, [float]$x, [float]$y, [float]$size, [bool]$bold, [string]$hex, [string]$family) {
+    if (-not $family) { $family = 'Segoe UI' }
     $style = [System.Drawing.FontStyle]::Regular; if ($bold) { $style = [System.Drawing.FontStyle]::Bold }
-    $font = New-Object System.Drawing.Font('Segoe UI', $size, $style, [System.Drawing.GraphicsUnit]::Pixel)
-    $brush = New-Object System.Drawing.SolidBrush((FromHex $hex))
-    $format = New-Object System.Drawing.StringFormat
-    $format.Alignment = [System.Drawing.StringAlignment]::Center
-    $rect = New-Object System.Drawing.RectangleF(($cx - $maxw / 2), $y, $maxw, ($size * 1.7))
-    $script:G.DrawString($text, $font, $brush, $rect, $format)
-    $font.Dispose(); $brush.Dispose(); $format.Dispose()
-}
-
-function Draw-Left([string]$text, [float]$x, [float]$y, [float]$size, [bool]$bold, [string]$hex) {
-    $style = [System.Drawing.FontStyle]::Regular; if ($bold) { $style = [System.Drawing.FontStyle]::Bold }
-    $font = New-Object System.Drawing.Font('Segoe UI', $size, $style, [System.Drawing.GraphicsUnit]::Pixel)
+    $font = New-Object System.Drawing.Font($family, $size, $style, [System.Drawing.GraphicsUnit]::Pixel)
     $brush = New-Object System.Drawing.SolidBrush((FromHex $hex))
     $script:G.DrawString($text, $font, $brush, (New-Object System.Drawing.PointF($x, $y)))
     $font.Dispose(); $brush.Dispose()
 }
 
+function Draw-TextCentered([string]$text, [float]$cx, [float]$y, [float]$size, [bool]$bold, [string]$hex, [string]$family) {
+    if (-not $family) { $family = 'Segoe UI' }
+    $style = [System.Drawing.FontStyle]::Regular; if ($bold) { $style = [System.Drawing.FontStyle]::Bold }
+    $font = New-Object System.Drawing.Font($family, $size, $style, [System.Drawing.GraphicsUnit]::Pixel)
+    $brush = New-Object System.Drawing.SolidBrush((FromHex $hex))
+    $fmt = New-Object System.Drawing.StringFormat
+    $fmt.Alignment = [System.Drawing.StringAlignment]::Center
+    $rect = New-Object System.Drawing.RectangleF(($cx - 500), $y, 1000, ($size * 1.7))
+    $script:G.DrawString($text, $font, $brush, $rect, $fmt)
+    $font.Dispose(); $brush.Dispose(); $fmt.Dispose()
+}
+
+# Hard-offset-shadow panel: ink rect behind, filled card + 2px ink border on top.
+function Draw-Panel([float]$x, [float]$y, [float]$w, [float]$h, [string]$fillHex, [float]$off) {
+    $sh = New-Object System.Drawing.SolidBrush((FromHex $INK))
+    $script:G.FillRectangle($sh, ($x + $off), ($y + $off), $w, $h)
+    $sh.Dispose()
+    $fill = New-Object System.Drawing.SolidBrush((FromHex $fillHex))
+    $script:G.FillRectangle($fill, $x, $y, $w, $h)
+    $fill.Dispose()
+    $pen = New-Object System.Drawing.Pen((FromHex $INK), 2)
+    $script:G.DrawRectangle($pen, $x, $y, $w, $h)
+    $pen.Dispose()
+}
+
+# Square chip with 2px ink border + mono uppercase label centered.
 function Draw-Chip([string]$text, [float]$x, [float]$y, [float]$w, [float]$h, [string]$bgHex, [string]$fgHex, [float]$size) {
-    $p = New-RoundedPath $x $y $w $h ($h / 2)
     $b = New-Object System.Drawing.SolidBrush((FromHex $bgHex))
-    $script:G.FillPath($b, $p)
-    $style = [System.Drawing.FontStyle]::Bold
-    $font = New-Object System.Drawing.Font('Segoe UI', $size, $style, [System.Drawing.GraphicsUnit]::Pixel)
+    $script:G.FillRectangle($b, $x, $y, $w, $h)
+    $b.Dispose()
+    $pen = New-Object System.Drawing.Pen((FromHex $INK), 2)
+    $script:G.DrawRectangle($pen, $x, $y, $w, $h)
+    $pen.Dispose()
+    $font = New-Object System.Drawing.Font('Consolas', $size, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
     $brush = New-Object System.Drawing.SolidBrush((FromHex $fgHex))
-    $format = New-Object System.Drawing.StringFormat
-    $format.Alignment = [System.Drawing.StringAlignment]::Center
-    $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $rect = New-Object System.Drawing.RectangleF($x, $y, $w, $h)
-    $script:G.DrawString($text, $font, $brush, $rect, $format)
-    $p.Dispose(); $b.Dispose(); $font.Dispose(); $brush.Dispose(); $format.Dispose()
+    $fmt = New-Object System.Drawing.StringFormat
+    $fmt.Alignment = [System.Drawing.StringAlignment]::Center
+    $fmt.LineAlignment = [System.Drawing.StringAlignment]::Center
+    $script:G.DrawString($text, $font, $brush, (New-Object System.Drawing.RectangleF($x, $y, $w, $h)), $fmt)
+    $font.Dispose(); $brush.Dispose(); $fmt.Dispose()
 }
 
-function Draw-Bar([float]$x, [float]$y, [float]$w, [float]$fillRatio, [string]$fillHex) {
-    $track = New-RoundedPath $x $y $w 14 7
-    $tb = New-Object System.Drawing.SolidBrush((FromHex '#E2E8F0'))
-    $script:G.FillPath($tb, $track)
-    $fw = [Math]::Max(14.0, $w * $fillRatio)
-    $fill = New-RoundedPath $x $y $fw 14 7
-    $fb = New-Object System.Drawing.SolidBrush((FromHex $fillHex))
-    $script:G.FillPath($fb, $fill)
-    $track.Dispose(); $tb.Dispose(); $fill.Dispose(); $fb.Dispose()
+# Segmented threshold bar: bordered track, solid fill, 2px ink ticks at 25/50/75/90%.
+function Draw-SegBar([float]$x, [float]$y, [float]$w, [float]$ratio, [string]$fillHex) {
+    $h = 20
+    $t = New-Object System.Drawing.SolidBrush((FromHex $WHITE))
+    $script:G.FillRectangle($t, $x, $y, $w, $h); $t.Dispose()
+    $fw = [Math]::Max(0, [Math]::Min(1.0, $ratio) * ($w - 4))
+    if ($fw -gt 0) {
+        $f = New-Object System.Drawing.SolidBrush((FromHex $fillHex))
+        $script:G.FillRectangle($f, ($x + 2), ($y + 2), $fw, ($h - 4)); $f.Dispose()
+    }
+    $pen = New-Object System.Drawing.Pen((FromHex $INK), 2)
+    $script:G.DrawRectangle($pen, $x, $y, $w, $h)
+    foreach ($tick in @(0.25, 0.5, 0.75, 0.9)) {
+        $tx = $x + ($w * $tick)
+        $script:G.DrawLine($pen, $tx, $y, $tx, ($y + $h))
+    }
+    $pen.Dispose()
 }
 
-function Draw-Card([float]$x, [float]$y, [float]$w, [float]$h) {
-    $p = New-RoundedPath $x $y $w $h 16
-    $fill = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-    $pen = New-Object System.Drawing.Pen((FromHex '#CBD5E1'))
-    $script:G.FillPath($fill, $p)
-    $script:G.DrawPath($pen, $p)
-    $p.Dispose(); $fill.Dispose(); $pen.Dispose()
-}
-
-function Draw-Logo([float]$x, [float]$y, [float]$size, [float]$font) {
-    $p = New-RoundedPath $x $y $size $size ($size * 0.19)
-    $b = New-Object System.Drawing.SolidBrush((FromHex '#4F46E5'))
-    $script:G.FillPath($b, $p)
+function Draw-Logo([float]$x, [float]$y, [float]$size, [float]$font, [float]$off) {
+    $sh = New-Object System.Drawing.SolidBrush((FromHex $INK))
+    $script:G.FillRectangle($sh, ($x + $off), ($y + $off), $size, $size); $sh.Dispose()
+    $b = New-Object System.Drawing.SolidBrush((FromHex $INDIGO))
+    $script:G.FillRectangle($b, $x, $y, $size, $size); $b.Dispose()
+    $pen = New-Object System.Drawing.Pen((FromHex $INK), 2)
+    $script:G.DrawRectangle($pen, $x, $y, $size, $size); $pen.Dispose()
     $fontObj = New-Object System.Drawing.Font('Segoe UI', $font, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-    $brush = [System.Drawing.Brushes]::White
-    $format = New-Object System.Drawing.StringFormat
-    $format.Alignment = [System.Drawing.StringAlignment]::Center
-    $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-    $rect = New-Object System.Drawing.RectangleF($x, $y, $size, $size)
-    $script:G.DrawString('Q', $fontObj, $brush, $rect, $format)
-    $p.Dispose(); $b.Dispose(); $fontObj.Dispose(); $format.Dispose()
+    $fmt = New-Object System.Drawing.StringFormat
+    $fmt.Alignment = [System.Drawing.StringAlignment]::Center
+    $fmt.LineAlignment = [System.Drawing.StringAlignment]::Center
+    $script:G.DrawString('Q', $fontObj, [System.Drawing.Brushes]::White, (New-Object System.Drawing.RectangleF($x, $y, $size, $size)), $fmt)
+    $fontObj.Dispose(); $fmt.Dispose()
 }
 
 $bitmap = New-Object System.Drawing.Bitmap($W, $H)
 $script:G = [System.Drawing.Graphics]::FromImage($bitmap)
 $script:G.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$script:G.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+$script:G.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
 
-# Canvas background (slate-100)
-$bgBrush = New-Object System.Drawing.SolidBrush((FromHex '#F1F5F9'))
-$script:G.FillRectangle($bgBrush, 0, 0, $W, $H)
-$bgBrush.Dispose()
+# Canvas (warm paper) + a thin ink frame for the brutalist feel
+$bg = New-Object System.Drawing.SolidBrush((FromHex $PAPER))
+$script:G.FillRectangle($bg, 0, 0, $W, $H); $bg.Dispose()
+$frame = New-Object System.Drawing.Pen((FromHex $INK), 4)
+$script:G.DrawRectangle($frame, 2, 2, ($W - 4), ($H - 4)); $frame.Dispose()
 
-# Header: logo, title, tagline
-Draw-Logo ((($W - 96) / 2)) 52 96 62
-Draw-CenteredLine 'quotadeck' 168 52 $true '#0F172A'
-Draw-CenteredLine 'GLM Coding Plan usage, live in your toolbar' 244 26 $false '#475569'
+# Header
+Draw-Logo 64 48 88 56 5
+Draw-Text 'quotadeck' 176 60 54 $true $INK $null
+Draw-Text 'GLM Coding Plan usage, live in your toolbar' 180 128 24 $false $MUTED $null
 
-# Card A - toolbar badge mockup
-Draw-Card 90 330 500 290
-$urlBar = New-RoundedPath 130 380 420 56 12
-$urlBrush = New-Object System.Drawing.SolidBrush((FromHex '#F1F5F9'))
-$script:G.FillPath($urlBrush, $urlBar)
-Draw-Logo 148 394 28 18
-Draw-Chip '72%' 196 391 72 36 '#F97316' '#FFFFFF' 20
-$urlBar.Dispose(); $urlBrush.Dispose()
-Draw-CenteredAt 'Toolbar badge' 340 470 24 $true '#0F172A' 460
-Draw-CenteredAt 'color-coded thresholds, uncapped' 340 506 18 $false '#64748B' 460
+# ---- Left panel: toolbar badge mockup ----
+Draw-Panel 64 200 520 470 $WHITE 8
+Draw-Chip 'TOOLBAR BADGE' 96 232 190 34 $INK $YELLOW 15
+Draw-Panel 96 292 456 78 $PAPER 0
+Draw-Logo 116 312 38 24 3
+Draw-Chip '72%' 172 314 74 36 $AMBER $INK 20
+Draw-Text "uncapped  $DOT  refreshes every minute" 116 392 18 $false $MUTED 'Consolas'
+# threshold legend
+Draw-Chip '32%' 96 452 64 30 $GREEN $INK 15
+Draw-Text '< 70%' 176 456 16 $false $MUTED 'Consolas'
+Draw-Chip '72%' 96 494 64 30 $AMBER $INK 15
+Draw-Text '70-89%' 176 498 16 $false $MUTED 'Consolas'
+Draw-Chip '95%' 96 536 64 30 $RED $INK 15
+Draw-Text '>= 90%' 176 540 16 $false $MUTED 'Consolas'
+Draw-Chip "PLAN $DOT PRO" 96 604 150 34 $YELLOW $INK 15
 
-# Card B - popup mockup
-$px = 690
-Draw-Card $px 330 500 290
-Draw-Left 'quotadeck' ($px + 30) 350 22 $true '#0F172A'
-$dot = New-Object System.Drawing.SolidBrush((FromHex '#CBD5E1'))
-$script:G.FillEllipse($dot, ($px + 448), 356, 18, 18)
-$dot.Dispose()
-Draw-Left 'GLM Coding Plan - PRO' ($px + 30) 386 18 $true '#0F172A'
-Draw-Left '5h window' ($px + 30) 418 16 $false '#64748B'
-Draw-Bar ($px + 30) 442 440 0.72 '#F97316'
-Draw-Left '72% - 2880 / 4000 tokens' ($px + 30) 464 18 $true '#0F172A'
-Draw-Left 'resets in 1h 20m' ($px + 30) 490 16 $false '#64748B'
-$divider = New-Object System.Drawing.Pen((FromHex '#E2E8F0'))
-$script:G.DrawLine($divider, ($px + 30), 520, ($px + 470), 520)
-$divider.Dispose()
-Draw-Left 'Weekly window' ($px + 30) 530 16 $false '#64748B'
-Draw-Bar ($px + 30) 554 440 0.42 '#22C55E'
-Draw-Left '42% - 5040 / 12000 tokens' ($px + 30) 576 18 $true '#0F172A'
+# ---- Right panel: popup mockup ----
+$px = 636
+Draw-Panel $px 200 580 470 $WHITE 8
+$cx = $px + 32
+# popup header
+Draw-Text 'quotadeck' $cx 232 26 $true $INK $null
+Draw-Chip "PLAN $DOT PRO" ($cx + 200) 236 150 30 $YELLOW $INK 14
+$gear = New-Object System.Drawing.Pen((FromHex $INK), 2)
+$script:G.DrawRectangle($gear, ($px + 528), 232, 24, 24); $gear.Dispose()
+$hr = New-Object System.Drawing.Pen((FromHex $INK), 2)
+$script:G.DrawLine($hr, $cx, 276, ($px + 552), 276); $hr.Dispose()
+# 5h window: dual hero + segmented bar
+Draw-Text '72%' $cx 292 60 $true $BAND 'Consolas'
+Draw-Text '5H ROLLING WINDOW' ($cx + 150) 306 16 $true $MUTED 'Consolas'
+Draw-Chip 'RESETS 1H 20M' ($cx + 380) 300 150 28 $PAPER $INK 13
+Draw-SegBar $cx 372 500 0.72 $BAND
+Draw-Text '2,880 / 4,000 tokens' $cx 400 16 $false $MUTED 'Consolas'
+# weekly window
+Draw-Text 'WEEKLY BATCH' $cx 440 16 $true $MUTED 'Consolas'
+Draw-SegBar $cx 464 500 0.42 $GREEN
+Draw-Text "42%  $DOT  5,040 / 12,000 tokens" $cx 492 16 $false $MUTED 'Consolas'
+# MCP
+Draw-Text 'MCP: 3 / 60' $cx 528 18 $true $INK 'Consolas'
+Draw-Chip 'MONTHLY' ($cx + 150) 526 108 24 $PAPER $INK 12
+Draw-Text "search_web $DOT 1      fetch_url $DOT 2" $cx 560 15 $false $MUTED 'Consolas'
 
-# Bottom trust line
-Draw-CenteredLine 'Uncapped percentages  -  refreshes every minute  -  your key never leaves your device' 700 20 $false '#64748B'
+# tab bar (QUOTAS active / KEYS)
+Draw-Chip 'QUOTAS' $cx 592 240 44 $YELLOW $INK 16
+Draw-Chip 'KEYS' ($cx + 256) 592 240 44 $WHITE $INK 16
+
+# honest footer
+Draw-Text "v0.3.0  $DOT  Built by The North Code" $cx 648 15 $false $MUTED 'Consolas'
+
+# Bottom trust line across the canvas
+Draw-TextCentered "Local-only key  $DOT  zero remote code  $DOT  no analytics  $DOT  uncapped thresholds" ($W / 2) 716 20 $true $INK 'Consolas'
 
 $bitmap.Save($outPath, [System.Drawing.Imaging.ImageFormat]::Png)
 $script:G.Dispose()
