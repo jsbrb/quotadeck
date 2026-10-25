@@ -108,7 +108,9 @@ Verification levels:
   `GenerateCLIAccessToken` on host `modelstudio.ap-southeast-1.aliyuncs.com` — `POST
   /modelstudio/cli/generateAccessToken` with body `{}`, headers `x-acs-action:
   GenerateCLIAccessToken` + `x-acs-version: 2026-02-10`, ACS3-HMAC-SHA256 signing. The
-  response carries `cliAccessToken` — the token value is never stored or logged. The
+  response carries `cliAccessToken` TOP LEVEL AND ONLY ON SUCCESS (failure answers
+  top-level `Code`/`Message`; the raw failure body is never echoed) — the token value
+  is never stored or logged. The
   cn-beijing twin `modelstudio.cn-beijing.aliyuncs.com` is NOT live-verified and is NOT
   allowlisted.
 - Required authorizations (user-facing setup, both mandatory): (1) a RAM custom policy
@@ -122,11 +124,13 @@ Verification levels:
   before the `SignedHeaders` section; a missing or extra newline there yields
   `SignatureDoesNotMatch`.
 - End-to-end PASS (headless chain): mint → gateway usage call → live
-  `{ "per1MonthPercentage": 0.1250, "per1MonthResetTime": 1793721600000 }`; the
-  `switchAgent` value from the browser-login config worked as-is in the gateway body.
+  `{ "per1MonthPercentage": 0.1250, "per1MonthResetTime": 1793721600000 }` — the
+  minted token authenticated the call directly with the static, account-neutral body.
 - Request body (form-urlencoded): `params=<JSON>&region=ap-southeast-1`, where the JSON is
-  `{"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN","switchAgent":<account-specific int>}}}`.
-  `switchAgent` is account-specific — a placeholder here, never a pinned literal.
+  `{"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN"}}}`.
+  `switchAgent` is omitted entirely (live probe: omitted = SUCCESS,
+  `switchAgent: 0` = `BailianGateway.Workspace.NotAuthorised`) — the body is static,
+  no account identifiers.
 - Response semantics (COMPLETE surface — exactly two fields):
   `{ "per1MonthPercentage": 0.1172, "per1MonthResetTime": 1793721600000 }`.
   - `per1MonthPercentage` is a **0..1 USED fraction** — NOT remaining (live cross-check:
@@ -142,7 +146,8 @@ Verification levels:
   `ap-southeast-1`; international gateways `bailian-cs.console.alibabacloud.com`
   (cn-beijing) and `bailian-singapore-cs.alibabacloud.com` (ap-southeast-1, action
   `IntlBroadScopeAspnGateway`). Only the live-captured ap-southeast-1 gateway is
-  allowlisted.
+  allowlisted; the china site carries NO live-verified quota surface, so the request
+  builders answer null for it (hito-12 C1) — never a guessed cn host in dispatch.
 - Verification status: honestly **community** — no official documentation exists for the
   endpoint; the evidence is the vendor's own CLI source (`bailian-cli` 2.5.1 on npm) plus
   maintainer live captures (2026-10-25, international account). The allowlist entry-level

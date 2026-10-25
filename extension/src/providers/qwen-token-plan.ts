@@ -2,9 +2,12 @@
 // §Qwen token-plan quota — session-token surface — discovered-live, the
 // 2026-10-25 maintainer live capture).
 //
-// PURE module — no fetch, no token material. Dispatch and the console access
-// token belong to the background composition; this file only folds the
-// gateway response envelope into the repo's UsageWindow shape.
+// PURE module — no fetch, no storage. The parse stays token-free. The WU-C1
+// builders only SHAPE requests: hop 1 carries no credential (the client's
+// acs3 seam signs it from the stored pair); hop 2 receives the ALREADY-MINTED
+// transient console token and passes it strictly through the session marker —
+// the value is never logged, never placed in url/query/body, never persisted.
+// Dispatch belongs to the background composition.
 //
 // Envelope validation is STATUS-FIRST: the payload lives at
 // `data.DataV2.data.data`, and success requires the gateway `code` to be 200
@@ -22,7 +25,9 @@
 // remaining NEVER exist on this surface and are never synthesized — only
 // percentage and resetAt are ever set on the returned UsageWindow.
 import { ProviderApiError } from '../core/provider';
+import type { QwenSite } from '../core/qwen-sites';
 import type { UsageWindow } from '../core/usage';
+import type { ProviderRequest } from '../network/request';
 import { asObject } from './parse-utils';
 
 /** Finite-number gate: anything else (null, absent, NaN, string) is absent. */
@@ -70,6 +75,118 @@ export function parseTokenPlanUsage(body: unknown): UsageWindow {
   return {
     ...(fraction !== undefined ? { percentage: fraction * 100 } : {}),
     ...(resetAt !== undefined ? { resetAt } : {}),
+  };
+}
+
+// ── WU-C1 request builders + mint response parse ────────────────────────────
+// Contracts live-verified 2026-10-25 against the maintainer's international
+// account (docs/spike/endpoints.md §Qwen token-plan quota — session-token
+// surface). International is the ONLY site with live evidence: the china
+// builders answer NULL rather than guessing cn hosts into dispatch.
+
+/** Mint host — hop 1; the client signs requests here with the acs3 marker. */
+export const QWEN_TOKEN_MINT_HOST = 'modelstudio.ap-southeast-1.aliyuncs.com';
+
+/** Usage gateway host — hop 2; the ONLY host a session-bearer may attach to. */
+export const QWEN_TOKEN_PLAN_GATEWAY_HOST = 'bailian-singapore-cs.alibabacloud.com';
+
+/** The token-plan personal usage API identifier — static, no account fields. */
+const TOKEN_PLAN_USAGE_API = 'zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage';
+
+/**
+ * Static gateway form body — `params=<JSON>&region=ap-southeast-1`.
+ * switchAgent is OMITTED ENTIRELY (live probe: omitted = SUCCESS,
+ * `switchAgent: 0` = `BailianGateway.Workspace.NotAuthorised`) — no account
+ * identifier ever enters this body.
+ */
+function usageRequestBody(): string {
+  const params = JSON.stringify({
+    Api: TOKEN_PLAN_USAGE_API,
+    V: '1.0',
+    Data: {
+      cornerstoneParam: {
+        protocol: 'V2',
+        console: 'ONE_CONSOLE',
+        productCode: 'p_efm',
+        switchUserType: 3,
+        consoleSite: 'BAILIAN_ALIYUN',
+      },
+    },
+  });
+  return `params=${params}&region=ap-southeast-1`;
+}
+
+/**
+ * Hop 1 — the session-token mint request. The stored AK/SK never ride this
+ * descriptor: the client's acs3 seam (hito-12 B2) signs it from the
+ * credential. Returns null for sites without live evidence.
+ */
+export function mintQuotaTokenRequest(site: QwenSite): ProviderRequest | null {
+  if (site !== 'international') {
+    return null;
+  }
+  return {
+    method: 'POST',
+    url: `https://${QWEN_TOKEN_MINT_HOST}/modelstudio/cli/generateAccessToken`,
+    body: '{}',
+    signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10' },
+  };
+}
+
+/**
+ * Mint failure. Only the vendor's string Code/Message surface in the text —
+ * the raw body is NEVER echoed (a success-shaped body literally contains the
+ * token) and no credential material ever appears here.
+ */
+export class QwenMintError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'QwenMintError';
+  }
+}
+
+/**
+ * Extracts the minted `cliAccessToken`. The live response carries it TOP LEVEL
+ * and ONLY on success — a nonempty string; RequestId and any other fields are
+ * tolerated. Missing, empty, or non-string is a classified mint failure.
+ */
+export function parseMintResponse(body: unknown): string {
+  const record = asObject(body);
+  const token = record?.cliAccessToken;
+  if (typeof token === 'string' && token.length > 0) {
+    return token;
+  }
+  const detail = [record?.Code, record?.Message]
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .join(': ');
+  throw new QwenMintError(
+    `Qwen session token mint failed${detail.length > 0 ? ` (${detail})` : ''} — no cliAccessToken in the response.`,
+  );
+}
+
+/**
+ * Hop 2 — the gateway usage request. The transient session token rides ONLY on
+ * the session marker: never the url, the query, or the body (the client
+ * attaches it as Bearer at its sanctioned gateway seam, and the placement scan
+ * rejects any smuggling). Returns null for sites without live evidence — the
+ * token is not even placed on a request then.
+ */
+export function tokenPlanUsageRequest(sessionToken: string, site: QwenSite): ProviderRequest | null {
+  if (site !== 'international') {
+    return null;
+  }
+  return {
+    method: 'POST',
+    url: `https://${QWEN_TOKEN_PLAN_GATEWAY_HOST}/cli/api.json`,
+    // The client's buildUrl encodes this trio into the exact live URL
+    // (api=...%2Ftokenplan%2F...); the values themselves carry no secrets.
+    query: {
+      action: 'IntlBroadScopeAspnGateway',
+      product: 'sfm_bailian',
+      api: TOKEN_PLAN_USAGE_API,
+    },
+    body: usageRequestBody(),
+    session: { token: sessionToken },
   };
 }
 

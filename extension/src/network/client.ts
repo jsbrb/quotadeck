@@ -14,12 +14,15 @@
 //   4. Attach here — callers never see headers. Bearer/admin → Authorization
 //      header; unmarked ak-sk → NO header at all, auth travels as the signed
 //      query; marked ak-sk (acs3, hito-12) → Authorization plus the fixed
-//      host/content-type/x-acs-* signing header set, produced by the seam.
+//      host/content-type/x-acs-* signing header set, produced by the seam;
+//      session-marked ak-sk (hito-12 C1) → Bearer <transient token> + the
+//      form-urlencoded label, gateway host only.
 //   5. Delegate to the injected Transport.
 import { SystemClock, type Clock } from '../core/clock';
 import type { Credential, ProviderId } from '../core/provider';
 import { isHostAllowed } from './allowlist';
 import { QWEN_PLAN_PROBE_HOST } from '../providers/qwen-plan-probe';
+import { QWEN_TOKEN_PLAN_GATEWAY_HOST } from '../providers/qwen-token-plan';
 import { signAcs3 } from './acs3-signer';
 import {
   assertNoCredentialMaterial,
@@ -94,10 +97,14 @@ export class AllowlistNetworkClient {
     // ak-sk: the signed query IS the credential attachment — build it first so
     // the scan validates the dispatchable material (AD-19). The acs3 marker
     // (hito-12) takes the header seam instead: the request stays untouched
-    // here and auth attaches after the scan, from signed headers.
+    // here and auth attaches after the scan, from signed headers. The session
+    // marker (hito-12 C1) likewise leaves the request untouched — the stored
+    // pair remains the qwen identity gate while the TRANSIENT token attaches
+    // at its own seam below; the BSS signer is never invoked for it.
+    const session = request.session;
     const acs3 = credential.type === 'ak-sk' ? request.signing : undefined;
     const dispatched: ProviderRequest =
-      credential.type === 'ak-sk' && acs3 === undefined
+      credential.type === 'ak-sk' && acs3 === undefined && session === undefined
         ? await this.signedRequest(providerId, request, credential)
         : request;
     const url = buildUrl(dispatched);
@@ -135,10 +142,53 @@ export class AllowlistNetworkClient {
         `The acs3 signing marker is only valid on ak-sk credentials, not ${credential.type}.`,
       );
     }
+    // Session-bearer hygiene (hito-12 C1): exactly one auth mechanism per
+    // request; the transient token rides ONLY the live-verified qwen token-plan
+    // usage gateway — the mint host (also allowlisted) and every other host are
+    // never session targets. Messages name the host, never the token.
+    if (session !== undefined) {
+      if (credential.type !== 'ak-sk') {
+        throw new NetworkRejectionError(
+          'credential-placement',
+          `The session-bearer marker is only valid on ak-sk credentials, not ${credential.type}.`,
+        );
+      }
+      if (request.signing !== undefined) {
+        throw new NetworkRejectionError(
+          'credential-placement',
+          'A request cannot carry both the acs3 signing marker and the session-bearer marker.',
+        );
+      }
+      if (providerId !== 'qwen' || host !== QWEN_TOKEN_PLAN_GATEWAY_HOST) {
+        throw new NetworkRejectionError(
+          'credential-placement',
+          `Session tokens are only valid on the qwen token-plan usage gateway, not ${host}.`,
+        );
+      }
+    }
     assertNoCredentialMaterial(dispatched, credential, url);
 
     if (acs3 !== undefined && credential.type === 'ak-sk') {
       return this.sendAcs3(providerId, dispatched, url, acs3, credential);
+    }
+
+    if (session !== undefined) {
+      // Single sanctioned session attach: the transient token IS the Bearer
+      // value and the only credential header produced — the live gateway
+      // contract labels the form body (the label belongs to the body: a
+      // bodyless session dispatch carries none). No signed query, no x-acs
+      // material, nothing else.
+      return this.transport.fetch({
+        method: dispatched.method,
+        url,
+        headers: {
+          Authorization: `Bearer ${session.token}`,
+          ...(dispatched.body !== undefined
+            ? { 'Content-Type': 'application/x-www-form-urlencoded' }
+            : {}),
+        },
+        ...(dispatched.body !== undefined ? { body: dispatched.body } : {}),
+      });
     }
 
     const authorized: AuthorizedRequest =

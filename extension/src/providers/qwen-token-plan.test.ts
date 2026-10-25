@@ -7,7 +7,13 @@
 import { describe, expect, it } from 'vitest';
 import { ProviderApiError } from '../core/provider';
 import { FIXTURE_RESPONSES } from '../fixtures';
-import { parseTokenPlanUsage } from './qwen-token-plan';
+import {
+  mintQuotaTokenRequest,
+  parseMintResponse,
+  QwenMintError,
+  parseTokenPlanUsage,
+  tokenPlanUsageRequest,
+} from './qwen-token-plan';
 
 /** Live-capture payload (COMPLETE surface): 11.72% used, monthly reset instant. */
 const LIVE_PAYLOAD = { per1MonthPercentage: 0.1172, per1MonthResetTime: 1_793_721_600_000 };
@@ -123,5 +129,111 @@ describe('fixture ↔ parser contract', () => {
     expect(FIXTURE_RESPONSES['qwen/token-plan-usage--missing-pct'].status).toBe(200);
     // The gateway reports body-level failures inside an HTTP-200 response.
     expect(FIXTURE_RESPONSES['qwen/token-plan-usage--failed-envelope'].status).toBe(200);
+  });
+});
+
+// WU-C1 request builders + mint response parse. Contracts are live-verified
+// 2026-10-25 (docs/spike/endpoints.md §Qwen token-plan quota): hop 1 mints a
+// session token via the ACS3-marked ak-sk request; hop 2 rides the gateway
+// with the transient token on the session marker ONLY. International is the
+// single site with live evidence — china builders answer null, never a guess.
+describe('mintQuotaTokenRequest — hop 1 (ACS3-marked mint)', () => {
+  it('builds the exact live-proven mint request descriptor for international', () => {
+    expect(mintQuotaTokenRequest('international')).toStrictEqual({
+      method: 'POST',
+      url: 'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken',
+      body: '{}',
+      signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10' },
+    });
+  });
+
+  it('returns null for the china site — no live-verified surface, no guessed hosts', () => {
+    expect(mintQuotaTokenRequest('china')).toBeNull();
+  });
+
+  it('the descriptor carries no credential material — the AK/SK never enter the request', () => {
+    const request = mintQuotaTokenRequest('international')!;
+    const text = JSON.stringify(request);
+    expect(text).not.toContain('accessKey');
+    expect(text).not.toContain('Secret');
+  });
+});
+
+describe('tokenPlanUsageRequest — hop 2 (session-bearer gateway)', () => {
+  const SENTINEL_TOKEN = 'sess-synthetic-transient-token-9f3c';
+
+  it('builds the exact live-verified gateway request for international', () => {
+    const request = tokenPlanUsageRequest(SENTINEL_TOKEN, 'international')!;
+
+    expect(request.method).toBe('POST');
+    expect(request.url).toBe('https://bailian-singapore-cs.alibabacloud.com/cli/api.json');
+    // The client's buildUrl encodes this trio into the exact live URL
+    // (action=IntlBroadScopeAspnGateway&product=sfm_bailian&api=<encoded>).
+    expect(request.query).toStrictEqual({
+      action: 'IntlBroadScopeAspnGateway',
+      product: 'sfm_bailian',
+      api: 'zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage',
+    });
+    expect(request.body).toBe(
+      'params={"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN"}}}&region=ap-southeast-1',
+    );
+    expect(request.session).toStrictEqual({ token: SENTINEL_TOKEN });
+  });
+
+  it('TESTED PROPERTY — the body never contains switchAgent (omitted: SUCCESS, switchAgent:0: Workspace.NotAuthorised)', () => {
+    const request = tokenPlanUsageRequest(SENTINEL_TOKEN, 'international')!;
+    expect(request.body).toBeDefined();
+    expect(request.body!).not.toContain('switchAgent');
+    expect(JSON.stringify(request)).not.toContain('switchAgent');
+  });
+
+  it('the session token rides ONLY on the marker — never url, query, or body', () => {
+    const request = tokenPlanUsageRequest(SENTINEL_TOKEN, 'international')!;
+
+    expect(request.url).not.toContain(SENTINEL_TOKEN);
+    expect(JSON.stringify(request.query ?? {})).not.toContain(SENTINEL_TOKEN);
+    expect(request.body ?? '').not.toContain(SENTINEL_TOKEN);
+  });
+
+  it('returns null for the china site — the token is not even placed on a request', () => {
+    expect(tokenPlanUsageRequest(SENTINEL_TOKEN, 'china')).toBeNull();
+  });
+});
+
+describe('parseMintResponse — cliAccessToken extraction, sanitized failures', () => {
+  it('returns the token on the live success shape (other fields tolerated)', () => {
+    expect(parseMintResponse({ cliAccessToken: 'sess-live-token-0001', RequestId: 'req-42' })).toBe(
+      'sess-live-token-0001',
+    );
+  });
+
+  it('missing, empty, or non-string cliAccessToken throws QwenMintError surfacing at most Code/Message', () => {
+    expect(() => parseMintResponse({ RequestId: 'req-42' })).toThrow(QwenMintError);
+    expect(() => parseMintResponse({ cliAccessToken: '' })).toThrow(QwenMintError);
+    expect(() => parseMintResponse({ cliAccessToken: 42 })).toThrow(QwenMintError);
+    expect(() => parseMintResponse(null)).toThrow(QwenMintError);
+
+    expect(() => parseMintResponse({ Code: 'Forbidden', Message: 'no workspace role' })).toThrow(
+      /Forbidden: no workspace role/u,
+    );
+  });
+
+  it('SENTINEL SWEEP — the error never echoes the raw body, RequestId, or token-shaped material', () => {
+    const body = {
+      cliAccessToken: '',
+      RequestId: 'req-secret-ish-9e1d',
+      Code: 'BailianGateway.Workspace.NotAuthorised',
+      Message: 'missing membership',
+    };
+    try {
+      parseMintResponse(body);
+      expect.unreachable('the empty token must reject');
+    } catch (error) {
+      const text = `${(error as Error).name}: ${(error as Error).message}`;
+      expect(text).toContain('BailianGateway.Workspace.NotAuthorised');
+      expect(text).not.toContain('req-secret-ish-9e1d'); // never echoes non-contract fields
+      expect(text).not.toContain('RequestId');
+      expect(text).not.toContain(JSON.stringify(body)); // never echoes the raw body
+    }
   });
 });
