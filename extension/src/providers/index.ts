@@ -22,8 +22,8 @@ const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
   qwen: () => new QwenProvider(),
   openai: () => new OpenAiProvider(),
   kimi: () => new KimiProvider(),
-  // hito-13 WU-A: registered once SHIPPED_PROVIDER_IDS gains 'deepseek' —
-  // WU-B adds the allowlist host in the same unit, keeping the shipped
+  // hito-13: shipped (registry-dispatched like zai) — the manifest host and
+  // the SHIPPED flip landed in WU-B, keeping the shipped
   // manifest = allowlist ∩ SHIPPED invariant green at every commit.
   deepseek: () => new DeepSeekProvider(),
 };

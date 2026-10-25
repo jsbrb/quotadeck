@@ -67,7 +67,7 @@ describe('createDefaultRegistry (AD-6; hito-10 shipping filter, hito-12 WU-L eng
     expect(zai.parsePage(FIXTURE_RESPONSES['zai/monitor--pro-plan'].body, null).done).toBe(true);
   });
 
-  it('rejects unshipped ids — they stay in source but never register (openai/kimi; deepseek until WU-B ships it with its allowlist host)', () => {
+  it('rejects unshipped ids — they stay in source but never register (openai/kimi)', () => {
     const registry = createDefaultRegistry();
     const unshipped = PROVIDER_METADATA.map(({ id }) => id).filter((id) => !SHIPPED_PROVIDER_IDS.includes(id));
     expect(unshipped.length).toBeGreaterThan(0); // the filter stays a real filter
