@@ -15,6 +15,9 @@ use tauri::{
     Manager, WindowEvent,
 };
 
+mod prefs;
+mod secrets;
+
 static PINNED: AtomicBool = AtomicBool::new(false);
 
 /// Estimated taskbar height used to anchor the flyout above it. Refined in
@@ -47,6 +50,15 @@ fn anchor_flyout(window: &tauri::WebviewWindow) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            // A second launch surfaces the existing flyout instead of forking
+            // a duplicate tray app.
+            if let Some(window) = app.get_webview_window("flyout") {
+                anchor_flyout(&window);
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             let window = app
                 .get_webview_window("flyout")
@@ -96,7 +108,13 @@ fn main() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![set_pinned])
+        .invoke_handler(tauri::generate_handler![
+            set_pinned,
+            prefs::prefs_read_all,
+            prefs::prefs_write_all,
+            secrets::secrets_read_all,
+            secrets::secrets_write_all
+        ])
         .run(tauri::generate_context!())
         .expect("error while running QuotaDeck desktop");
 }
