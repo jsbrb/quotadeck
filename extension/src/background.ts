@@ -32,6 +32,7 @@ import { createDefaultRegistry } from './providers';
 import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
 import { QwenPlanStep } from './refresh/qwen-plan';
+import { QwenQuotaStep } from './refresh/qwen-quota';
 import { KeyStore } from './storage/key-store';
 import { QwenPlanStore } from './storage/qwen-plan-store';
 import { readQwenSite } from './storage/qwen-site-store';
@@ -109,15 +110,30 @@ export function createQwenPlanStep(browser: BrowserApi, options: WorkerOptions =
 }
 
 /**
+ * Builds the tick-level qwen quota two-hop step (hito-12 WU-C2) over the same
+ * injected transport as the engine and the probe step — the mint hop signs
+ * through the client's acs3 seam and the gateway hop attaches through the
+ * session seam, identical in tests and production alike.
+ */
+export function createQwenQuotaStep(browser: BrowserApi, options: WorkerOptions = {}): QwenQuotaStep {
+  return new QwenQuotaStep({
+    client: new AllowlistNetworkClient(options.transport ?? new FetchTransport()),
+    keys: new KeyStore(browser.storage.local),
+  });
+}
+
+/**
  * One alarm tick: read the ZAI platform preference, derive the live query
  * from the clock + platform, refresh every keyed provider sequentially and
  * render each outcome — usage text per success, ERROR_BADGE_TEXT per failure
  * (replaced by the next success). The qwen plan probe step (hito-8) runs
  * AFTER refreshAll and BEFORE the snapshot write: its status merges into the
  * qwen entry only when that entry is ok or absent — the error arm wins, and
- * the badge is never re-rendered from plan status. Finally the cycle's
- * per-provider outcomes are persisted as ONE `qd:snapshot` write for the
- * popup (AD-13) — usage+windows+plan on the ok arm, the classified
+ * the badge is never re-rendered from plan status. The quota two-hop step
+ * (hito-12 WU-C2) runs beside it with the EXACT same merge discipline —
+ * error arm wins, absent entry synthesizes, badge untouched. Finally the
+ * cycle's per-provider outcomes are persisted as ONE `qd:snapshot` write for
+ * the popup (AD-13) — usage+windows+plan+quota on the ok arm, the classified
  * ErrorClass on the error arm.
  */
 export async function refreshTick(
@@ -125,6 +141,7 @@ export async function refreshTick(
   engine: RefreshEngine,
   clock: Clock,
   planStep?: QwenPlanStep,
+  quotaStep?: QwenQuotaStep,
 ): Promise<void> {
   const zaiPlatform = await readZaiPlatform(browser.storage.local); // qd:pref:zai-platform (AD-28)
   const qwenSite = await readQwenSite(browser.storage.local); // qd:pref:qwen-site (AD-28 mirror)
@@ -177,6 +194,25 @@ export async function refreshTick(
       }
     }
   }
+  // Qwen token-plan quota (hito-12 WU-C2): the two-hop step beside the probe —
+  // after refreshAll, before the snapshot write. EXACT plan merge precedence:
+  // an error entry keeps its class (something IS broken — quota never
+  // overwrites it), an ok entry gains the quota field and keeps everything
+  // else, an absent entry synthesizes a quota-only ok entry. The minted
+  // session token lived and died inside the step — the snapshot carries only
+  // the mapped window. Badge is not re-rendered (quota rendering is a later
+  // unit).
+  if (quotaStep !== undefined) {
+    const quota = await quotaStep.resolve(clock.now(), qwenSite);
+    if (quota !== undefined) {
+      const entry = results.qwen;
+      if (entry === undefined) {
+        results.qwen = { status: 'ok', usage: { providerId: 'qwen', kind: 'balance', quota, fetchedAt: clock.now() } };
+      } else if (entry.status === 'ok') {
+        results.qwen = { status: 'ok', usage: { ...entry.usage, quota } };
+      }
+    }
+  }
   await new SnapshotStore(browser.storage.local).write({ results });
 }
 
@@ -187,6 +223,7 @@ export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): v
   const clock = options.clock ?? new SystemClock();
   const engine = createRefreshEngine(browser, options);
   const planStep = createQwenPlanStep(browser, options);
+  const quotaStep = createQwenQuotaStep(browser, options);
 
   const ensureAlarm = async (): Promise<void> => {
     if ((await browser.alarms.get(USAGE_REFRESH_ALARM)) === undefined) {
@@ -206,7 +243,7 @@ export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): v
     if (alarm.name !== USAGE_REFRESH_ALARM && alarm.name !== REFRESH_NOW_ALARM) {
       return;
     }
-    void refreshTick(browser, engine, clock, planStep).catch((error) => {
+    void refreshTick(browser, engine, clock, planStep, quotaStep).catch((error) => {
       console.error('[quotadeck] refresh tick failed:', error);
     });
   });

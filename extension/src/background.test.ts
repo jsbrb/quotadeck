@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildTickQuery,
   createQwenPlanStep,
+  createQwenQuotaStep,
   createRefreshEngine,
   refreshTick,
   REFRESH_NOW_ALARM,
@@ -19,6 +20,7 @@ import { HttpStatusError, FetchTransport } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
 import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from './providers';
 import { QWEN_PLAN_PROBE_HOST } from './providers/qwen-plan-probe';
+import { QWEN_TOKEN_MINT_HOST, QWEN_TOKEN_PLAN_GATEWAY_HOST } from './providers/qwen-token-plan';
 import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
 import { RefreshEngine } from './refresh/engine';
 import { KeyStore } from './storage/key-store';
@@ -782,6 +784,160 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     expect(stored.results.qwen).toMatchObject({ status: 'ok', usage: { plan: { status: 'exhausted' } } });
     expect('resetAt' in ((stored.results.qwen as { usage: { plan?: { resetAt?: unknown } } }).usage.plan ?? {})).toBe(false);
     expect(h.local.snapshot()[QWEN_PLAN_STATUS_STORAGE_KEY]).toEqual({ status: 'exhausted', probedAt: TICK_NOW });
+  });
+});
+
+describe('background — Qwen Quota Two-Hop Step (hito-12 WU-C2; retained qwen graph)', () => {
+  /**
+   * Four-host routing double: the plan/probe legs keep the hybrid behavior and
+   * the two-hop quota legs join — the mint host answers a synthetic sentinel
+   * token, the gateway host serves the recorded live-shaped usage fixture.
+   * Counts quota dispatches so gating (china, missing keys) stays provable.
+   */
+  class QwenQuotaHybridTransport implements Transport {
+    private mintDispatches = 0;
+    private gatewayDispatches = 0;
+
+    constructor(
+      private readonly balance: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+      private readonly probe: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/plan-probe--ok'],
+      private readonly usage: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/token-plan-usage--ok'],
+    ) {}
+
+    quotaCalls(): { mint: number; gateway: number } {
+      return { mint: this.mintDispatches, gateway: this.gatewayDispatches };
+    }
+
+    async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+      const host = new URL(request.url).hostname;
+      if (host === QWEN_PLAN_PROBE_HOST) return this.probe();
+      if (host === 'business.aliyuncs.com' || host === 'business.ap-southeast-1.aliyuncs.com') return this.balance();
+      if (host === QWEN_TOKEN_MINT_HOST) {
+        this.mintDispatches++;
+        return { status: 200, body: { cliAccessToken: 'sess-bg-quota-token-cc13' } };
+      }
+      if (host === QWEN_TOKEN_PLAN_GATEWAY_HOST) {
+        this.gatewayDispatches++;
+        return this.usage();
+      }
+      throw new Error(`unexpected qwen-quota hybrid dispatch: ${request.url}`);
+    }
+  }
+
+  async function savePlanKeyLocal(local: FakeStorageArea): Promise<void> {
+    await new KeyStore(local).saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-probe-key-0001' });
+  }
+
+  it('both steps compose in one tick: the ok entry carries plan AND quota; the badge stays balance-only', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKeyLocal(h.local);
+    const transport = new QwenQuotaHybridTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toMatchObject({
+      status: 'ok',
+      usage: {
+        value: 100.28,
+        plan: { status: 'available' },
+        quota: { percentage: 11.72, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
+      },
+    });
+    expect(h.action.badgeTexts).toEqual(['¥100']); // quota never re-renders the badge (rendering is the next unit)
+    expect(transport.quotaCalls()).toEqual({ mint: 1, gateway: 1 });
+  });
+
+  it('the minted session token never reaches the persisted snapshot bytes', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenQuotaHybridTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), undefined, createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(JSON.stringify(h.local.snapshot())).not.toContain('sess-bg-quota-token-cc13');
+  });
+
+  it('the error arm wins: a failing balance leg keeps its class entry — no quota merge', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenQuotaHybridTransport(() => {
+      throw new HttpStatusError(401);
+    });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      undefined,
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toEqual({ status: 'error', errorClass: 'auth' }); // class wins over a successful quota
+    expect(transport.quotaCalls()).toEqual({ mint: 1, gateway: 1 }); // the step still ran its per-tick cadence
+  });
+
+  it('china site: the quota step no-ops — zero mint/gateway dispatches and no quota field on the entry', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKeyLocal(h.local);
+    await writeQwenSite(h.local, 'china');
+    const transport = new QwenQuotaHybridTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    expect(transport.quotaCalls()).toEqual({ mint: 0, gateway: 0 });
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    const usage = (stored.results.qwen as { usage: { quota?: unknown; plan?: unknown } }).usage;
+    expect('quota' in usage).toBe(false);
+    expect(usage.plan).toEqual({ status: 'available' }); // plan cadence unaffected by the gate
+  });
+
+  it('an absent qwen entry synthesizes quota-only, mirroring the plan-only discipline (no badge write)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenQuotaHybridTransport();
+    // Registry WITHOUT qwen: the engine produces no qwen result — the quota
+    // step must synthesize the entry exactly like the plan step does today.
+    const engine = engineForProviders(h.api, [], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      undefined,
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toEqual({
+      status: 'ok',
+      usage: {
+        providerId: 'qwen',
+        kind: 'balance',
+        quota: { percentage: 11.72, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
+        fetchedAt: TICK_NOW, // the plan-only synthesis discipline, field-for-field
+      },
+    });
+    expect(h.action.badgeTexts).toEqual([]); // synthesized entries never touch the badge
   });
 });
 

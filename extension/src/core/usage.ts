@@ -67,6 +67,22 @@ export interface PlanInfo {
   readonly resetAt?: number;
 }
 
+/**
+ * Qwen token-plan monthly quota window (hito-12 WU-C2; evidence
+ * docs/spike/endpoints.md §Qwen token-plan quota — session-token surface).
+ * `percentage` is the gateway's 0..1 USED fraction mapped to the 0-100
+ * window convention — UNCAPPED passthrough (a server 1.5 stays 150), never
+ * synthesized; `resetAt` is the epoch-ms reset instant carried VERBATIM.
+ * Absent fields stay absent: no used/total exists on the surface and none is
+ * derived here. `fetchedAt` is the mint+gateway hop's refresh instant.
+ */
+export interface TokenPlanQuota {
+  readonly percentage?: number;
+  readonly resetAt?: number;
+  /** Refresh instant from the injected Clock (AD-1) — never Date.now() inline. */
+  readonly fetchedAt: number;
+}
+
 /** The single result shape every provider folds into. */
 export interface NormalizedUsage {
   readonly providerId: ProviderId;
@@ -92,6 +108,11 @@ export interface NormalizedUsage {
    * `windows` — `formatBadgeText` ignores it (the badge renders the balance).
    */
   readonly plan?: PlanInfo;
+  /**
+   * Qwen token-plan quota window (hito-12 WU-C2); optional like `plan` —
+   * `formatBadgeText` ignores it (quota badge rendering is a later unit).
+   */
+  readonly quota?: TokenPlanQuota;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */
   readonly fetchedAt: number;
 }
