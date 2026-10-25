@@ -32,7 +32,8 @@
 //   `.countdown` element, and the monthly MCP window with per-tool rows);
 //   where a card's primary percentage exists (ZAI: the 5h window; qwen: the
 //   token-plan quota — hito-12 WU-M user-ratified twin-card rule, supersedes
-//   the WU-D3 line-only render) it renders
+//   the WU-D3 line-only render; deepseek: the derived wallet percentage —
+//   hito-13 WU-D) it renders
 //   TWICE — as the card's largest, boldest element (`.hero-percentage`,
 //   threshold-colored, hito-11) above all other card content, and as the
 //   same number inside its threshold bar (`.bar-pct`) — while secondary info
@@ -46,7 +47,10 @@
 //   plan line: the `Token Plan:` line keeps only the countdown (derived at
 //   display time from `quota.resetAt`), a percentage-only quota renders the
 //   bar alone, a quota without a percentage renders the resets line without
-//   a bar or hero, and a quota without either field renders nothing;
+//   a bar or hero, and a quota without either field renders nothing; the
+//   deepseek wallet monitor block (hito-13 WU-D) mirrors the quota block
+//   below the balance — hero + bar + `Wallet: $X.XX of $Y.YY used`, with
+//   honest absence when the wallet total is 0 (no hero, no bar, no line);
 //   OpenAI renders per-model rows from `usage.breakdown` sorted by
 //   (model, usageType) for determinism; failed
 //   providers render a
@@ -84,7 +88,7 @@ import type { CredentialType, ProviderId } from '../core/provider';
 import type { QwenSite } from '../core/qwen-sites';
 import { QWEN_SITES } from '../core/qwen-sites';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type TokenPlanQuota, type UsageWindow } from '../core/usage';
+import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type TokenPlanQuota, type UsageWindow, type WalletUsage } from '../core/usage';
 import { ZAI_PLATFORMS, type ZaiPlatform } from '../core/zai-platforms';
 import type { CredentialSlot, MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
@@ -193,11 +197,12 @@ const BADGE_CHIP = '<span class="chip chip-badge">badge</span>';
 /**
  * The card's headline percentage (hito-12 WU-M2 helper): the same precedence
  * the dual hero uses — the ZAI 5h window first, then the qwen token-plan
- * quota; `undefined` when the card has no hero at all. One rule, two
- * consumers (the hero render and the provider-name indicator fallback).
+ * quota, then the deepseek wallet percentage (hito-13 WU-D); `undefined`
+ * when the card has no hero at all. One rule, two consumers (the hero
+ * render and the provider-name indicator fallback).
  */
 function headlinePercentage(usage: NormalizedUsage): number | undefined {
-  return usage.windows?.fiveHour?.percentage ?? usage.quota?.percentage;
+  return usage.windows?.fiveHour?.percentage ?? usage.quota?.percentage ?? usage.wallet?.percentage;
 }
 
 /**
@@ -225,6 +230,8 @@ const ICONS = {
   shield: svgIcon('<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/>'),
   bolt: svgIcon('<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>'),
   gauge: svgIcon('<path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-6.5"/>'),
+  // hito-13 WU-D: wallet body + clasp dot, same hand-drawn 2px-stroke vocabulary.
+  wallet: svgIcon('<path d="M4 7h16v11H4z"/><circle cx="16.5" cy="12.5" r="1"/>'),
 } as const;
 
 /**
@@ -492,11 +499,44 @@ function quotaMonitorBlock(quota: TokenPlanQuota, state: PopupState): string {
 }
 
 /**
- * The ok-arm card body (hero, balance, quota, plan, tier, monitor, breakdown) —
- * shared by the live ok entry and the LAST KNOWN frozen render (hito-11),
- * so a stale card shows exactly what the live card would have shown. The
- * quota monitor block (hito-12 WU-M) ports into this body: it travels with
- * the usage it belongs to, frozen LAST KNOWN renders included.
+ * DeepSeek wallet monitor block (hito-13 WU-D; the hito-12 WU-M twin-card
+ * rule carried to the pay-as-you-go wallet): the wallet percentage lives in
+ * the card hero (usageBody) and again inside this bar's `bar-pct` overlay —
+ * the hito-6 dual-hero discipline verbatim, INCLUDING the fill cap at 100
+ * while the figure stays uncapped. The line states the derived money through
+ * the SAME `currencySymbol` + toFixed(2) convention as the balance line —
+ * `Wallet: <consumed> of <total> used`, consumed first (the figures are
+ * numbers, so no escaping is needed). DeepSeek carries no reset countdowns
+ * (hito-13 ratified), so unlike the quota block this line needs no state.
+ * Honest absence (hito-13 ratified): `percentage` is undefined exactly when
+ * the wallet total is 0 — NO hero, NO bar, NO wallet line; the block renders
+ * '' and the balance line carries the card alone. The block sits below the
+ * balance like the quota block; deepseek usage never carries
+ * quota/windows/plan, so no precedence machinery applies.
+ */
+function walletMonitorBlock(wallet: WalletUsage): string {
+  if (wallet.percentage === undefined) {
+    // Honest absent: an empty wallet carries no meaningful share — the whole
+    // block dies, the balance line stays (pinned in view tests).
+    return '';
+  }
+  const symbol = currencySymbol(wallet.currency) || wallet.currency;
+  const line =
+    `<p class="monitor-window">${ICONS.wallet}Wallet: ${symbol}${wallet.consumed.toFixed(2)} of ` +
+    `${symbol}${wallet.total.toFixed(2)} used</p>`;
+  // Same bar the primary ZAI window builds: band from the rounded displayed
+  // percentage, fill capped at 100, the uncapped rounded figure inside it.
+  const barMarkup = bar(thresholdBand(wallet.percentage), wallet.percentage, `${Math.round(wallet.percentage)}%`);
+  return `<div class="monitor">${line}${barMarkup}</div>`;
+}
+
+/**
+ * The ok-arm card body (hero, balance, wallet, quota, plan, tier, monitor,
+ * breakdown) — shared by the live ok entry and the LAST KNOWN frozen render
+ * (hito-11), so a stale card shows exactly what the live card would have
+ * shown. The quota monitor block (hito-12 WU-M) and the deepseek wallet
+ * monitor block (hito-13 WU-D) port into this body: each travels with the
+ * usage it belongs to, frozen LAST KNOWN renders included.
  */
 function usageBody(usage: NormalizedUsage, state: PopupState, badgeHero = false): string {
   const parts: string[] = [];
@@ -520,6 +560,9 @@ function usageBody(usage: NormalizedUsage, state: PopupState, badgeHero = false)
     );
   }
   parts.push(`<p class="usage">${formatUsageText(usage)}</p>`);
+  if (usage.wallet !== undefined) {
+    parts.push(walletMonitorBlock(usage.wallet)); // hito-13 WU-D: hero lives above, bar + Wallet line here
+  }
   if (usage.quota !== undefined) {
     parts.push(quotaMonitorBlock(usage.quota, state)); // hito-12 WU-M: hero lives above, bar + resets line here
   }
