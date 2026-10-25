@@ -7,7 +7,7 @@
 // (Phase 5) structurally: same members, in-memory behavior, plus recording
 // hooks the specs pin assertions on (sync-area access, badge texts, alarms).
 import type { StorageArea } from '../storage/key-store';
-import type { AlarmCreateInfo, BrowserStorageOnChanged, StorageChange } from '../platform/browser-api';
+import type { AlarmCreateInfo, BrowserStorageOnChanged, DnrSessionRule, DnrSessionRulesUpdate, StorageChange } from '../platform/browser-api';
 
 export interface RecordedCall {
   readonly op: string;
@@ -137,6 +137,27 @@ export class FakeAction {
 }
 
 /**
+ * Records every updateSessionRules call and applies chrome's session-rule
+ * semantics in memory: addRules REPLACE by id, removeRuleIds delete — so
+ * `sessionRules` is the live rule state a test reads (the WU-F install-once
+ * and replace-by-id pins hang off this recording).
+ */
+export class FakeDeclarativeNetRequest {
+  readonly calls: RecordedCall[] = [];
+  readonly sessionRules = new Map<number, DnrSessionRule>();
+
+  async updateSessionRules(update: DnrSessionRulesUpdate): Promise<void> {
+    this.calls.push({ op: 'updateSessionRules', args: [update] });
+    for (const id of update.removeRuleIds ?? []) {
+      this.sessionRules.delete(id);
+    }
+    for (const rule of update.addRules ?? []) {
+      this.sessionRules.set(rule.id, rule);
+    }
+  }
+}
+
+/**
  * BrowserApi-shaped in-memory double. `storage.sync` exists ONLY so tests can
  * assert it is never called (key-storage spec §Sync never used) — the KeyStore
  * receives `fakeBrowser.storage.local` and has no `.sync` path.
@@ -148,6 +169,8 @@ export class FakeBrowser {
   readonly sync = new FakeStorageArea((changes) => this.onChanged.dispatch(changes, 'sync'));
   readonly alarms = new FakeAlarms();
   readonly action = new FakeAction();
+  /** Worker-port double (hito-12 WU-F): records the gateway-origin installs. */
+  readonly declarativeNetRequest = new FakeDeclarativeNetRequest();
   readonly storage: {
     readonly local: StorageArea;
     readonly sync: StorageArea;

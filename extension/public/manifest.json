@@ -23,7 +23,7 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "declarativeNetRequestWithHostAccess"],
   "host_permissions": [
     "https://api.z.ai/*",
     "https://bailian-singapore-cs.alibabacloud.com/*",

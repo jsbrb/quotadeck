@@ -23,14 +23,20 @@ import { FixtureTransport, type AuthorizedRequest, type Transport, type Transpor
 import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from './providers';
 import { QWEN_PLAN_PROBE_HOST } from './providers/qwen-plan-probe';
 import { QWEN_TOKEN_MINT_HOST, QWEN_TOKEN_PLAN_GATEWAY_HOST } from './providers/qwen-token-plan';
-import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
+import type { AlarmCreateInfo, BrowserApi, WorkerBrowserApi } from './platform/browser-api';
 import { RefreshEngine } from './refresh/engine';
 import { writeBadgeProvider } from './storage/badge-provider-store';
 import { KeyStore } from './storage/key-store';
 import { QWEN_PLAN_STATUS_STORAGE_KEY } from './storage/qwen-plan-store';
 import { writeQwenSite } from './storage/qwen-site-store';
 import { writeZaiPlatform } from './storage/zai-platform-store';
-import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
+import {
+  FakeAction,
+  FakeAlarms,
+  FakeBrowser,
+  FakeDeclarativeNetRequest,
+  FakeStorageArea,
+} from './testing/fake-browser';
 import { FakeClock } from './testing/fake-clock';
 import { type CycleSnapshot, type ProviderSnapshotEntry, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-store';
 
@@ -80,11 +86,19 @@ class AlarmRecorder extends FakeAlarms {
   }
 }
 
+/**
+ * chrome.runtime.id stand-in wired through the worker port's runtime slice —
+ * the DNR initiator scope the worker must read via the seam, never chrome (WU-F).
+ */
+const FAKE_RUNTIME_ID = 'abcdefghijklmnopabcdefghijklmnop';
+
 interface Harness {
-  readonly api: BrowserApi;
+  readonly api: WorkerBrowserApi;
   readonly alarms: AlarmRecorder;
   readonly action: FakeAction;
   readonly local: FakeStorageArea;
+  /** The recording DNR double — the install-once assertions read this (WU-F). */
+  readonly dnr: FakeDeclarativeNetRequest;
   fireInstalled(): void;
   fireStartup(): void;
 }
@@ -94,11 +108,13 @@ function makeApi(): Harness {
   const alarms = new AlarmRecorder();
   const installed: Array<() => void> = [];
   const startup: Array<() => void> = [];
-  const api: BrowserApi = {
+  const api: WorkerBrowserApi = {
     storage: base.storage,
     action: base.action,
     alarms,
+    declarativeNetRequest: base.declarativeNetRequest,
     runtime: {
+      id: FAKE_RUNTIME_ID,
       onInstalled: { listen: (listener) => installed.push(listener) },
       onStartup: { listen: (listener) => startup.push(listener) },
     },
@@ -108,6 +124,7 @@ function makeApi(): Harness {
     alarms,
     action: base.action,
     local: base.local,
+    dnr: base.declarativeNetRequest,
     fireInstalled: () => installed.forEach((listener) => listener()),
     fireStartup: () => startup.forEach((listener) => listener()),
   };
@@ -338,6 +355,48 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
 
     expect(h.action.badgeTexts).toEqual([]);
     expect(snapshotWrites(h.local)).toBe(0);
+  });
+});
+
+describe('background — Gateway Origin Rule Install (hito-12 WU-F)', () => {
+  it('installs the scoped gateway-origin session rule exactly once at worker boot', () => {
+    const h = makeApi();
+
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+
+    expect(h.dnr.calls.map((call) => call.op)).toEqual(['updateSessionRules']); // one install per SW start
+    // The payload pinned AT THE BACKGROUND LEVEL too: the runtime id must ride
+    // in through the platform seam's runtime slice as the initiator scope, and
+    // the rewrite target is the PUBLIC console origin — no credential (WU-F).
+    expect(h.dnr.calls[0]?.args[0]).toEqual({
+      addRules: [
+        {
+          id: 1, // QWEN_TOKEN_PLAN_SESSION_RULE_ID (dnr/gateway-origin-rule.ts)
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'origin', operation: 'set', value: 'https://modelstudio.console.alibabacloud.com' },
+            ],
+          },
+          condition: {
+            requestDomains: [QWEN_TOKEN_PLAN_GATEWAY_HOST],
+            resourceTypes: ['xmlhttprequest'],
+            initiatorDomains: [FAKE_RUNTIME_ID],
+            urlFilter: `${QWEN_TOKEN_PLAN_GATEWAY_HOST}/cli/api.json`,
+          },
+        },
+      ],
+    });
+  });
+
+  it('a second worker start replaces by id: two recorded updates, ONE live rule, no secret-shaped payload', () => {
+    const h = makeApi();
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+
+    expect(h.dnr.calls).toHaveLength(2); // idempotent replace-by-id, not skip — each SW start re-installs
+    expect(h.dnr.sessionRules.size).toBe(1); // no duplicate rule accumulates under the same id
+    expect(JSON.stringify(h.dnr.sessionRules.get(1))).not.toMatch(/cookie|authorization|bearer/i); // public constants only (hito-9 §Lane 1(c) ban)
   });
 });
 

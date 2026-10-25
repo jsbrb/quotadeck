@@ -156,6 +156,32 @@ Verification levels:
 - Sources: `bailian-cli` 2.5.1 (npm) for the request shape and gateway matrix; maintainer
   live captures cross-checked against the console quota page for the response values;
   `scripts/spike-token-mint.ps1` for the headless AK/SK token-mint probe (2026-10-25).
+- Browser WAF constraint + DNR session-rule mitigation (hito-12 WU-F, live-verified
+  2026-10-25): from the MV3 service worker the gateway hop always carries the
+  forbidden `Origin: chrome-extension://<id>` header, and Alibaba's WAF answers that
+  shape with a **302 to err.taobao.com** — app-level auth is never even reached. A
+  token-less read-only header-variant probe separates the layers: chrome-extension
+  Origin → 302 err.taobao; `Origin: https://modelstudio.console.alibabacloud.com` →
+  200 `BailianGateway.Login.NotLogined` (a real app-level answer); `Sec-Fetch-*` and
+  the UA are irrelevant. `fetch()` can neither set nor remove the forbidden Origin
+  header from a worker, so the worker installs ONE `declarativeNetRequest` SESSION
+  rule at start (replaces-by-id, idempotent across SW restarts) that rewrites the
+  gateway request's Origin to that public console origin, scoped to our own extension
+  as initiator (`initiatorDomains: [runtime.id]`), the gateway host, and the
+  `/cli/api.json` path — see `extension/src/dnr/gateway-origin-rule.ts`.
+- WHY this DNR use is NOT the hito-9-rejected header injection
+  (`openspec/changes/hito-9-qwen-console-session/exploration.md` §Lane 1(c), "Ruled
+  out"): that proposal would persist cookie/session **VALUES** as rule data — secret
+  material in browser-managed storage, bypassing the credential seam. The rule here
+  carries only a **public static string** (the console origin) as a WAF-compatibility
+  header plus the install's own extension id as initiator scope: zero credentials,
+  and the Bearer token still rides exclusively through the client's session-marker
+  seam (`extension/src/network/client.ts`, WU-C1 — untouched). The rule is
+  session-scoped (never persisted across browser restarts) and header-scoped
+  (`modifyHeaders` on the `origin` request header only; the tests pin that no
+  cookie/authorization operation can appear). **No allowlist or manifest-host change
+  is implied**: a session-rule header rewrite is not a new network destination — the
+  console origin is never a fetch target and `host_permissions` stay as pinned.
 
 ## OpenAI — `api.openai.com` — verified-official
 

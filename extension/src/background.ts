@@ -22,16 +22,25 @@
 // - Error State + Taxonomy: a failed refresh persists ERROR_BADGE_TEXT only
 //   when its provider is the chosen one; every failure still carries its
 //   taxonomy class into the snapshot (AD-13/21).
+// - Gateway Origin Rule Install (hito-12 WU-F): every worker start installs
+//   ONE declarativeNetRequest session rule that rewrites the quota gateway
+//   request's forbidden chrome-extension:// Origin to a PUBLIC console-origin
+//   constant (Alibaba's WAF 302s the SW's own Origin to err.taobao.com before
+//   app auth — see dnr/gateway-origin-rule.ts for the hito-9 §Lane 1(c)
+//   contrast: public constants only, zero credentials, the Bearer still rides
+//   exclusively through the client's session-marker seam). updateSessionRules
+//   replaces by id, so repeat installs across SW restarts stay idempotent.
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
 import { SHIPPED_PROVIDER_IDS } from './core/provider-metadata';
 import type { QwenSite } from './core/qwen-sites';
 import type { ZaiPlatform } from './core/zai-platforms';
 import { badgeBackgroundColor, badgeTextColor, ERROR_BADGE_TEXT, formatBadgeText, formatPercentageBadgeText } from './core/usage';
+import { buildGatewayOriginSessionRule } from './dnr/gateway-origin-rule';
 import { AllowlistNetworkClient } from './network/client';
 import { FetchTransport } from './network/fetch-transport';
 import type { Transport } from './network/transport';
-import { ChromeBrowserApi, type BrowserApi } from './platform/browser-api';
+import { ChromeBrowserApi, type BrowserApi, type WorkerBrowserApi } from './platform/browser-api';
 import { createDefaultRegistry } from './providers';
 import { classifyRefreshError } from './refresh/error-taxonomy';
 import { RefreshEngine } from './refresh/engine';
@@ -272,14 +281,35 @@ export async function refreshTick(
   await new SnapshotStore(browser.storage.local).write({ results });
 }
 
-/** Wires alarm registration and the tick handler onto the injected browser. */
-export function startWorker(browser: BrowserApi, options: WorkerOptions = {}): void {
+/**
+ * Wires alarm registration and the tick handler onto the injected browser,
+ * and installs the gateway-origin session rule (hito-12 WU-F) — the one
+ * worker-only DNR/runtime-id capability, taken through the worker port.
+ */
+export function startWorker(browser: WorkerBrowserApi, options: WorkerOptions = {}): void {
   // One clock instant per worker: the same source feeds the engine (sleeps,
   // fetchedAt) and the tick query derivation.
   const clock = options.clock ?? new SystemClock();
   const engine = createRefreshEngine(browser, options);
   const planStep = createQwenPlanStep(browser, options);
   const quotaStep = createQwenQuotaStep(browser, options);
+
+  // Gateway-origin session rule install (hito-12 WU-F), once per SW start and
+  // BEFORE the alarm wiring: the quota gateway hop is dead without it (WAF 302
+  // on the chrome-extension:// Origin). updateSessionRules replaces by id, so
+  // every worker restart re-installs idempotently. The payload carries public
+  // constants plus our own runtime id as initiator scope — no secret ever
+  // enters rule data (hito-9 §Lane 1(c)). A failed install never blocks the
+  // alarms/tick wiring but surfaces on the worker console, like every other
+  // permanent diagnostic; the log line names only the fixed prefix and the
+  // chrome error itself.
+  browser.declarativeNetRequest
+    .updateSessionRules({
+      addRules: [buildGatewayOriginSessionRule({ extensionId: browser.runtime.id })],
+    })
+    .catch((error: unknown) => {
+      console.error('[quotadeck] gateway origin session rule install failed:', error);
+    });
 
   const ensureAlarm = async (): Promise<void> => {
     if ((await browser.alarms.get(USAGE_REFRESH_ALARM)) === undefined) {
