@@ -113,15 +113,26 @@ function errorSegment(id: ProviderId, entry: Extract<ProviderSnapshotEntry, { st
 }
 
 /**
- * The full strip body (S8): ONLY keyed providers render, in stable metadata
- * order. Zero keys → one hint segment.
+ * The full strip body (S8): every provider with a STORED key renders — one
+ * segment each, in stable metadata order. A provider whose tick produced no
+ * entry (the qwen steps omit on transport failure by contract) shows a muted
+ * NO DATA segment instead of vanishing.
  */
-export function renderSegments(snapshot: CycleSnapshot, now: number): string {
+export function renderSegments(
+  snapshot: CycleSnapshot,
+  now: number,
+  storedProviders: readonly ProviderId[] = [],
+): string {
   const keyed = Object.keys(snapshot.results) as ProviderId[];
   const ordered = [
     ...(PROVIDER_METADATA.map((entry) => entry.id) as ProviderId[]),
     ...keyed,
-  ].filter((id, index, all) => snapshot.results[id] !== undefined && all.indexOf(id) === index);
+    ...storedProviders,
+  ].filter(
+    (id, index, all) =>
+      (snapshot.results[id] !== undefined || storedProviders.includes(id)) &&
+      all.indexOf(id) === index,
+  );
 
   if (ordered.length === 0) {
     return `
@@ -136,6 +147,13 @@ export function renderSegments(snapshot: CycleSnapshot, now: number): string {
   for (const id of ordered) {
     const entry = snapshot.results[id];
     if (entry === undefined) {
+      segments.push(`
+        <div class="seg">
+          <div class="seg-top">
+            <span class="seg-name">${escapeHtml(shortName(id))}</span>
+          </div>
+          <span class="seg-reset">NO DATA THIS TICK</span>
+        </div>`);
       continue;
     }
     segments.push(entry.status === "ok" ? okSegment(id, entry.usage, now) : errorSegment(id, entry));
@@ -154,7 +172,10 @@ export function renderTickNotice(message: string): string {
     </div>`;
 }
 
-/** Number of cards the current snapshot renders (strip width driver). */
-export function keyedCount(snapshot: CycleSnapshot): number {
-  return Object.keys(snapshot.results).length;
+/** Number of visible segments (strip width driver). */
+export function visibleCount(
+  snapshot: CycleSnapshot,
+  storedProviders: readonly ProviderId[] = [],
+): number {
+  return new Set([...(Object.keys(snapshot.results) as ProviderId[]), ...storedProviders]).size;
 }

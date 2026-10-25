@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SystemClock } from "@shared/core/clock";
+import type { ProviderId } from "@shared/core/provider";
 import { SnapshotStore } from "@shared/storage/snapshot-store";
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
 import { createDesktopTransport } from "./lib/desktop-transport";
 import { setupKeysView } from "./lib/keys-view";
-import { keyedCount, renderSegments, renderTickNotice, shortName } from "./lib/render";
+import { renderSegments, renderTickNotice, shortName, visibleCount } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
 import { resolveChosenBand } from "./lib/tray-badge";
 
@@ -39,6 +40,22 @@ let mode: "bar" | "keys" = "bar";
 let demoMode = false;
 let lastKeyedCount = 0;
 
+/**
+ * Provider ids with a stored credential slot (S8 "stored keys render"):
+ * `qd:key:qwen-plan` maps to `qwen` — a plan-only user sees the Qwen segment.
+ */
+async function storedProviders(): Promise<ProviderId[]> {
+  const ids = new Set<ProviderId>();
+  for (const key of Object.keys(await secrets.get(null))) {
+    if (!key.startsWith("qd:key:")) {
+      continue;
+    }
+    const slot = key.slice("qd:key:".length);
+    ids.add(slot === "qwen-plan" ? "qwen" : (slot as ProviderId));
+  }
+  return [...ids];
+}
+
 function reflowBar(): void {
   const width =
     lastKeyedCount === 0
@@ -64,17 +81,19 @@ function showKeys(): void {
 async function tick(): Promise<void> {
   try {
     const outcome = await runDesktopRefreshTick({ prefs, secrets, transport, clock });
-    lastKeyedCount = keyedCount(outcome.snapshot);
+    const stored = await storedProviders();
+    lastKeyedCount = visibleCount(outcome.snapshot, stored);
     await prefs.remove(LAST_TICK_ERROR_KEY).catch(() => {});
     if (mode === "bar" && bar !== null) {
-      bar.innerHTML = renderSegments(outcome.snapshot, clock.now());
+      bar.innerHTML = renderSegments(outcome.snapshot, clock.now(), stored);
     }
     if (mode === "bar") {
       reflowBar();
     }
-    // The tray icon IS the desktop badge: band color from the chosen
-    // provider's threshold, figure in the tooltip.
-    const chosen = resolveChosenBand(outcome.snapshot.results, outcome.badgeProvider, shortName);
+    // The tray icon IS the desktop badge: band color from ZAI's threshold,
+    // figure in the tooltip. No badge choice — the segments carry every
+    // provider already (S10).
+    const chosen = resolveChosenBand(outcome.snapshot.results, "zai", shortName);
     await invoke("set_tray_badge", { band: chosen.band, tooltip: chosen.tooltip });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -108,7 +127,7 @@ void (async () => {
     const snapshot = await new SnapshotStore(prefs).read();
     if (snapshot !== undefined && bar !== null) {
       bar.innerHTML = renderSegments(snapshot, Date.now());
-      lastKeyedCount = keyedCount(snapshot);
+      lastKeyedCount = visibleCount(snapshot);
     }
     showBar();
     return;

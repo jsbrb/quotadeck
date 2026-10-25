@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CycleSnapshot } from "@shared/storage/snapshot-store";
 
-import { formatCountdown, keyedCount, renderSegments, shortName } from "./render";
+import { formatCountdown, renderSegments, shortName, visibleCount } from "./render";
 
 const NOW = 1_700_000_000_000;
 
@@ -76,8 +76,26 @@ describe("renderSegments (S8 keyed-only taskbar strip)", () => {
     expect(shortName("qwen")).toBe("Qwen");
   });
 
-  it("counts keyed providers for the strip width", () => {
-    expect(keyedCount({ results: {} })).toBe(0);
-    expect(keyedCount({ results: { zai: { status: "error", errorClass: "auth" } } })).toBe(1);
+  it("renders a muted NO DATA segment for stored providers without an entry", () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: "ok",
+          usage: { providerId: "zai", kind: "balance", fetchedAt: NOW, windows: { fiveHour: { percentage: 15 } } },
+        },
+      },
+    };
+    const html = renderSegments(snapshot, NOW, ["zai", "qwen"]);
+    expect(html).toContain(">ZAI<");
+    expect(html).toContain(">Qwen<");
+    expect(html).toContain("NO DATA THIS TICK");
+    // Muted segment is honest: no invented figures.
+    expect(html).not.toContain(">—<");
+  });
+
+  it("counts visible segments (results + stored) for the strip width", () => {
+    expect(visibleCount({ results: {} })).toBe(0);
+    expect(visibleCount({ results: { zai: { status: "error", errorClass: "auth" } } })).toBe(1);
+    expect(visibleCount({ results: { zai: { status: "error", errorClass: "auth" } } }, ["zai", "qwen"])).toBe(2);
   });
 });

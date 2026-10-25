@@ -9,7 +9,6 @@
 
 import type { ProviderId } from "@shared/core/provider";
 import { KeyStore, type StorageArea } from "@shared/storage/key-store";
-import { readBadgeProvider, writeBadgeProvider } from "@shared/storage/badge-provider-store";
 import { readQwenSite, writeQwenSite } from "@shared/storage/qwen-site-store";
 import { readZaiPlatform, writeZaiPlatform } from "@shared/storage/zai-platform-store";
 
@@ -54,8 +53,6 @@ export function setupKeysView(deps: KeysViewDeps): void {
   const qwenPlanMasked = requireEl("qwen-plan-masked");
   const qwenPlanSave = requireEl("qwen-plan-save");
   const qwenPlanRevoke = requireEl("qwen-plan-revoke");
-
-  const badgeProvider = requireEl<HTMLSelectElement>("badge-provider");
 
   async function refreshMasks(): Promise<void> {
     const zai = await keys.readMaskedCredential("zai", "raw");
@@ -155,19 +152,14 @@ export function setupKeysView(deps: KeysViewDeps): void {
   qwenSite.addEventListener("change", () => {
     void writeQwenSite(prefs, qwenSite.value as "international" | "china").then(deps.onKeyChange);
   });
-  badgeProvider.addEventListener("change", () => {
-    void writeBadgeProvider(prefs, badgeProvider.value as ProviderId);
-  });
 
-  // Initial paint: stored selections + masked states.
+  // Initial paint: stored selections + masked states. The tray badge has no
+  // selector by design (S10): it always renders ZAI.
   void readZaiPlatform(prefs).then((platform) => {
     zaiPlatform.value = platform;
   });
   void readQwenSite(prefs).then((site) => {
     qwenSite.value = site;
-  });
-  void readBadgeProvider(prefs).then((provider) => {
-    badgeProvider.value = provider;
   });
   void refreshMasks();
 }
