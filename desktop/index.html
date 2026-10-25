@@ -127,15 +127,157 @@
         letter-spacing: 0.08em;
         opacity: 0.75;
       }
+      .tabs {
+        display: flex;
+        gap: 6px;
+      }
+      .tab {
+        border: 2px solid var(--ink);
+        background: var(--slate);
+        color: var(--ink);
+        font: inherit;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        padding: 3px 8px;
+        cursor: pointer;
+      }
+      .tab.active {
+        background: var(--ink);
+        color: #ffffff;
+      }
+      .hidden {
+        display: none;
+      }
+      .field {
+        display: block;
+        margin-bottom: 8px;
+      }
+      .field span {
+        display: block;
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        margin-bottom: 2px;
+      }
+      .field input,
+      .field select {
+        width: 100%;
+        border: 2px solid var(--ink);
+        background: #ffffff;
+        color: var(--ink);
+        font: inherit;
+        font-size: 11px;
+        padding: 4px 6px;
+        box-sizing: border-box;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin: 8px 0;
+      }
+      .actions button {
+        flex: 1;
+        border: 2px solid var(--ink);
+        background: var(--slate);
+        color: var(--ink);
+        font: inherit;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        padding: 4px 0;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--ink);
+      }
+      .actions button:active {
+        transform: translate(2px, 2px);
+        box-shadow: none;
+      }
+      .status {
+        font-size: 9px;
+        letter-spacing: 0.06em;
+        min-height: 12px;
+        margin: 4px 0 0;
+      }
+      .status.error {
+        color: var(--warn-90);
+        font-weight: 700;
+      }
     </style>
   </head>
   <body>
     <header>
       <h1>QUOTADECK</h1>
+      <nav class="tabs">
+        <button id="tab-quotas" type="button" class="tab active">QUOTAS</button>
+        <button id="tab-keys" type="button" class="tab">KEYS</button>
+      </nav>
       <button id="pin" type="button" aria-pressed="false" title="Pin the flyout above other windows">PIN</button>
     </header>
     <main>
-      <section class="placeholder" id="cards">LOADING SNAPSHOT…</section>
+      <div id="cards">
+        <section class="placeholder">LOADING SNAPSHOT…</section>
+      </div>
+      <div id="keys" class="hidden">
+        <section class="card">
+          <h2 class="provider-name">ZAI (Zhipu AI)</h2>
+          <label class="field">
+            <span>PLATFORM</span>
+            <select id="zai-platform">
+              <option value="zai">Z.AI (api.z.ai)</option>
+              <option value="zhipu">ZHIPU (open.bigmodel.cn)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>API TOKEN</span>
+            <input id="zai-key" type="password" autocomplete="off" placeholder="Paste the monitor token" />
+          </label>
+          <p id="zai-masked" class="row masked"></p>
+          <div class="actions">
+            <button id="zai-save" type="button">SAVE</button>
+            <button id="zai-revoke" type="button">REVOKE</button>
+          </div>
+        </section>
+        <section class="card">
+          <h2 class="provider-name">QWEN (Alibaba Cloud)</h2>
+          <label class="field">
+            <span>BSS SITE</span>
+            <select id="qwen-site">
+              <option value="international">International</option>
+              <option value="china">China</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>ACCESS KEY ID</span>
+            <input id="qwen-akid" type="password" autocomplete="off" placeholder="AccessKeyId" />
+          </label>
+          <label class="field">
+            <span>ACCESS KEY SECRET</span>
+            <input id="qwen-aksecret" type="password" autocomplete="off" placeholder="AccessKeySecret" />
+          </label>
+          <p id="qwen-masked" class="row masked"></p>
+          <div class="actions">
+            <button id="qwen-save" type="button">SAVE</button>
+            <button id="qwen-revoke" type="button">REVOKE</button>
+          </div>
+          <label class="field">
+            <span>PLAN KEY (OPTIONAL sk-sp-)</span>
+            <input id="qwen-plan-key" type="password" autocomplete="off" placeholder="sk-sp-…" />
+          </label>
+          <p id="qwen-plan-masked" class="row masked"></p>
+          <div class="actions">
+            <button id="qwen-plan-save" type="button">SAVE</button>
+            <button id="qwen-plan-revoke" type="button">REVOKE</button>
+          </div>
+        </section>
+        <section class="card">
+          <h2 class="provider-name">TRAY BADGE PROVIDER</h2>
+          <label class="field">
+            <span>PROVIDER</span>
+            <select id="badge-provider">
+              <option value="zai">ZAI (5h window)</option>
+              <option value="qwen">Qwen (token-plan quota)</option>
+            </select>
+          </label>
+        </section>
+      </div>
     </main>
     <footer>QUOTADECK DESKTOP — LIVE QUOTAS WITHOUT THE BROWSER</footer>
     <script type="module" src="/src/main.ts"></script>

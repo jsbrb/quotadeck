@@ -7,33 +7,7 @@ import type { StorageArea } from "@shared/storage/key-store";
 import type { CycleSnapshot } from "@shared/storage/snapshot-store";
 
 import { buildDesktopTickQuery, runDesktopRefreshTick } from "./refresh-loop";
-
-function fakeArea(initial: Record<string, unknown> = {}): StorageArea {
-  const map = new Map(Object.entries(initial));
-  return {
-    async get(keys) {
-      const requested =
-        keys === null ? [...map.keys()] : Array.isArray(keys) ? keys : [keys];
-      const found: Record<string, unknown> = {};
-      for (const key of requested) {
-        if (map.has(key)) {
-          found[key] = map.get(key);
-        }
-      }
-      return found;
-    },
-    async set(items) {
-      for (const [key, value] of Object.entries(items)) {
-        map.set(key, value);
-      }
-    },
-    async remove(keys) {
-      for (const key of Array.isArray(keys) ? keys : [keys]) {
-        map.delete(key);
-      }
-    },
-  };
-}
+import { fakeArea } from "../testing/fake-area";
 
 function fakeTransport(responses: Record<string, TransportResponse> = {}): Transport & { calls: AuthorizedRequest[] } {
   const calls: AuthorizedRequest[] = [];
