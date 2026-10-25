@@ -7,8 +7,11 @@
 // unpacked-load E2E use it to replay recorded responses with no network path.
 //
 // Note on headers (AD-19): `AuthorizedRequest.headers` is set exclusively by
-// `AllowlistNetworkClient` and may be `{}` — the qwen ak-sk path carries auth
-// as the signed BSS query, not as a header.
+// `AllowlistNetworkClient`. Unmarked requests may carry `{}` — the legacy qwen
+// ak-sk path still signs auth into the BSS query. Marked routes carry the
+// client-produced header sets instead: the ACS3 `x-acs-*`/Authorization set on
+// `signing`-marked mint requests, and a Bearer Authorization on `session`-
+// marked gateway requests (transient token; never from storage, never in URLs).
 
 /** A request after `AllowlistNetworkClient` attached the Authorization header. */
 export interface AuthorizedRequest {
