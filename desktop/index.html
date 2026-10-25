@@ -5,13 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QuotaDeck</title>
     <style>
+      /* Second-taskbar strip (WU-G): dark, fixed height, no window chrome.
+         The window is ONLY the bar in quotas mode; KEYS opens as a taller
+         docked window with the same dark canvas. */
       :root {
+        --bar-bg: #1f1f1f;
+        --bar-sep: #383838;
+        --bar-text: #eaeaea;
+        --bar-muted: #9aa0a6;
+        --warn: #ef4444;
         --paper: #f5f1e8;
         --ink: #0f172a;
         --slate: #e2e8f0;
-        --warn-50: #f97316;
-        --warn-80: #ea580c;
-        --warn-90: #dc2626;
         --shadow-offset: 4px;
       }
       * {
@@ -19,152 +24,77 @@
       }
       body {
         margin: 0;
-        background: var(--paper);
-        color: var(--ink);
+        background: var(--bar-bg);
+        color: var(--bar-text);
         font-family: "JetBrains Mono", ui-monospace, monospace;
-        display: flex;
-        flex-direction: column;
         min-height: 100vh;
         user-select: none;
-      }
-      header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px 14px;
-        border-bottom: 2px solid var(--ink);
-      }
-      header h1 {
-        margin: 0;
-        font-size: 14px;
-        letter-spacing: 0.08em;
-      }
-      #pin {
-        border: 2px solid var(--ink);
-        background: var(--slate);
-        color: var(--ink);
-        font: inherit;
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        padding: 4px 10px;
-        cursor: pointer;
-        box-shadow: 2px 2px 0 var(--ink);
-      }
-      #pin:active {
-        transform: translate(2px, 2px);
-        box-shadow: none;
-      }
-      #pin.pinned {
-        background: var(--warn-50);
-        color: #ffffff;
-      }
-      main {
-        flex: 1;
-        padding: 14px;
         overflow: hidden;
       }
-      #cards {
+      #bar {
         display: flex;
         flex-direction: row;
         flex-wrap: nowrap;
-        gap: 12px;
         align-items: stretch;
+        height: 52px;
       }
+      .seg {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 16px;
+        border-left: 1px solid var(--bar-sep);
+        flex: 0 0 auto;
+        white-space: nowrap;
+      }
+      .seg:first-child {
+        border-left: none;
+      }
+      .seg-name {
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      .seg-pct {
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .seg-reset {
+        font-size: 10px;
+        color: var(--bar-muted);
+        letter-spacing: 0.06em;
+      }
+      .seg-err {
+        font-size: 11px;
+        color: var(--warn);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+      }
+      /* KEYS mode: same dark canvas, light instrument panels. */
       #keys {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
         gap: 14px;
         align-items: start;
+        padding: 14px;
       }
-      #keys .card {
-        width: auto;
-        margin: 0;
+      #keys.hidden,
+      #bar.hidden {
+        display: none;
       }
       .card {
         border: 2px solid var(--ink);
-        background: #ffffff;
-        box-shadow: var(--shadow-offset) var(--shadow-offset) 0 var(--ink);
-        padding: 8px 10px;
-        width: 190px;
-        flex: 0 0 auto;
-      }
-      .card-error {
-        background: #fff7ed;
-      }
-      .card-muted {
-        opacity: 0.72;
+        background: var(--paper);
+        color: var(--ink);
+        box-shadow: var(--shadow-offset) var(--shadow-offset) 0 #000000;
+        padding: 10px 12px;
       }
       .provider-name {
         margin: 0 0 8px;
         font-size: 11px;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-      }
-      .hero {
-        margin: 0 0 8px;
-        display: inline-block;
-        border: 2px solid var(--ink);
-        padding: 6px 14px;
-        font-size: 22px;
-        font-weight: 700;
-      }
-      .row {
-        margin: 4px 0 0;
-        font-size: 10px;
-        letter-spacing: 0.06em;
-      }
-      .error-label {
-        margin: 0 0 6px;
-        font-size: 13px;
-        font-weight: 700;
-        text-transform: uppercase;
-        color: var(--warn-90);
-      }
-      .chip {
-        display: inline-block;
-        border: 2px solid var(--ink);
-        background: var(--slate);
-        padding: 2px 6px;
-        font-size: 9px;
-        letter-spacing: 0.08em;
-      }
-      .placeholder {
-        border: 2px solid var(--ink);
-        background: #ffffff;
-        box-shadow: var(--shadow-offset) var(--shadow-offset) 0 var(--ink);
-        padding: 16px;
-        font-size: 12px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-      }
-      footer {
-        padding: 8px 14px;
-        border-top: 2px solid var(--ink);
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        opacity: 0.75;
-      }
-      .tabs {
-        display: flex;
-        gap: 6px;
-      }
-      .tab {
-        border: 2px solid var(--ink);
-        background: var(--slate);
-        color: var(--ink);
-        font: inherit;
-        font-size: 10px;
-        letter-spacing: 0.08em;
-        padding: 3px 8px;
-        cursor: pointer;
-      }
-      .tab.active {
-        background: var(--ink);
-        color: #ffffff;
-      }
-      .hidden {
-        display: none;
       }
       .field {
         display: block;
@@ -185,7 +115,6 @@
         font: inherit;
         font-size: 11px;
         padding: 4px 6px;
-        box-sizing: border-box;
       }
       .actions {
         display: flex;
@@ -208,96 +137,83 @@
         transform: translate(2px, 2px);
         box-shadow: none;
       }
-      .status {
-        font-size: 9px;
+      .row {
+        font-size: 10px;
         letter-spacing: 0.06em;
         min-height: 12px;
         margin: 4px 0 0;
       }
-      .status.error {
-        color: var(--warn-90);
+      .row.error {
+        color: #dc2626;
         font-weight: 700;
       }
     </style>
   </head>
   <body>
-    <header>
-      <h1>QUOTADECK</h1>
-      <nav class="tabs">
-        <button id="tab-quotas" type="button" class="tab active">QUOTAS</button>
-        <button id="tab-keys" type="button" class="tab">KEYS</button>
-      </nav>
-      <button id="pin" type="button" aria-pressed="false" title="Pin the flyout above other windows">PIN</button>
-    </header>
-    <main>
-      <div id="cards">
-        <section class="placeholder">LOADING SNAPSHOT…</section>
-      </div>
-      <div id="keys" class="hidden">
-        <section class="card">
-          <h2 class="provider-name">ZAI (Zhipu AI)</h2>
-          <label class="field">
-            <span>PLATFORM</span>
-            <select id="zai-platform">
-              <option value="zai">Z.AI (api.z.ai)</option>
-              <option value="zhipu">ZHIPU (open.bigmodel.cn)</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>API TOKEN</span>
-            <input id="zai-key" type="password" autocomplete="off" placeholder="Paste the monitor token" />
-          </label>
-          <p id="zai-masked" class="row masked"></p>
-          <div class="actions">
-            <button id="zai-save" type="button">SAVE</button>
-            <button id="zai-revoke" type="button">REVOKE</button>
-          </div>
-        </section>
-        <section class="card">
-          <h2 class="provider-name">QWEN (Alibaba Cloud)</h2>
-          <label class="field">
-            <span>BSS SITE</span>
-            <select id="qwen-site">
-              <option value="international">International</option>
-              <option value="china">China</option>
-            </select>
-          </label>
-          <label class="field">
-            <span>ACCESS KEY ID</span>
-            <input id="qwen-akid" type="password" autocomplete="off" placeholder="AccessKeyId" />
-          </label>
-          <label class="field">
-            <span>ACCESS KEY SECRET</span>
-            <input id="qwen-aksecret" type="password" autocomplete="off" placeholder="AccessKeySecret" />
-          </label>
-          <p id="qwen-masked" class="row masked"></p>
-          <div class="actions">
-            <button id="qwen-save" type="button">SAVE</button>
-            <button id="qwen-revoke" type="button">REVOKE</button>
-          </div>
-          <label class="field">
-            <span>PLAN KEY (OPTIONAL sk-sp-)</span>
-            <input id="qwen-plan-key" type="password" autocomplete="off" placeholder="sk-sp-…" />
-          </label>
-          <p id="qwen-plan-masked" class="row masked"></p>
-          <div class="actions">
-            <button id="qwen-plan-save" type="button">SAVE</button>
-            <button id="qwen-plan-revoke" type="button">REVOKE</button>
-          </div>
-        </section>
-        <section class="card">
-          <h2 class="provider-name">TRAY BADGE PROVIDER</h2>
-          <label class="field">
-            <span>PROVIDER</span>
-            <select id="badge-provider">
-              <option value="zai">ZAI (5h window)</option>
-              <option value="qwen">Qwen (token-plan quota)</option>
-            </select>
-          </label>
-        </section>
-      </div>
-    </main>
-    <footer>QUOTADECK DESKTOP — LIVE QUOTAS WITHOUT THE BROWSER</footer>
+    <div id="bar" class="hidden"></div>
+    <div id="keys" class="hidden">
+      <section class="card">
+        <h2 class="provider-name">ZAI (Zhipu AI)</h2>
+        <label class="field">
+          <span>PLATFORM</span>
+          <select id="zai-platform">
+            <option value="zai">Z.AI (api.z.ai)</option>
+            <option value="zhipu">ZHIPU (open.bigmodel.cn)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>API TOKEN</span>
+          <input id="zai-key" type="password" autocomplete="off" placeholder="Paste the monitor token" />
+        </label>
+        <p id="zai-masked" class="row"></p>
+        <div class="actions">
+          <button id="zai-save" type="button">SAVE</button>
+          <button id="zai-revoke" type="button">REVOKE</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="provider-name">QWEN (Alibaba Cloud)</h2>
+        <label class="field">
+          <span>BSS SITE</span>
+          <select id="qwen-site">
+            <option value="international">International</option>
+            <option value="china">China</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>ACCESS KEY ID</span>
+          <input id="qwen-akid" type="password" autocomplete="off" placeholder="AccessKeyId" />
+        </label>
+        <label class="field">
+          <span>ACCESS KEY SECRET</span>
+          <input id="qwen-aksecret" type="password" autocomplete="off" placeholder="AccessKeySecret" />
+        </label>
+        <p id="qwen-masked" class="row"></p>
+        <div class="actions">
+          <button id="qwen-save" type="button">SAVE</button>
+          <button id="qwen-revoke" type="button">REVOKE</button>
+        </div>
+        <label class="field">
+          <span>PLAN KEY (OPTIONAL sk-sp-)</span>
+          <input id="qwen-plan-key" type="password" autocomplete="off" placeholder="sk-sp-…" />
+        </label>
+        <p id="qwen-plan-masked" class="row"></p>
+        <div class="actions">
+          <button id="qwen-plan-save" type="button">SAVE</button>
+          <button id="qwen-plan-revoke" type="button">REVOKE</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="provider-name">TRAY BADGE PROVIDER</h2>
+        <label class="field">
+          <span>PROVIDER</span>
+          <select id="badge-provider">
+            <option value="zai">ZAI (5h window)</option>
+            <option value="qwen">Qwen (token-plan quota)</option>
+          </select>
+        </label>
+      </section>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

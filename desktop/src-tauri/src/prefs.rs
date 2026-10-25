@@ -31,7 +31,9 @@ pub async fn prefs_read_all(app: AppHandle) -> Result<HashMap<String, Value>, St
         return Ok(HashMap::new());
     }
     let raw = fs::read_to_string(&path).map_err(|e| format!("cannot read prefs: {e}"))?;
-    serde_json::from_str(&raw).map_err(|e| format!("corrupt prefs document: {e}"))
+    // Tolerate a UTF-8 BOM (PowerShell 5.1 Set-Content writes one).
+    let raw = raw.trim_start_matches('\u{feff}');
+    serde_json::from_str(raw).map_err(|e| format!("corrupt prefs document: {e}"))
 }
 
 #[tauri::command]

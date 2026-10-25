@@ -2,53 +2,78 @@ import { describe, expect, it } from "vitest";
 
 import type { CycleSnapshot } from "@shared/storage/snapshot-store";
 
-import { keyedCount, renderSnapshot } from "./render";
+import { formatCountdown, keyedCount, renderSegments, shortName } from "./render";
 
 const NOW = 1_700_000_000_000;
 
-describe("renderSnapshot (S8 keyed-only strip)", () => {
-  it("renders only keyed providers, in stable metadata order", () => {
+describe("renderSegments (S8 keyed-only taskbar strip)", () => {
+  it("renders one minimalist segment per keyed provider, in stable order", () => {
     const snapshot: CycleSnapshot = {
       results: {
         qwen: { status: "error", errorClass: "auth" },
         zai: {
           status: "ok",
-          usage: { providerId: "zai", kind: "balance", fetchedAt: NOW, windows: { fiveHour: { percentage: 62 } } },
+          usage: {
+            providerId: "zai",
+            kind: "balance",
+            fetchedAt: NOW,
+            windows: { fiveHour: { percentage: 62, resetAt: NOW + 90 * 60_000 } },
+          },
         },
       },
     };
-    const html = renderSnapshot(snapshot, NOW);
-    expect(html).toContain("ZAI (Zhipu AI)");
+    const html = renderSegments(snapshot, NOW);
+    expect(html).toContain(">ZAI<");
     expect(html).toContain("62%");
-    expect(html).toContain("Qwen (Alibaba Cloud BSS)");
-    expect(html).toContain("Auth failed");
-    // Keyless providers never render (S8).
+    expect(html).toContain("RESETS 1h 30m");
+    expect(html).toContain(">Qwen<");
+    expect(html).toContain("AUTH FAILED");
+    // Keyless providers never render (S8); no hero cards anymore.
     expect(html).not.toContain("OpenAI");
     expect(html).not.toContain("Kimi");
-    expect(html).not.toContain("NO KEY");
-    // Stable order: metadata order first (zai before qwen).
     expect(html.indexOf("ZAI")).toBeLessThan(html.indexOf("Qwen"));
   });
 
-  it("renders one hint card when there are no keys at all", () => {
-    const html = renderSnapshot({ results: {} }, NOW);
-    expect(html).toContain("NO KEYS YET");
-    expect(html).not.toContain("provider-name");
-  });
-
-  it("carries the LAST KNOWN chip on error cards", () => {
+  it("uses the qwen quota percentage and reset over the windows", () => {
     const snapshot: CycleSnapshot = {
-      results: { zai: { status: "error", errorClass: "network" } },
-      lastKnown: {
-        zai: {
+      results: {
+        qwen: {
           status: "ok",
-          usage: { providerId: "zai", kind: "balance", fetchedAt: NOW - 300_000 },
+          usage: {
+            providerId: "qwen",
+            kind: "balance",
+            fetchedAt: NOW,
+            windows: { fiveHour: { percentage: 10 } },
+            quota: { percentage: 137, resetAt: NOW + 86_400_000, fetchedAt: NOW },
+          },
         },
       },
     };
-    const html = renderSnapshot(snapshot, NOW);
-    expect(html).toContain("LAST KNOWN T-5m");
-    expect(html).toContain("Network error");
+    const html = renderSegments(snapshot, NOW);
+    expect(html).toContain("137%");
+    expect(html).toContain("color:#ef4444");
+    expect(html).toContain("RESETS 1d 0h");
+  });
+
+  it("renders one hint segment when there are no keys at all", () => {
+    const html = renderSegments({ results: {} }, NOW);
+    expect(html).toContain("NO KEYS YET");
+    expect(html).toContain("KEYS");
+    expect(html).not.toContain("seg-pct");
+  });
+
+  it("formats countdowns deterministically", () => {
+    expect(formatCountdown(NOW, undefined)).toBe("");
+    expect(formatCountdown(NOW, NOW - 1)).toBe("NOW");
+    expect(formatCountdown(NOW, NOW + 30_000)).toBe("<1m");
+    expect(formatCountdown(NOW, NOW + 5 * 60_000)).toBe("5m");
+    expect(formatCountdown(NOW, NOW + 90 * 60_000)).toBe("1h 30m");
+    expect(formatCountdown(NOW, NOW + 26 * 3_600_000)).toBe("1d 2h");
+  });
+
+  it("maps provider ids to short segment names", () => {
+    expect(shortName("zai")).toBe("ZAI");
+    expect(shortName("qwen")).toBe("Qwen");
   });
 
   it("counts keyed providers for the strip width", () => {

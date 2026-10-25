@@ -16,7 +16,10 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-keyring = "3"
+# v3 ships a MOCK keystore unless a platform backend is explicitly enabled:
+# without windows-native, saves go to an in-memory mock and reads are
+# always NoEntry (the silent TICK FAILED / lost-credentials root cause).
+keyring = { version = "3", features = ["windows-native"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-http = "2"
 

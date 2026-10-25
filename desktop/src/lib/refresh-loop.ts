@@ -71,6 +71,9 @@ export interface DesktopTickDeps {
   readonly clock?: Clock;
   /** Override for tests; production uses createDefaultRegistry(). */
   readonly registry?: ProviderRegistry;
+  /** Override for tests; production builds the steps over the same client. */
+  readonly planStep?: QwenPlanStep;
+  readonly quotaStep?: QwenQuotaStep;
 }
 
 export interface DesktopTickOutcome {
@@ -103,15 +106,14 @@ export async function runDesktopRefreshTick(deps: DesktopTickDeps): Promise<Desk
     keys: new KeyStore(deps.secrets),
     clock,
   });
-  const planStep = new QwenPlanStep({
-    client: client(),
-    keys: new KeyStore(deps.secrets),
-    store: new QwenPlanStore(prefs),
-  });
-  const quotaStep = new QwenQuotaStep({
-    client: client(),
-    keys: new KeyStore(deps.secrets),
-  });
+  const planStep =
+    deps.planStep ??
+    new QwenPlanStep({
+      client: client(),
+      keys: new KeyStore(deps.secrets),
+      store: new QwenPlanStore(prefs),
+    });
+  const quotaStep = deps.quotaStep ?? new QwenQuotaStep({ client: client(), keys: new KeyStore(deps.secrets) });
 
   const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {};
   await engine.refreshAll(query, {
@@ -127,23 +129,39 @@ export async function runDesktopRefreshTick(deps: DesktopTickDeps): Promise<Desk
     },
   });
 
-  const plan = await planStep.resolve(clock.now());
-  if (plan !== undefined) {
-    const entry = results.qwen;
-    if (entry === undefined) {
-      results.qwen = { status: "ok", usage: { providerId: "qwen", kind: "balance", plan, fetchedAt: clock.now() } };
-    } else if (entry.status === "ok") {
-      results.qwen = { status: "ok", usage: { ...entry.usage, plan } };
+  // Step failures degrade to a qwen error entry (absent arm only — a success
+  // already recorded by refreshAll keeps winning), NEVER a whole-tick failure.
+  try {
+    const plan = await planStep.resolve(clock.now());
+    if (plan !== undefined) {
+      const entry = results.qwen;
+      if (entry === undefined) {
+        results.qwen = { status: "ok", usage: { providerId: "qwen", kind: "balance", plan, fetchedAt: clock.now() } };
+      } else if (entry.status === "ok") {
+        results.qwen = { status: "ok", usage: { ...entry.usage, plan } };
+      }
+    }
+  } catch (error) {
+    console.error("[quotadeck-desktop] qwen plan step failed:", error);
+    if (results.qwen === undefined) {
+      results.qwen = { status: "error", errorClass: classifyRefreshError(error) };
     }
   }
 
-  const quota = await quotaStep.resolve(clock.now(), qwenSite);
-  if (quota !== undefined) {
-    const entry = results.qwen;
-    if (entry === undefined) {
-      results.qwen = { status: "ok", usage: { providerId: "qwen", kind: "balance", quota, fetchedAt: clock.now() } };
-    } else if (entry.status === "ok") {
-      results.qwen = { status: "ok", usage: { ...entry.usage, quota } };
+  try {
+    const quota = await quotaStep.resolve(clock.now(), qwenSite);
+    if (quota !== undefined) {
+      const entry = results.qwen;
+      if (entry === undefined) {
+        results.qwen = { status: "ok", usage: { providerId: "qwen", kind: "balance", quota, fetchedAt: clock.now() } };
+      } else if (entry.status === "ok") {
+        results.qwen = { status: "ok", usage: { ...entry.usage, quota } };
+      }
+    }
+  } catch (error) {
+    console.error("[quotadeck-desktop] qwen quota step failed:", error);
+    if (results.qwen === undefined) {
+      results.qwen = { status: "error", errorClass: classifyRefreshError(error) };
     }
   }
 
