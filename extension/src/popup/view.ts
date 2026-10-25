@@ -97,7 +97,7 @@ export const ZAI_WRONG_PLATFORM_GUIDANCE =
  * `public/manifest.json`'s version by a view test that reads the manifest,
  * and bumped together with it at release (0.3.0 lands in the release chore).
  */
-export const POPUP_VERSION = 'v0.2.0';
+export const POPUP_VERSION = 'v0.3.0';
 
 /**
  * Static per-provider settings guidance (popup-ui spec §Settings Guidance):

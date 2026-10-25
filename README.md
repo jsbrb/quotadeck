@@ -7,16 +7,28 @@ and Kimi (Moonshot AI) implementations are retained in source but stay
 unshipped: they never register in the worker, never render in the popup, and
 are granted no host permissions.
 
-**Status: v0.2.0 — GLM-only store release.** The extension is a working
-Manifest V3 service worker plus action popup that fetches real usage data
-every minute through an allowlist-constrained network client. ZAI usage comes
-from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
+**Status: v0.3.0 — GLM-only store release, restyled.** The extension is a
+working Manifest V3 service worker plus action popup that fetches real usage
+data every minute through an allowlist-constrained network client. ZAI usage
+comes from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
 plan level, the 5h and weekly token windows with an uncapped percentage, and
 the monthly MCP window. The vitest suite stays
 hermetic (recorded fixtures + injected transports — no network in tests); live
 behavior is proven by contract tests over the request shapes and by a short
 maintainer live check. See the `openspec/` change ledgers for the change
 specs and design.
+
+The popup now wears the ratified **Neo-Brutalist Developer Instrument** design
+system (`docs/design/stitch/`): warm-paper/ink palette, 2px borders, hard
+offset shadows and pressed states, uppercase mono chips, segmented threshold
+bars with 25/50/75/90% ticks, and a real two-tab footer nav (QUOTAS / KEYS).
+Type is set with local OFL woff2 fonts (Space Grotesk + JetBrains Mono, latin
+subsets bundled under `extension/public/fonts/`) — the shipped popup has zero
+remote references. The one data-honest telemetry addition is the **LAST KNOWN**
+card: when a refresh fails, the popup shows that provider's most recent
+successful usage dimmed under a real `T-<age>` chip, persisted per provider in
+the cycle snapshot. No invented surfaces: no logs, stats, latency or
+encryption claims.
 
 ## Load unpacked
 
@@ -81,10 +93,10 @@ Run from the repository root:
 
 | Command | Description |
 | --- | --- |
-| `npm --prefix extension run build` | esbuild: bundle `extension/src/background.ts` → `extension/dist/background.js` and `extension/src/popup/main.ts` → `extension/dist/popup.js`, copy the MV3 manifest + `popup.html` + `icons/` |
+| `npm --prefix extension run build` | esbuild: bundle `extension/src/background.ts` → `extension/dist/background.js` and `extension/src/popup/main.ts` → `extension/dist/popup.js`, copy the MV3 manifest + `popup.html` + `icons/` + local `fonts/` |
 | `npm --prefix extension run test` | vitest: hermetic unit suite (no Chrome runtime, no network) |
 | `npm --prefix extension run typecheck` | `tsc --noEmit` (strict) |
-| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.2.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
+| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.3.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
 
 ## Security posture
 
