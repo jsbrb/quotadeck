@@ -1,0 +1,16 @@
+{
+  "code": "400",
+  "data": {
+    "DataV2": {
+      "ret": ["FAIL_BIZ::request failed"],
+      "data": {
+        "success": false,
+        "failed": true
+      }
+    },
+    "success": false,
+    "httpStatus": 200
+  },
+  "httpStatusCode": "200",
+  "successResponse": true
+}

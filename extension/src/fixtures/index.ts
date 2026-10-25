@@ -26,6 +26,9 @@ import openaiPage2Final from './openai/costs--page-2-final.json';
 import qwenIntlOk from './qwen/query-account-balance--intl-ok.json';
 import qwenOk from './qwen/query-account-balance--ok.json';
 import qwenPlanProbeOk from './qwen/plan-probe--ok.json';
+import qwenTokenPlanUsageFailedEnvelope from './qwen/token-plan-usage--failed-envelope.json';
+import qwenTokenPlanUsageMissingPct from './qwen/token-plan-usage--missing-pct.json';
+import qwenTokenPlanUsageOk from './qwen/token-plan-usage--ok.json';
 import zaiCodeString200 from './zai/monitor--code-string-200.json';
 import zaiFallbackPosition from './zai/monitor--fallback-position.json';
 import zaiMcpOnly from './zai/monitor--mcp-only.json';
@@ -45,6 +48,9 @@ const responses = {
   'qwen/query-account-balance--ok': { status: 200, body: qwenOk },
   'qwen/query-account-balance--intl-ok': { status: 200, body: qwenIntlOk },
   'qwen/plan-probe--ok': { status: 200, body: qwenPlanProbeOk },
+  'qwen/token-plan-usage--ok': { status: 200, body: qwenTokenPlanUsageOk },
+  'qwen/token-plan-usage--missing-pct': { status: 200, body: qwenTokenPlanUsageMissingPct },
+  'qwen/token-plan-usage--failed-envelope': { status: 200, body: qwenTokenPlanUsageFailedEnvelope },
   'openai/costs--page-1': { status: 200, body: openaiPage1 },
   'openai/costs--page-2-final': { status: 200, body: openaiPage2Final },
   'kimi/users-me-balance--ok': { status: 200, body: kimiOk },
