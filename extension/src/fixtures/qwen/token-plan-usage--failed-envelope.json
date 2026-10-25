@@ -1,0 +1,11 @@
+{
+  "code": "200",
+  "data": {
+    "success": false,
+    "httpStatus": 200,
+    "errorCode": "Bad Request",
+    "errorMsg": "Bad Request"
+  },
+  "httpStatusCode": "200",
+  "successResponse": true
+}

@@ -370,6 +370,41 @@ describe('SnapshotStore', () => {
     });
   });
 
+  it('qwen usage with token-plan quota round-trips in every live shape (hito-12 WU-C2)', async () => {
+    for (const quota of [
+      { percentage: 11.72, resetAt: 1_793_721_600_000, fetchedAt: FETCHED_AT }, // full live pair
+      { percentage: 150, fetchedAt: FETCHED_AT }, // uncapped passthrough survives storage untouched
+      { resetAt: 1, fetchedAt: FETCHED_AT }, // percentage absent stays absent
+      { fetchedAt: FETCHED_AT }, // shape-valid floor (the step never emits it; the validator is shape-only)
+    ] as const) {
+      const snapshot: CycleSnapshot = { results: { qwen: { status: 'ok', usage: { ...qwenUsage, quota } } } };
+      await store.write(snapshot);
+      // hito-11 storage work: write() mirrors the qwen ok arm into the
+      // additive lastKnown map, so the persisted shape now carries it. The
+      // WU-C2 claim is unchanged — the quota fields round-trip VERBATIM —
+      // pinned here as full deep equality against the new shape.
+      expect(await store.read()).toEqual({ results: snapshot.results, lastKnown: { qwen: snapshot.results.qwen } });
+      await browser.local.remove(SNAPSHOT_STORAGE_KEY); // isolate per form
+    }
+  });
+
+  it.each([
+    ['quota is not an object', 'quota-string'],
+    ['quota percentage is a string', { percentage: '11.72', fetchedAt: FETCHED_AT }],
+    ['quota percentage is NaN', { percentage: Number.NaN, fetchedAt: FETCHED_AT }],
+    ['quota resetAt is not a number', { resetAt: 'soon', fetchedAt: FETCHED_AT }],
+    ['quota resetAt is infinite', { resetAt: Number.POSITIVE_INFINITY, fetchedAt: FETCHED_AT }],
+    ['quota carries no fetchedAt', { percentage: 1 }],
+    ['quota fetchedAt is a string', { percentage: 1, fetchedAt: 'now' }],
+    ['quota fetchedAt is NaN', { fetchedAt: Number.NaN }],
+  ])('a malformed quota report reads as undefined: %s', async (_label, quota) => {
+    await browser.local.set({
+      [SNAPSHOT_STORAGE_KEY]: { results: { qwen: { status: 'ok', usage: { ...qwenUsage, quota } } } },
+    });
+
+    expect(await store.read()).toBeUndefined();
+  });
+
   it('carries no credential material: no credential field on the snapshot types, none in stored bytes', async () => {
     // Structural proof (AD-15): adding a credential-carrying field to any
     // snapshot type breaks THIS compile — Extract yields the field name and

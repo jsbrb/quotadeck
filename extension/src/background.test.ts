@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildTickQuery,
   createQwenPlanStep,
+  createQwenQuotaStep,
   createRefreshEngine,
   refreshTick,
   REFRESH_NOW_ALARM,
   REFRESH_PERIOD_MINUTES,
+  resolveChosenBadge,
   startWorker,
   USAGE_REFRESH_ALARM,
   type WorkerOptions,
@@ -13,21 +15,30 @@ import {
 import { SystemClock } from './core/clock';
 import type { Credential, Provider, ProviderId } from './core/provider';
 import { ProviderRegistry } from './core/registry';
+import type { NormalizedUsage } from './core/usage';
 import { FIXTURE_RESPONSES } from './fixtures';
 import { AllowlistNetworkClient } from './network/client';
 import { HttpStatusError, FetchTransport } from './network/fetch-transport';
 import { FixtureTransport, type AuthorizedRequest, type Transport, type TransportResponse } from './network/transport';
 import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from './providers';
 import { QWEN_PLAN_PROBE_HOST } from './providers/qwen-plan-probe';
-import type { AlarmCreateInfo, BrowserApi } from './platform/browser-api';
+import { QWEN_TOKEN_MINT_HOST, QWEN_TOKEN_PLAN_GATEWAY_HOST } from './providers/qwen-token-plan';
+import type { AlarmCreateInfo, BrowserApi, WorkerBrowserApi } from './platform/browser-api';
 import { RefreshEngine } from './refresh/engine';
+import { writeBadgeProvider } from './storage/badge-provider-store';
 import { KeyStore } from './storage/key-store';
 import { QWEN_PLAN_STATUS_STORAGE_KEY } from './storage/qwen-plan-store';
 import { writeQwenSite } from './storage/qwen-site-store';
 import { writeZaiPlatform } from './storage/zai-platform-store';
-import { FakeAction, FakeAlarms, FakeBrowser, FakeStorageArea } from './testing/fake-browser';
+import {
+  FakeAction,
+  FakeAlarms,
+  FakeBrowser,
+  FakeDeclarativeNetRequest,
+  FakeStorageArea,
+} from './testing/fake-browser';
 import { FakeClock } from './testing/fake-clock';
-import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-store';
+import { type CycleSnapshot, type ProviderSnapshotEntry, SNAPSHOT_STORAGE_KEY } from './storage/snapshot-store';
 
 // Hermetic worker tests (usage-badge spec): the composition root is driven
 // end-to-end through FakeBrowser-shaped fakes and locally built fixture route
@@ -62,6 +73,14 @@ function liveRoutes(): Record<string, TransportResponse> {
     'https://api.moonshot.cn/v1/users/me/balance': FIXTURE_RESPONSES['kimi/users-me-balance--ok'],
     'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14':
       FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+    // WU-L: the qwen legs that survive the balance suspension — the quota
+    // step's two hops, served here so the shipped-tick scenario composes the
+    // production shape (zai engine leg + qwen quota synthesis).
+    'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken': {
+      status: 200,
+      body: { cliAccessToken: 'sess-live-routes-mint-aa11' },
+    },
+    'https://bailian-singapore-cs.alibabacloud.com/cli/api.json': FIXTURE_RESPONSES['qwen/token-plan-usage--ok'],
   };
 }
 
@@ -75,11 +94,19 @@ class AlarmRecorder extends FakeAlarms {
   }
 }
 
+/**
+ * chrome.runtime.id stand-in wired through the worker port's runtime slice —
+ * the DNR initiator scope the worker must read via the seam, never chrome (WU-F).
+ */
+const FAKE_RUNTIME_ID = 'abcdefghijklmnopabcdefghijklmnop';
+
 interface Harness {
-  readonly api: BrowserApi;
+  readonly api: WorkerBrowserApi;
   readonly alarms: AlarmRecorder;
   readonly action: FakeAction;
   readonly local: FakeStorageArea;
+  /** The recording DNR double — the install-once assertions read this (WU-F). */
+  readonly dnr: FakeDeclarativeNetRequest;
   fireInstalled(): void;
   fireStartup(): void;
 }
@@ -89,11 +116,13 @@ function makeApi(): Harness {
   const alarms = new AlarmRecorder();
   const installed: Array<() => void> = [];
   const startup: Array<() => void> = [];
-  const api: BrowserApi = {
+  const api: WorkerBrowserApi = {
     storage: base.storage,
     action: base.action,
     alarms,
+    declarativeNetRequest: base.declarativeNetRequest,
     runtime: {
+      id: FAKE_RUNTIME_ID,
       onInstalled: { listen: (listener) => installed.push(listener) },
       onStartup: { listen: (listener) => startup.push(listener) },
     },
@@ -103,6 +132,7 @@ function makeApi(): Harness {
     alarms,
     action: base.action,
     local: base.local,
+    dnr: base.declarativeNetRequest,
     fireInstalled: () => installed.forEach((listener) => listener()),
     fireStartup: () => startup.forEach((listener) => listener()),
   };
@@ -155,15 +185,18 @@ function engineForProviders(
 }
 
 /**
- * FixtureTransport wrapper for the qwen leg: the live client dispatches a
- * SIGNED query (timestamp/nonce vary per run), so exact-URL routing cannot
- * match. This double normalizes any BSS-host dispatch (china or the
- * international default — hito-8 flipped the default to ap-southeast-1) to
- * the recorded route key — proving the signed request still targets a BSS
- * host — and leaves every other route byte-exact. The recorded CN-shaped
- * body serves both: the tolerant qwen parse accepts numeric and string
- * envelopes alike. Which BSS host a tick targets is pinned by the dedicated
- * site-selection tests below, not by this normalization.
+ * FixtureTransport wrapper for the qwen legs: the live client dispatches
+ * SIGNED requests whose timestamp/nonce vary per run (BSS acs1, quota mint
+ * acs3), so exact-URL routing cannot match. This double normalizes ANY qwen
+ * leg dispatch — the BSS hosts (china or the international default — hito-8
+ * flipped the default to ap-southeast-1), the quota mint host, and the
+ * token-plan gateway host (the client's query encoding varies per request
+ * shape) — to the recorded route keys, proving each dispatch still targets
+ * the right host class — and leaves every other route byte-exact. The
+ * recorded CN-shaped body serves the BSS leg: the tolerant qwen parse
+ * accepts numeric and string envelopes alike. Which BSS host a tick targets
+ * is pinned by the dedicated site-selection tests below, not by this
+ * normalization.
  */
 class SignedQwenRouteTransport implements Transport {
   private readonly routes: FixtureTransport;
@@ -173,11 +206,17 @@ class SignedQwenRouteTransport implements Transport {
   }
 
   async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
-    const url =
-      request.url.startsWith('https://business.aliyuncs.com/') ||
-      request.url.startsWith('https://business.ap-southeast-1.aliyuncs.com/')
-        ? 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14'
-        : request.url;
+    let url = request.url;
+    if (
+      url.startsWith('https://business.aliyuncs.com/') ||
+      url.startsWith('https://business.ap-southeast-1.aliyuncs.com/')
+    ) {
+      url = 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14';
+    } else if (url.includes(QWEN_TOKEN_MINT_HOST)) {
+      url = 'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken';
+    } else if (url.includes(QWEN_TOKEN_PLAN_GATEWAY_HOST)) {
+      url = 'https://bailian-singapore-cs.alibabacloud.com/cli/api.json';
+    }
     return this.routes.fetch({ ...request, url });
   }
 }
@@ -284,9 +323,9 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
 });
 
 describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
-  it('firing refresh-now runs the shared refresh tick: the shipped zai badge renders and exactly one snapshot write lands', async () => {
+  it('firing refresh-now runs the shared refresh tick: the chosen default (zai) badge renders once and exactly one snapshot write lands', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only shipped providers register (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); the qwen pair now feeds the quota step only (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -297,7 +336,9 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
     h.alarms.fire(REFRESH_NOW_ALARM);
     await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
 
-    expect(h.action.badgeTexts).toEqual(['32%']); // zai ships alone — one badge per tick
+    // WU-D2 single-write badge: one text per tick from the chosen default
+    // (zai) — qwen records its snapshot entry but never moves the badge.
+    expect(h.action.badgeTexts).toEqual(['32%']);
     expect(h.alarms.creates).toEqual([USAGE_REFRESH_ALARM]); // the worker registers ONLY the periodic alarm
     await expect(h.alarms.get(REFRESH_NOW_ALARM)).resolves.toBeUndefined();
   });
@@ -334,6 +375,103 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
   });
 });
 
+describe('background — Gateway Origin Rule Install (hito-12 WU-F)', () => {
+  it('installs the scoped gateway-origin session rule exactly once at worker boot', () => {
+    const h = makeApi();
+
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+
+    expect(h.dnr.calls.map((call) => call.op)).toEqual(['updateSessionRules']); // one install per SW start
+    // The payload pinned AT THE BACKGROUND LEVEL too: the runtime id must ride
+    // in through the platform seam's runtime slice as the initiator scope, and
+    // the rewrite target is the PUBLIC console origin — no credential (WU-F).
+    expect(h.dnr.calls[0]?.args[0]).toEqual({
+      removeRuleIds: [1], // GATEWAY_ORIGIN_RULE_ID — remove+add in ONE call (hito-12 WU-J)
+      addRules: [
+        {
+          id: 1, // GATEWAY_ORIGIN_RULE_ID (dnr/gateway-origin-rule.ts)
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'origin', operation: 'set', value: 'https://modelstudio.console.alibabacloud.com' },
+            ],
+          },
+          condition: {
+            requestDomains: [QWEN_TOKEN_PLAN_GATEWAY_HOST],
+            resourceTypes: ['xmlhttprequest'],
+            initiatorDomains: [FAKE_RUNTIME_ID],
+            urlFilter: `${QWEN_TOKEN_PLAN_GATEWAY_HOST}/cli/api.json`,
+          },
+        },
+      ],
+    });
+  });
+
+  it('a second worker start replaces by id: two recorded updates, ONE live rule, no secret-shaped payload', () => {
+    const h = makeApi();
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+    startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+
+    expect(h.dnr.calls).toHaveLength(2); // remove+add by id EVERY start — never skip, never duplicate (hito-12 WU-J)
+    expect(h.dnr.sessionRules.size).toBe(1); // no duplicate rule accumulates under the same id
+    expect(JSON.stringify(h.dnr.sessionRules.get(1))).not.toMatch(/cookie|authorization|bearer/i); // public constants only (hito-9 §Lane 1(c) ban)
+  });
+
+  it('a rule that survived from an earlier SW start reinstalls idempotently: remove+add in ONE call, no error logged (hito-12 WU-J)', () => {
+    const h = makeApi();
+    // Live E2E failure shape (WU-J): session rules outlive the worker for the
+    // browser's LIFETIME, so id 1 is still resident when the SW restarts —
+    // here carrying a stale payload. The install must remove+add by id in one
+    // updateSessionRules call; a bare addRules re-add rejects.
+    h.dnr.sessionRules.set(1, {
+      id: 1,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [{ header: 'origin', operation: 'set', value: 'https://stale.example' }],
+      },
+      condition: {
+        urlFilter: 'stale.example/stale',
+        requestDomains: ['stale.example'],
+        initiatorDomains: ['stale-extension-id'],
+        resourceTypes: ['xmlhttprequest'],
+      },
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+
+      expect(errorSpy).not.toHaveBeenCalled(); // WU-J bug logged "Error: Rule with id 1 does not have a unique ID."
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(h.dnr.calls).toHaveLength(1); // ONE call carries remove AND add together — never a roundtrip
+    expect(h.dnr.calls[0]?.args[0]).toEqual({
+      removeRuleIds: [1],
+      addRules: [
+        {
+          id: 1, // GATEWAY_ORIGIN_RULE_ID (dnr/gateway-origin-rule.ts)
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'origin', operation: 'set', value: 'https://modelstudio.console.alibabacloud.com' },
+            ],
+          },
+          condition: {
+            requestDomains: [QWEN_TOKEN_PLAN_GATEWAY_HOST],
+            resourceTypes: ['xmlhttprequest'],
+            initiatorDomains: [FAKE_RUNTIME_ID],
+            urlFilter: `${QWEN_TOKEN_PLAN_GATEWAY_HOST}/cli/api.json`,
+          },
+        },
+      ],
+    });
+    expect(h.dnr.sessionRules.size).toBe(1); // exactly one live rule afterwards
+    expect(JSON.stringify(h.dnr.sessionRules.get(1))).toContain('modelstudio.console.alibabacloud.com'); // the FRESH payload won
+  });
+});
+
 describe('background — buildTickQuery (usage-badge spec §Live refresh per tick)', () => {
   it('derives { zaiPlatform, qwenSite, now, trailing-24h OpenAI window } from the injected clock — no months, no tier limits', () => {
     expect(buildTickQuery(new FakeClock(TICK_NOW), 'zai', 'international')).toEqual({
@@ -357,9 +495,9 @@ describe('background — buildTickQuery (usage-badge spec §Live refresh per tic
 });
 
 describe('background — Badge Rendering + refresh per tick (usage-badge spec)', () => {
-  it('the shipped worker badges the shipped subset only: one zai text per tick, stable across repeated ticks', async () => {
+  it('the shipped worker badges the chosen provider only: one badge write per tick, stable across repeated ticks', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only zai registers (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — the engine dispatches zai only (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -367,7 +505,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['32%'];
+    const perTick = ['32%']; // WU-D2: one badge write per tick, from the chosen default (zai)
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(perTick));
 
@@ -375,7 +513,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]));
   });
 
-  it('refreshes keyed providers sequentially in registry order and accumulates one text per provider per tick (retained multi-provider graph)', async () => {
+  it('refreshes keyed providers and badges the chosen provider once per tick (retained multi-provider graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
     const engine = engineForProviders(h.api, ['zai', 'kimi'], {
@@ -383,7 +521,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
       transport: new FixtureTransport(liveRoutes()),
     });
 
-    const perTick = ['32%', '¥89']; // registry order: zai then kimi — last result wins deterministically
+    const perTick = ['32%']; // WU-D2: the chosen default (zai) renders; kimi records but never moves the badge
     await refreshTick(h.api, engine, new FixedClock());
     expect(h.action.badgeTexts).toEqual(perTick);
 
@@ -417,7 +555,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     expect(h.action.badgeTexts).toEqual(['Lite']); // absent pct → level (AD-26)
   });
 
-  it('refreshes only keyed providers — unkeyed providers leave the badge untouched (retained kimi graph)', async () => {
+  it('refreshes only keyed providers — a chosen provider that never ran clears the badge (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     const engine = engineForProviders(h.api, ['kimi'], {
@@ -427,7 +565,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
 
     await refreshTick(h.api, engine, new FixedClock());
 
-    expect(h.action.badgeTexts).toEqual(['¥89']);
+    expect(h.action.badgeTexts).toEqual(['']); // WU-D2: choice (default zai) absent → cleared; unchosen kimi never badges
   });
 
   it('dispatches live-shaped requests whose time parameters derive from the clock (retained openai graph)', async () => {
@@ -444,7 +582,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['32%', '$20']);
+    expect(h.action.badgeTexts).toEqual(['32%']); // WU-D2: chosen zai badges once; the openai result records without moving it
   });
 
   it('targets open.bigmodel.cn when the zhipu platform preference is stored (§Platform Binding)', async () => {
@@ -509,7 +647,7 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
     expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
   });
 
-  it('error tick sets the neutral light background and dark text beside the ERR text, never a threshold color (retained kimi graph)', async () => {
+  it('a tick whose choice never ran sets the neutral light background and dark text beside the cleared badge, never a threshold color (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     const engine = engineForProviders(h.api, ['kimi'], {
@@ -519,9 +657,9 @@ describe('background — Badge Color Wiring (hito-10 threshold colors)', () => {
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['ERR']);
+    expect(h.action.badgeTexts).toEqual(['']); // WU-D2: the chosen default (zai) is absent → cleared, not ERR
     expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // neutral light band, not a threshold band
-    expect(h.action.badgeTextColors).toEqual(['#0F172A']); // dark text — ERR must not end up white-on-light
+    expect(h.action.badgeTextColors).toEqual(['#0F172A']); // dark text — the cleared badge must not end up white-on-light
   });
 });
 
@@ -529,13 +667,14 @@ describe('background — Qwen Site Selection (usage-badge spec §Live refresh pe
   it('targets the international BSS host by default when no site preference is stored', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['qwen']);
+    await writeBadgeProvider(h.local, 'qwen'); // WU-D2: the qwen leg owns the badge this tick
     const transport = new QwenUrlCaptureTransport();
     const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
     expect(transport.qwenHosts).toEqual(['business.ap-southeast-1.aliyuncs.com']);
-    expect(h.action.badgeTexts).toEqual(['¥100']); // the cycle completed over the intl host
+    expect(h.action.badgeTexts).toEqual(['¥100']); // the chosen qwen balance — cycle completed over the intl host
   });
 
   it('targets business.aliyuncs.com when the china site preference is stored', async () => {
@@ -662,6 +801,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     const h = makeApi();
     await saveKeys(h.local, ['qwen']);
     await savePlanKey(h.local);
+    await writeBadgeProvider(h.local, 'qwen'); // WU-D2: chosen qwen — the balance outcome must survive the plan merge
     const transport = new QwenHybridTransport(probeAnswer(429, RESET_TEXT));
     const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
 
@@ -692,7 +832,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
       status: 'ok',
       usage: { providerId: 'qwen', kind: 'balance', plan: { status: 'available' }, fetchedAt: TICK_NOW },
     });
-    expect(planOnly.action.badgeTexts).toEqual([]); // the plan-only entry never writes a badge
+    expect(planOnly.action.badgeTexts).toEqual(['']); // WU-D2: the choice (default zai) never ran → cleared
 
     // (b) error arm: the balance leg fails — the class entry stays, no plan merge.
     const failing = makeApi();
@@ -719,6 +859,7 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
     const h = makeApi();
     await saveKeys(h.local, ['qwen']);
     await savePlanKey(h.local);
+    await writeBadgeProvider(h.local, 'qwen'); // WU-D2: chosen qwen proves the balance badge survives the probe failure
     const cached = { status: 'available', probedAt: TICK_NOW - 130 * 60_000 }; // expired
     await h.local.set({ [QWEN_PLAN_STATUS_STORAGE_KEY]: cached });
     const transport = new QwenHybridTransport(() => {
@@ -785,6 +926,161 @@ describe('background — Qwen Plan Probe Cadence (usage-badge spec §Qwen Plan P
   });
 });
 
+describe('background — Qwen Quota Two-Hop Step (hito-12 WU-C2; retained qwen graph)', () => {
+  /**
+   * Four-host routing double: the plan/probe legs keep the hybrid behavior and
+   * the two-hop quota legs join — the mint host answers a synthetic sentinel
+   * token, the gateway host serves the recorded live-shaped usage fixture.
+   * Counts quota dispatches so gating (china, missing keys) stays provable.
+   */
+  class QwenQuotaHybridTransport implements Transport {
+    private mintDispatches = 0;
+    private gatewayDispatches = 0;
+
+    constructor(
+      private readonly balance: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+      private readonly probe: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/plan-probe--ok'],
+      private readonly usage: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/token-plan-usage--ok'],
+    ) {}
+
+    quotaCalls(): { mint: number; gateway: number } {
+      return { mint: this.mintDispatches, gateway: this.gatewayDispatches };
+    }
+
+    async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+      const host = new URL(request.url).hostname;
+      if (host === QWEN_PLAN_PROBE_HOST) return this.probe();
+      if (host === 'business.aliyuncs.com' || host === 'business.ap-southeast-1.aliyuncs.com') return this.balance();
+      if (host === QWEN_TOKEN_MINT_HOST) {
+        this.mintDispatches++;
+        return { status: 200, body: { cliAccessToken: 'sess-bg-quota-token-cc13' } };
+      }
+      if (host === QWEN_TOKEN_PLAN_GATEWAY_HOST) {
+        this.gatewayDispatches++;
+        return this.usage();
+      }
+      throw new Error(`unexpected qwen-quota hybrid dispatch: ${request.url}`);
+    }
+  }
+
+  async function savePlanKeyLocal(local: FakeStorageArea): Promise<void> {
+    await new KeyStore(local).saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-probe-key-0001' });
+  }
+
+  it('both steps compose in one tick: the ok entry carries plan AND quota; the chosen qwen badge renders the quota percentage', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKeyLocal(h.local);
+    await writeBadgeProvider(h.local, 'qwen'); // WU-D2: the chosen provider with quota present badges its percentage
+    const transport = new QwenQuotaHybridTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toMatchObject({
+      status: 'ok',
+      usage: {
+        value: 100.28,
+        plan: { status: 'available' },
+        quota: { percentage: 14.557322303961778, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
+      },
+    });
+    expect(h.action.badgeTexts).toEqual(['15%']); // quota percentage 14.56 through the zai-path formatter — chosen qwen (WU-D2)
+    expect(transport.quotaCalls()).toEqual({ mint: 1, gateway: 1 });
+  });
+
+  it('the minted session token never reaches the persisted snapshot bytes', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenQuotaHybridTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), undefined, createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(JSON.stringify(h.local.snapshot())).not.toContain('sess-bg-quota-token-cc13');
+  });
+
+  it('the error arm wins: a failing balance leg keeps its class entry — no quota merge', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenQuotaHybridTransport(() => {
+      throw new HttpStatusError(401);
+    });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      undefined,
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toEqual({ status: 'error', errorClass: 'auth' }); // class wins over a successful quota
+    expect(transport.quotaCalls()).toEqual({ mint: 1, gateway: 1 }); // the step still ran its per-tick cadence
+  });
+
+  it('china site: the quota step no-ops — zero mint/gateway dispatches and no quota field on the entry', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await savePlanKeyLocal(h.local);
+    await writeQwenSite(h.local, 'china');
+    const transport = new QwenQuotaHybridTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      createQwenPlanStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    expect(transport.quotaCalls()).toEqual({ mint: 0, gateway: 0 });
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    const usage = (stored.results.qwen as { usage: { quota?: unknown; plan?: unknown } }).usage;
+    expect('quota' in usage).toBe(false);
+    expect(usage.plan).toEqual({ status: 'available' }); // plan cadence unaffected by the gate
+  });
+
+  it('an absent qwen entry synthesizes quota-only, mirroring the plan-only discipline (badge cleared while the choice never ran)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    const transport = new QwenQuotaHybridTransport();
+    // Registry WITHOUT qwen: the engine produces no qwen result — the quota
+    // step must synthesize the entry exactly like the plan step does today.
+    const engine = engineForProviders(h.api, [], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(
+      h.api,
+      engine,
+      new FakeClock(TICK_NOW),
+      undefined,
+      createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }),
+    );
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toEqual({
+      status: 'ok',
+      usage: {
+        providerId: 'qwen',
+        kind: 'balance',
+        quota: { percentage: 14.557322303961778, resetAt: 1_793_721_600_000, fetchedAt: TICK_NOW },
+        fetchedAt: TICK_NOW, // the plan-only synthesis discipline, field-for-field
+      },
+    });
+    expect(h.action.badgeTexts).toEqual(['']); // WU-D2: the default choice (zai) never ran → cleared; a chosen+shipped synthesized entry WOULD badge
+  });
+});
+
 describe('background — default live transport (FetchTransport, AD-19)', () => {
   it('dispatches through the real fetch when no transport is injected (retained kimi graph)', async () => {
     const h = makeApi();
@@ -801,10 +1097,10 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['¥89']); // the live fetch answered
+    expect(h.action.badgeTexts).toEqual(['']); // WU-D2: the live fetch answered; unchosen kimi records, the absent choice clears
   });
 
-  it('a fetch-level network failure classifies as network and badges ERR (retained kimi graph)', async () => {
+  it('a fetch-level network failure classifies as network with a cleared badge for the absent choice (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')));
@@ -815,14 +1111,14 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['ERR']);
+    expect(h.action.badgeTexts).toEqual(['']); // WU-D2: ERR belongs to the chosen provider — unchosen kimi cannot raise it
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(stored.results.kimi).toEqual({ status: 'error', errorClass: 'network' });
   });
 
   it('hermetic proof: an injected transport serves the shipped tick with the global fetch forbidden', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); qwen rides the quota step now (WU-L)
     vi.stubGlobal('fetch', () => {
       throw new Error('live network is forbidden in the hermetic suite');
     });
@@ -836,12 +1132,12 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['32%']); // zai ships alone
+    expect(h.action.badgeTexts).toEqual(['32%']); // WU-D2: the chosen default (zai) badges once — qwen records, never appends
   });
 });
 
 describe('background — Error State (usage-badge spec)', () => {
-  it('shows ERR after an injected failure and the next successful tick replaces it (retained kimi graph)', async () => {
+  it('a chosen provider that never ran keeps the badge cleared across a failing and a recovering tick (retained kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
 
@@ -866,10 +1162,10 @@ describe('background — Error State (usage-badge spec)', () => {
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['ERR', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['', '']); // WU-D2: both ticks clear — the default choice never ran in this graph
   });
 
-  it('replaces the marker within the same tick when a later provider succeeds (retained zai+kimi graph)', async () => {
+  it('badges the chosen provider failure even when a later provider succeeds (retained zai+kimi graph)', async () => {
     const h = makeApi();
     await saveKeys(h.local, ['zai', 'kimi']);
     // Recorded ZAI failure fixture routed at the monitor URL — the
@@ -885,7 +1181,7 @@ describe('background — Error State (usage-badge spec)', () => {
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['ERR', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['ERR']); // WU-D2: the chosen zai failure badges ERR; the successful kimi never replaces it this tick
   });
 });
 
@@ -905,7 +1201,7 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
     ['server', () => new HttpStatusError(500)],
     ['network', () => new TypeError('Failed to fetch')],
     ['unknown', () => new Error('unmapped failure')],
-  ] as const)('classifies %s: badge ERR and the snapshot entry carries the class (retained kimi graph)', async (expected, makeError) => {
+  ] as const)('classifies %s: the snapshot entry carries the class and the absent choice clears the badge (retained kimi graph)', async (expected, makeError) => {
     const h = makeApi();
     await saveKeys(h.local, ['kimi']);
     const engine = engineForProviders(h.api, ['kimi'], {
@@ -915,7 +1211,7 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
 
     await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
 
-    expect(h.action.badgeTexts).toEqual(['ERR']); // every class renders the marker
+    expect(h.action.badgeTexts).toEqual(['']); // WU-D2: ERR belongs to the chosen provider — unchosen kimi failures never badge
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(stored.results.kimi).toEqual({ status: 'error', errorClass: expected });
   });
@@ -957,7 +1253,7 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
   it('tick writes exactly one snapshot per completed cycle: the shipped ok entry carries the monitor windows', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); qwen rides the quota step now (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -965,7 +1261,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['32%'];
+    const perTick = ['32%']; // WU-D2: one badge write per tick, from the chosen default (zai)
     h.alarms.fire(USAGE_REFRESH_ALARM);
     // The snapshot write is the tick's LAST operation — once it lands, the
     // badge sequence is final, so both can be asserted deterministically.
@@ -977,7 +1273,17 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
 
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    expect(Object.keys(stored.results)).toEqual(['zai']); // zai ships alone (hito-10)
+    // hito-12 re-ship, WU-L flip: the keys stay ['zai','qwen'] but qwen now
+    // enters through the tick-level quota-step SYNTHESIS — the engine no
+    // longer dispatches the BSS balance leg.
+    expect(Object.keys(stored.results)).toEqual(['zai', 'qwen']);
+    // WU-L honest outcome: the synthesized qwen entry is QUOTA-ONLY — no
+    // balance value ever rides the snapshot (RED before the suspension: the
+    // engine leg carried value: 100.28).
+    const qwenEntry = stored.results.qwen as { status: 'ok'; usage: { value?: number; quota?: unknown } };
+    expect(qwenEntry.status).toBe('ok');
+    expect(qwenEntry.usage.value).toBeUndefined();
+    expect(qwenEntry.usage.quota).toMatchObject({ percentage: 14.557322303961778 });
     expect(stored.results.zai).toEqual({
       status: 'ok',
       usage: expect.objectContaining({
@@ -1012,7 +1318,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
 
     await refreshTick(h.api, engine, new FixedClock());
 
-    expect(h.action.badgeTexts).toEqual(['32%', '¥89']);
+    expect(h.action.badgeTexts).toEqual(['32%']); // WU-D2: chosen zai badges once; the kimi result records without moving it
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(Object.keys(stored.results)).toEqual(['zai', 'kimi']); // unkeyed qwen + openai absent
     expect(JSON.stringify(stored)).not.toContain('fixture-milestone-key');
@@ -1032,9 +1338,229 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
 
     await refreshTick(h.api, engine, new FixedClock());
 
-    expect(h.action.badgeTexts).toEqual(['ERR', '¥89']); // usage-badge behavior, byte-identical
+    expect(h.action.badgeTexts).toEqual(['ERR']); // WU-D2: the chosen zai error renders the marker once, byte-identical in the single-write model
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
     expect(stored.results.zai).toEqual({ status: 'error', errorClass: 'server' }); // class only (AD-13/21)
     expect(stored.results.kimi).toMatchObject({ status: 'ok' });
+  });
+});
+
+describe('background — Badge Provider Choice (hito-12 WU-D2, single badge write per tick)', () => {
+  /**
+   * Host-routing double for the choice cases: mint/gateway serve the quota
+   * two-hop, everything else (BSS balance) answers the default leg. Local to
+   * this describe — the WU-C2 hybrid class stays where its own tests put it.
+   */
+  class QuotaChoiceTransport implements Transport {
+    constructor(
+      private readonly balance: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+      private readonly usage: () => TransportResponse = () => FIXTURE_RESPONSES['qwen/token-plan-usage--ok'],
+    ) {}
+
+    async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
+      const host = new URL(request.url).hostname;
+      if (host === QWEN_TOKEN_MINT_HOST) {
+        return { status: 200, body: { cliAccessToken: 'sess-choice-quota-token-d1' } };
+      }
+      if (host === QWEN_TOKEN_PLAN_GATEWAY_HOST) {
+        return this.usage();
+      }
+      return this.balance();
+    }
+  }
+
+  it('the chosen zai renders its 5h percentage once while the keyed qwen success only records', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai', 'qwen']);
+    await writeBadgeProvider(h.local, 'zai'); // the explicit choice — same outcome as the default, but proven through the store
+    const engine = engineForProviders(h.api, ['zai', 'qwen'], {
+      clock: new FixedClock(),
+      transport: new SignedQwenRouteTransport(liveRoutes()),
+    });
+
+    await refreshTick(h.api, engine, new FixedClock());
+
+    expect(h.action.badgeTexts).toEqual(['32%']);
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // 32 < 50 → neutral light band
+    expect(h.action.badgeTextColors).toEqual(['#0F172A']);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(Object.keys(stored.results)).toEqual(['zai', 'qwen']); // qwen RECORDED — recording and badging are decoupled
+  });
+
+  it('the chosen qwen with quota badges the quota percentage — recorded the same tick it merges', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await writeBadgeProvider(h.local, 'qwen');
+    const transport = new QuotaChoiceTransport();
+    // Registry WITHOUT qwen: the quota step synthesizes the ok entry — chosen
+    // AND shipped, so the tick-end resolution badges the merged result (WU-C2
+    // merge + WU-D2 render).
+    const engine = engineForProviders(h.api, [], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), undefined, createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(h.action.badgeTexts).toEqual(['15%']); // quota percentage 14.56 through the shared zai-path formatter
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // 14.56 < 50 → neutral band from the QUOTA percentage
+  });
+
+  it('the threshold band follows the quota percentage — 84% renders the deep-orange band', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await writeBadgeProvider(h.local, 'qwen');
+    const highPctBody = structuredClone(FIXTURE_RESPONSES['qwen/token-plan-usage--ok'].body) as {
+      data: { DataV2: { data: { data: { per1MonthPercentage: number } } } };
+    };
+    highPctBody.data.DataV2.data.data.per1MonthPercentage = 0.84; // gateway USED fraction
+    const transport = new QuotaChoiceTransport(undefined, () => ({ status: 200, body: highPctBody }));
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW), undefined, createQwenQuotaStep(h.api, { clock: new FakeClock(TICK_NOW), transport }));
+
+    expect(h.action.badgeTexts).toEqual(['84%']); // uncapped passthrough through the same formatter
+    expect(h.action.badgeBackgrounds).toEqual(['#EA580C']); // ≥80 deep-orange band from quota.percentage
+    expect(h.action.badgeTextColors).toEqual(['#FFFFFF']);
+  });
+
+  it('the chosen qwen without quota renders the balance format', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await writeBadgeProvider(h.local, 'qwen');
+    const transport = new QwenUrlCaptureTransport();
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['¥100']); // existing formatBadgeText balance path (hito-8 shape)
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // no percentage exists → neutral band
+  });
+
+  it('the chosen qwen error renders ERR on the neutral band', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['qwen']);
+    await writeBadgeProvider(h.local, 'qwen');
+    const transport = new QuotaChoiceTransport(() => {
+      throw new HttpStatusError(401);
+    });
+    const engine = engineForProviders(h.api, ['qwen'], { clock: new FakeClock(TICK_NOW), transport });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['ERR']); // the chosen provider's error arm — hito-10 marker, unchanged
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']); // never a threshold band
+    expect(h.action.badgeTextColors).toEqual(['#0F172A']); // legible dark text on the light band
+  });
+
+  it('an unchosen provider failing never moves the badge', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai', 'qwen']); // chosen default zai
+    const engine = engineForProviders(h.api, ['zai', 'qwen'], {
+      clock: new FakeClock(TICK_NOW),
+      // zai route only: the qwen intl dispatch misses → the qwen arm fails.
+      transport: new FixtureTransport({ [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--pro-plan'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['32%']); // the qwen failure classifies into the snapshot but never badges
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.qwen).toEqual({ status: 'error', errorClass: 'unknown' }); // class recorded, badge untouched
+  });
+
+  it('the chosen qwen absent — its key revoked, zai ok — clears the badge with the neutral band', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ['zai']); // qwen unkeyed: the engine produces no qwen entry
+    await writeBadgeProvider(h.local, 'qwen');
+    const engine = engineForProviders(h.api, ['zai', 'qwen'], {
+      clock: new FixedClock(),
+      transport: new FixtureTransport({ [zaiMonitorUrl()]: FIXTURE_RESPONSES['zai/monitor--pro-plan'] }),
+    });
+
+    await refreshTick(h.api, engine, new FixedClock());
+
+    expect(h.action.badgeTexts).toEqual(['']); // choice ran no entry → cleared, NOT the successful zai, NOT ERR
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']);
+    expect(h.action.badgeTextColors).toEqual(['#0F172A']);
+  });
+
+  it('an unshipped stored choice (kimi, fully keyed) behaves as absent — cleared badge', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, ALL_KEYS); // kimi keyed AND its route served — still never badges while unshipped
+    await writeBadgeProvider(h.local, 'kimi');
+    const engine = engineForProviders(h.api, ['kimi'], {
+      clock: new FakeClock(TICK_NOW),
+      transport: new FixtureTransport({ 'https://api.moonshot.cn/v1/users/me/balance': FIXTURE_RESPONSES['kimi/users-me-balance--ok'] }),
+    });
+
+    await refreshTick(h.api, engine, new FakeClock(TICK_NOW));
+
+    expect(h.action.badgeTexts).toEqual(['']); // ProviderId-wide validation + shipped-gated render
+    expect(h.action.badgeBackgrounds).toEqual(['#E2E8F0']);
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    expect(stored.results.kimi).toMatchObject({ status: 'ok' }); // the entry exists — the gate is at the badge, not the record
+  });
+});
+
+describe('background — resolveChosenBadge (hito-12 WU-D2 badge resolution, pure)', () => {
+  const qwenEntry = (overrides: Partial<NormalizedUsage>): Partial<Record<ProviderId, ProviderSnapshotEntry>> => ({
+    qwen: { status: 'ok', usage: { providerId: 'qwen', kind: 'balance', fetchedAt: TICK_NOW, ...overrides } },
+  });
+
+  it('an absent choice clears — empty text, no percentage', () => {
+    expect(resolveChosenBadge({}, 'zai')).toEqual({ text: '' });
+  });
+
+  it('an UNshipped choice behaves as absent even when its entry exists', () => {
+    const okEntry = qwenEntry({ value: 100.28, currency: 'CNY' });
+    expect(resolveChosenBadge({ kimi: { status: 'error', errorClass: 'auth' } }, 'kimi')).toEqual({ text: '' });
+    expect(resolveChosenBadge({ ...okEntry, kimi: { status: 'ok', usage: { providerId: 'kimi', kind: 'balance', value: 88.88, currency: 'CNY', fetchedAt: TICK_NOW } } }, 'kimi')).toEqual({
+      text: '',
+    });
+  });
+
+  it('the chosen error entry renders the ERR marker — the class never changes the render', () => {
+    expect(resolveChosenBadge({ zai: { status: 'error', errorClass: 'rate-limit' } }, 'zai')).toEqual({ text: 'ERR' });
+  });
+
+  it('chosen zai renders the 5h percentage and hands it to the threshold band', () => {
+    const render = resolveChosenBadge(
+      { zai: { status: 'ok', usage: { providerId: 'zai', kind: 'cost', windows: { fiveHour: { percentage: 32 } }, fetchedAt: TICK_NOW } } },
+      'zai',
+    );
+    expect(render).toEqual({ text: '32%', percentage: 32 });
+  });
+
+  it('chosen zai without a percentage falls back to the plan level', () => {
+    expect(
+      resolveChosenBadge({ zai: { status: 'ok', usage: { providerId: 'zai', kind: 'cost', windows: { level: 'Lite' }, fetchedAt: TICK_NOW } } }, 'zai'),
+    ).toEqual({ text: 'Lite' });
+  });
+
+  it('chosen qwen renders the quota percentage and hands it to the band — UNCAPPED passthrough', () => {
+    expect(resolveChosenBadge(qwenEntry({ quota: { percentage: 11.72, fetchedAt: TICK_NOW } }), 'qwen')).toEqual({
+      text: '12%',
+      percentage: 11.72,
+    });
+    expect(resolveChosenBadge(qwenEntry({ quota: { percentage: 137.4, fetchedAt: TICK_NOW } }), 'qwen')).toEqual({
+      text: '137%',
+      percentage: 137.4,
+    });
+  });
+
+  it('the quota percentage renders EXACTLY like the zai 5h path for the same number — no rounding drift', () => {
+    const percentage = 12.8;
+    const quotaRender = resolveChosenBadge(qwenEntry({ quota: { percentage, fetchedAt: TICK_NOW } }), 'qwen');
+    const zaiRender = resolveChosenBadge(
+      { zai: { status: 'ok', usage: { providerId: 'zai', kind: 'cost', windows: { fiveHour: { percentage } }, fetchedAt: TICK_NOW } } },
+      'zai',
+    );
+    expect(quotaRender.text).toBe(zaiRender.text);
+  });
+
+  it('chosen qwen without quota falls back to the balance format', () => {
+    expect(resolveChosenBadge(qwenEntry({ value: 100.28, currency: 'CNY' }), 'qwen')).toEqual({ text: '¥100' });
+  });
+
+  it('chosen qwen with neither quota nor balance clears — the honest empty badge', () => {
+    expect(resolveChosenBadge(qwenEntry({ plan: { status: 'available' } }), 'qwen')).toEqual({ text: '' });
   });
 });

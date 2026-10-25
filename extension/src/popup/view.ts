@@ -19,11 +19,20 @@
 //   (`data-action="refresh"`, hito-6 §Manual Refresh Control) next to the
 //   gear, plus a real `PLAN · <level>` chip derived from the ZAI cycle entry
 //   (hito-11 — the design's LIVE badge is fake telemetry and never renders).
+//   Every card hero sits inside a click-to-choose affordance (`.hero-pick`
+//   carrying `data-action="set-badge"` and a static title tooltip): clicking
+//   it makes that provider the toolbar badge (hito-12 WU-M2 — the settings
+//   dropdown remains the explicit path and BOTH write the same store). The
+//   badge-owning card shows a `.chip-badge` marker exactly once — beside the
+//   hero when the live card renders one, beside the provider name otherwise;
+//   cards without a hero have no click target and nothing is synthesized.
 //   ZAI renders its monitor block from `usage.windows` (plan level, 5h/weekly
 //   windows with the percentage uncapped, used/total, countdown via the pure
 //   `formatResetCountdown` from `windows.*.resetAt` rendered as a distinct
 //   `.countdown` element, and the monthly MCP window with per-tool rows);
-//   where a card's primary percentage exists (ZAI: the 5h window) it renders
+//   where a card's primary percentage exists (ZAI: the 5h window; qwen: the
+//   token-plan quota — hito-12 WU-M user-ratified twin-card rule, supersedes
+//   the WU-D3 line-only render) it renders
 //   TWICE — as the card's largest, boldest element (`.hero-percentage`,
 //   threshold-colored, hito-11) above all other card content, and as the
 //   same number inside its threshold bar (`.bar-pct`) — while secondary info
@@ -33,8 +42,14 @@
 //   bands from the rounded displayed percentage; visual fill caps at 100
 //   while percentage text stays uncapped; MCP fill derives from
 //   used/ceiling — presentation only, never a synthesized percentage);
+//   the qwen quota monitor block sits between the balance and the binary
+//   plan line: the `Token Plan:` line keeps only the countdown (derived at
+//   display time from `quota.resetAt`), a percentage-only quota renders the
+//   bar alone, a quota without a percentage renders the resets line without
+//   a bar or hero, and a quota without either field renders nothing;
 //   OpenAI renders per-model rows from `usage.breakdown` sorted by
-//   (model, usageType) for determinism; failed providers render a
+//   (model, usageType) for determinism; failed
+//   providers render a
 //   per-class error label inside the same card structure (AD-21), and a ZAI
 //   auth failure additionally surfaces the static wrong-platform guidance
 //   (AD-27 — derived here from (provider, class), never transported in the
@@ -69,7 +84,7 @@ import type { CredentialType, ProviderId } from '../core/provider';
 import type { QwenSite } from '../core/qwen-sites';
 import { QWEN_SITES } from '../core/qwen-sites';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type UsageWindow } from '../core/usage';
+import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type TokenPlanQuota, type UsageWindow } from '../core/usage';
 import { ZAI_PLATFORMS, type ZaiPlatform } from '../core/zai-platforms';
 import type { CredentialSlot, MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
@@ -136,6 +151,8 @@ export interface PopupState {
   readonly zaiPlatform: ZaiPlatform;
   /** Selected Qwen BSS site (`qd:pref:qwen-site`); the controller reads/persists it. */
   readonly qwenSite: QwenSite;
+  /** Chosen badge provider (`qd:pref:badge-provider`); the controller reads/persists it (hito-12 WU-D2). */
+  readonly badgeProvider: ProviderId;
   /** Render instant (epoch ms) feeding countdowns — supplied by the controller. */
   readonly nowMs: number;
 }
@@ -148,6 +165,37 @@ const ERROR_CLASS_LABELS: Readonly<Record<ErrorClass, string>> = {
   network: 'Network error',
   unknown: 'Refresh failed',
 };
+
+/**
+ * Click-to-choose affordance (hito-12 WU-M2 §Badge Provider Selector,
+ * user-ratified Option B): EVERY card hero is wrapped in this static div —
+ * the controller's delegated click handler validates the enclosing card's
+ * `data-provider` against the shipped slice and writes the badge preference.
+ * The settings dropdown stays and writes the SAME store; the controller keeps
+ * both paths in sync through one state field. Static strings, never
+ * interpolated — no dynamic text enters the affordance markup.
+ */
+const BADGE_PICK_ACTION = 'set-badge';
+const BADGE_PICK_TOOLTIP = 'Show this provider in the toolbar badge';
+
+/**
+ * The persistent "this provider owns the toolbar badge" marker (hito-12
+ * WU-M2): a chip from the hito-11 chip vocabulary, rendered EXACTLY ONCE per
+ * owning card — beside the hero when the live card renders one, beside the
+ * provider name otherwise (plan-only, quota-less, failed or frozen-only
+ * shapes). Non-owning cards carry no marker: nothing is synthesized.
+ */
+const BADGE_CHIP = '<span class="chip chip-badge">badge</span>';
+
+/**
+ * The card's headline percentage (hito-12 WU-M2 helper): the same precedence
+ * the dual hero uses — the ZAI 5h window first, then the qwen token-plan
+ * quota; `undefined` when the card has no hero at all. One rule, two
+ * consumers (the hero render and the provider-name indicator fallback).
+ */
+function headlinePercentage(usage: NormalizedUsage): number | undefined {
+  return usage.windows?.fiveHour?.percentage ?? usage.quota?.percentage;
+}
 
 /**
  * Inline 2px-stroke icons (hito-11): hand-drawn paths, currentColor, no icon
@@ -226,11 +274,22 @@ export function formatUsageText(usage: NormalizedUsage): string {
 /**
  * Pure reset countdown (AD-22): whole hours plus ceiling minutes from now to
  * resetAt ("2h 0m", "45m"); an elapsed or due reset collapses to "0m".
+ * Windows over 24h render day-granular ("8d 23h 29m" — the qwen token-plan
+ * monthly window) while 24h and below keep the hours form. The boundary
+ * splits on the RAW remaining time — exactly 24h flips to "1d 0h 0m" but
+ * 23h59m59s (which ceils to 1440 minutes) stays in the hours form.
  */
 export function formatResetCountdown(resetAt: number, nowMs: number): string {
-  const remainingMinutes = Math.ceil((resetAt - nowMs) / 60_000);
-  if (remainingMinutes <= 0) {
+  const remainingMs = resetAt - nowMs;
+  if (remainingMs <= 0) {
     return '0m';
+  }
+  const remainingMinutes = Math.ceil(remainingMs / 60_000);
+  if (remainingMs >= 24 * 3_600_000) {
+    const days = Math.floor(remainingMinutes / (24 * 60));
+    const hours = Math.floor((remainingMinutes % (24 * 60)) / 60);
+    const minutes = remainingMinutes % 60;
+    return `${days}d ${hours}h ${minutes}m`;
   }
   const hours = Math.floor(remainingMinutes / 60);
   const minutes = remainingMinutes % 60;
@@ -396,24 +455,71 @@ function planLine(plan: PlanInfo, state: PopupState): string {
 }
 
 /**
- * The ok-arm card body (hero, balance, plan, tier, monitor, breakdown) —
- * shared by the live ok entry and the LAST KNOWN frozen render (hito-11),
- * so a stale card shows exactly what the live card would have shown.
+ * Qwen token-plan quota monitor block (popup-ui §Qwen Token Plan Quota Line,
+ * hito-12 WU-M twin-card rule — user-ratified visual copy of the ZAI monitor
+ * card, supersedes the WU-D3 line-only render): the quota percentage lives in
+ * the card hero (usageBody) and again inside this bar's `bar-pct` overlay —
+ * the hito-6 dual-hero discipline verbatim, INCLUDING the fill cap at 100
+ * while the figure stays uncapped (127.3 renders 127 in text, 100% width).
+ * The line below therefore carries no figure at all — exactly what the ZAI
+ * 5h line lost — and keeps the window-label vocabulary: `Token Plan: Resets
+ * in <countdown>` via the SAME pure `formatResetCountdown` discipline,
+ * rendered as the established `.countdown` element. A percentage-only quota
+ * leaves the line with no parts, so the bar renders alone (the windowLine
+ * discipline — the number is already on the card twice); a reset instant
+ * without a percentage renders the line WITHOUT a bar (mirrors ZAI's
+ * absent-pct window); a quota carrying neither field renders NO block —
+ * nothing is synthesized. The block sits below the balance and ABOVE the
+ * binary plan line; the two coexist independently.
  */
-function usageBody(usage: NormalizedUsage, state: PopupState): string {
+function quotaMonitorBlock(quota: TokenPlanQuota, state: PopupState): string {
+  const line =
+    quota.resetAt !== undefined
+      ? `<p class="monitor-window">${ICONS.clock}Token Plan: Resets in <span class="countdown">${formatResetCountdown(quota.resetAt, state.nowMs)}</span></p>`
+      : '';
+  if (quota.percentage === undefined) {
+    // Honest absent: no hero, no bar — the resets line only (a quota
+    // carrying neither field renders no block at all, pinned in view tests).
+    return line === '' ? '' : `<div class="monitor">${line}</div>`;
+  }
+  // Same bar the primary ZAI window builds: band from the rounded displayed
+  // percentage, fill capped at 100, the uncapped rounded figure inside it.
+  const barMarkup = bar(thresholdBand(quota.percentage), quota.percentage, `${Math.round(quota.percentage)}%`);
+  return `<div class="monitor">${line}${barMarkup}</div>`;
+}
+
+/**
+ * The ok-arm card body (hero, balance, quota, plan, tier, monitor, breakdown) —
+ * shared by the live ok entry and the LAST KNOWN frozen render (hito-11),
+ * so a stale card shows exactly what the live card would have shown. The
+ * quota monitor block (hito-12 WU-M) ports into this body: it travels with
+ * the usage it belongs to, frozen LAST KNOWN renders included.
+ */
+function usageBody(usage: NormalizedUsage, state: PopupState, badgeHero = false): string {
   const parts: string[] = [];
   // Dual hero percentage (hito-6 §Provider List Rendering): where a card's
-  // primary percentage exists (ZAI: the 5h window), it renders as the
-  // card's largest, boldest element ABOVE all other card content, colored
-  // by its threshold band (hito-11); the same number repeats inside its
-  // threshold bar. Monetary cards have no primary percentage — their
-  // balance stays the leading figure, and no percentage is ever synthesized
-  // for them.
-  const heroPercentage = usage.windows?.fiveHour?.percentage;
+  // primary percentage exists it renders as the card's largest, boldest
+  // element ABOVE all other card content, colored by its threshold band
+  // (hito-11); the same number repeats inside its threshold bar. Sources:
+  // ZAI's 5h window, or — hito-12 WU-M twin-card rule, user-ratified — the
+  // qwen token-plan quota percentage. Precedence is windows.fiveHour first,
+  // then quota: a card never has two heroes and nothing is synthesized when
+  // both are absent (a plan-only or quota-less qwen stays hero-free, the
+  // balance remaining the leading figure). Every hero sits inside the
+  // click-to-choose wrapper (hito-12 WU-M2), and the badge-owning card's
+  // hero row additionally carries the chip marker (only for LIVE bodies —
+  // frozen LAST KNOWN renders never take the marker, the name row owns it).
+  const heroPercentage = headlinePercentage(usage);
   if (heroPercentage !== undefined) {
-    parts.push(`<p class="hero-percentage ${thresholdBand(heroPercentage)}">${Math.round(heroPercentage)}%</p>`);
+    const hero = `<p class="hero-percentage ${thresholdBand(heroPercentage)}">${Math.round(heroPercentage)}%</p>`;
+    parts.push(
+      `<div class="hero-pick" data-action="${BADGE_PICK_ACTION}" title="${BADGE_PICK_TOOLTIP}">${hero}${badgeHero ? BADGE_CHIP : ''}</div>`,
+    );
   }
   parts.push(`<p class="usage">${formatUsageText(usage)}</p>`);
+  if (usage.quota !== undefined) {
+    parts.push(quotaMonitorBlock(usage.quota, state)); // hito-12 WU-M: hero lives above, bar + resets line here
+  }
   if (usage.plan !== undefined) {
     parts.push(planLine(usage.plan, state)); // hito-8: below the balance
   }
@@ -447,10 +553,21 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
   // ok results and error cards share the same structure; the error card adds
   // the `card-error` marker for the AUTH-FAILED-style treatment (hito-11).
   const error = entry !== undefined && entry.status === 'error';
+  // Badge marker rule (hito-12 WU-M2): the owning card carries the chip EXACTLY
+  // ONCE — beside its live hero when one renders, beside the provider name
+  // otherwise (plan-only, quota-less, failed with a frozen hero, or no-cycle).
+  // Chosen-without-data stays honest: the marker names the preference, not a
+  // figure, and nothing else is synthesized.
+  const badgeHero =
+    provider.id === state.badgeProvider &&
+    entry !== undefined &&
+    entry.status === 'ok' &&
+    headlinePercentage(entry.usage) !== undefined;
+  const nameChip = provider.id === state.badgeProvider && !badgeHero ? BADGE_CHIP : '';
   const parts: string[] = [
     `<section class="provider card${error ? ' card-error' : ''}" data-provider="${provider.id}">`,
   ];
-  parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}</h2>`);
+  parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}${nameChip}</h2>`);
   if (entry === undefined) {
     parts.push('<p class="no-cycle">No cycle data yet</p>');
   } else if (entry.status === 'error') {
@@ -465,7 +582,7 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
       parts.push(lastKnownBlock(known.usage, state));
     }
   } else {
-    parts.push(usageBody(entry.usage, state));
+    parts.push(usageBody(entry.usage, state, badgeHero)); // WU-M2: the owning live hero carries the marker
   }
   parts.push('</section>');
   return parts.join('');
@@ -514,15 +631,42 @@ function maskedLines(masked: MaskedCredential): string[] {
     : [`<p class="key-state">Stored key: ${escapeHtml(masked.maskedToken)}</p>`];
 }
 
+/**
+ * One labeled credential field row: the label sits above its OWN full-width
+ * input (user-reported squeeze fix) — never two fields sharing a row.
+ */
+function credentialField(providerId: string, suffix: string, label: string, name: string, placeholder: string): string {
+  return (
+    '<div class="credential-field">' +
+    `<label for="key-input-${providerId}-${suffix}">${label}</label>` +
+    `<input type="password" autocomplete="off" id="key-input-${providerId}-${suffix}" name="${name}" placeholder="${placeholder}" />` +
+    '</div>'
+  );
+}
+
 /** Credential inputs: TWO password fields for the ak-sk pair, one otherwise (AD-17). */
 function credentialInputs(provider: PopupProvider): string {
   if (provider.credentialType === 'ak-sk') {
+    // Stacked pair (user-reported squeeze fix): Access Key ID on its own
+    // labeled line, then Access Key Secret — labels above their own
+    // full-width fields so nothing truncates.
     return (
-      `<input type="password" autocomplete="off" id="key-input-${provider.id}-ak" name="accessKeyId" placeholder="AccessKeyId" />` +
-      `<input type="password" autocomplete="off" id="key-input-${provider.id}-sk" name="accessKeySecret" placeholder="AccessKeySecret" />`
+      credentialField(provider.id, 'ak', 'Access Key ID', 'accessKeyId', 'AccessKeyId') +
+      credentialField(provider.id, 'sk', 'Access Key Secret', 'accessKeySecret', 'AccessKeySecret')
     );
   }
   return `<input type="password" autocomplete="off" id="key-input-${provider.id}" name="credential" placeholder="Credential" />`;
+}
+
+/** Save + revoke controls; the ak-sk pair stacks them on their own row after the fields. */
+function credentialActions(provider: PopupProvider): string {
+  const buttons =
+    `<button type="submit" id="key-add-${provider.id}">Save key</button>` +
+    `<button type="button" class="revoke" id="key-revoke-${provider.id}" data-revoke="${provider.id}">Revoke</button>`;
+  if (provider.credentialType === 'ak-sk') {
+    return `<div class="form-actions">${buttons}</div>`;
+  }
+  return buttons;
 }
 
 /**
@@ -565,11 +709,37 @@ function siteSelector(state: PopupState): string {
 }
 
 /**
+ * Badge provider selector (popup-ui §Badge Provider Selector; hito-12 WU-D2):
+ * rendered data-driven from the provider list the controller composes (the
+ * SHIPPED slice in production) — labels are display names, never secret
+ * material, so they render unmasked. The current choice carries the
+ * `selected` attribute; the controller persists changes through the
+ * badge-provider store.
+ */
+function badgeProviderSelector(state: PopupState): string {
+  const options = state.providers
+    .map(
+      (provider) =>
+        `<option value="${provider.id}"${provider.id === state.badgeProvider ? ' selected' : ''}>${escapeHtml(provider.displayName)}</option>`,
+    )
+    .join('');
+  return (
+    '<div class="badge-provider-field">' +
+    '<label for="badge-provider-select">Badge provider</label>' +
+    `<select id="badge-provider-select" data-action="badge-provider">${options}</select>` +
+    '</div>'
+  );
+}
+
+/**
  * Qwen plan key group (popup-ui §Qwen Plan Key Settings Group, hito-8): the
  * SECOND qwen field group — its own password input, save and revoke
  * controls, labeled `Plan key (sk-sp-)` and revoked via the plan slot
  * (`data-revoke="qwen-plan"`), independent of the AK/SK pair above it. The
  * masked state renders inside the group; the controller owns persistence.
+ * Stacked like the pair (user-reported squeeze fix): the label owns a row
+ * above its full-width field and the controls sit on their own row — the
+ * group shares the `.key-form` flex row that squeezed them side by side.
  */
 function planKeyGroup(state: PopupState): string {
   const masked = state.qwenPlanKey;
@@ -580,10 +750,14 @@ function planKeyGroup(state: PopupState): string {
   return (
     maskedLine +
     '<form class="key-form plan-key-form" data-provider="qwen-plan">' +
+    '<div class="credential-field">' +
     '<label for="key-input-qwen-plan">Plan key (sk-sp-)</label>' +
     '<input type="password" autocomplete="off" id="key-input-qwen-plan" name="credential" placeholder="sk-sp-..." />' +
+    '</div>' +
+    '<div class="form-actions">' +
     '<button type="submit" id="key-add-qwen-plan">Save plan key</button>' +
     '<button type="button" class="revoke" id="key-revoke-qwen-plan" data-revoke="qwen-plan">Revoke plan key</button>' +
+    '</div>' +
     '</form>'
   );
 }
@@ -602,8 +776,7 @@ function providerSettingsSection(provider: PopupProvider, state: PopupState): st
   parts.push(
     `<form class="key-form" data-provider="${provider.id}">` +
       credentialInputs(provider) +
-      `<button type="submit" id="key-add-${provider.id}">Save key</button>` +
-      `<button type="button" class="revoke" id="key-revoke-${provider.id}" data-revoke="${provider.id}">Revoke</button>` +
+      credentialActions(provider) +
       '</form>',
   );
   if (provider.id === 'zai') {
@@ -633,5 +806,7 @@ export function renderSettings(state: PopupState): string {
     '<div class="header-actions">' +
     `<button type="button" class="header-action" data-action="back" aria-label="Back to quotas">${ICONS.back}</button>` +
     '</div></header>';
-  return `${header}\n${sections}\n${tabBar('settings')}\n${brandingFooter()}`;
+  // Badge provider selector (hito-12 WU-D2) opens the settings view — the
+  // first block under the header, before the provider sections.
+  return `${header}\n${badgeProviderSelector(state)}\n${sections}\n${tabBar('settings')}\n${brandingFooter()}`;
 }

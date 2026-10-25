@@ -7,7 +7,7 @@
 // (Phase 5) structurally: same members, in-memory behavior, plus recording
 // hooks the specs pin assertions on (sync-area access, badge texts, alarms).
 import type { StorageArea } from '../storage/key-store';
-import type { AlarmCreateInfo, BrowserStorageOnChanged, StorageChange } from '../platform/browser-api';
+import type { AlarmCreateInfo, BrowserStorageOnChanged, DnrSessionRule, DnrSessionRulesUpdate, StorageChange } from '../platform/browser-api';
 
 export interface RecordedCall {
   readonly op: string;
@@ -137,6 +137,36 @@ export class FakeAction {
 }
 
 /**
+ * Records every updateSessionRules call and applies chrome's session-rule
+ * semantics in memory: removeRuleIds delete first, addRules then apply — and
+ * an add whose id is STILL live (not removed in the same call) REJECTS with
+ * chrome's duplicate-id error (hito-12 WU-J). `sessionRules` is the live rule
+ * state a test reads; the WU-F install-once and the WU-J pre-existing-rule
+ * pins hang off this recording.
+ */
+export class FakeDeclarativeNetRequest {
+  readonly calls: RecordedCall[] = [];
+  readonly sessionRules = new Map<number, DnrSessionRule>();
+
+  async updateSessionRules(update: DnrSessionRulesUpdate): Promise<void> {
+    this.calls.push({ op: 'updateSessionRules', args: [update] });
+    for (const id of update.removeRuleIds ?? []) {
+      this.sessionRules.delete(id);
+    }
+    for (const rule of update.addRules ?? []) {
+      // Chrome-faithful (hito-12 WU-J): a bare addRules re-install of a rule
+      // that survived from an earlier SW start REJECTS — live E2E observed
+      // "Error: Rule with id 1 does not have a unique ID." The lenient
+      // overwrite this fake used before WU-J is what let that bug pass review.
+      if (this.sessionRules.has(rule.id)) {
+        throw new Error(`Rule with id ${rule.id} does not have a unique ID.`);
+      }
+      this.sessionRules.set(rule.id, rule);
+    }
+  }
+}
+
+/**
  * BrowserApi-shaped in-memory double. `storage.sync` exists ONLY so tests can
  * assert it is never called (key-storage spec §Sync never used) — the KeyStore
  * receives `fakeBrowser.storage.local` and has no `.sync` path.
@@ -148,6 +178,8 @@ export class FakeBrowser {
   readonly sync = new FakeStorageArea((changes) => this.onChanged.dispatch(changes, 'sync'));
   readonly alarms = new FakeAlarms();
   readonly action = new FakeAction();
+  /** Worker-port double (hito-12 WU-F): records the gateway-origin installs. */
+  readonly declarativeNetRequest = new FakeDeclarativeNetRequest();
   readonly storage: {
     readonly local: StorageArea;
     readonly sync: StorageArea;

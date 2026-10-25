@@ -6,7 +6,10 @@
 // headers or attach cookies even if it wanted to. The only component that
 // produces headers is `AllowlistNetworkClient`, which sets at most:
 // `Authorization` (token credentials) and `Content-Type: application/json`
-// whenever a JSON body dispatches (the label belongs to the body). The
+// whenever a JSON body dispatches (the label belongs to the body) — the
+// sanctioned ACS3 seam (hito-12) additionally emits the fixed
+// `host`/`x-acs-*` signing header set, still produced EXCLUSIVELY by the
+// client, never provider-authored. The
 // downstream `Transport` type carries headers but no cookie jar.
 //
 // Credential material therefore has exactly one legal path per kind — the
@@ -23,6 +26,34 @@
 import type { Credential } from '../core/provider';
 import { isQwenBssHost } from '../core/qwen-sites';
 
+/**
+ * Optional per-request signing discriminator (hito-12). ABSENT keeps the
+ * legacy ak-sk BSS RPC query path (AD-18) — byte-identical default. The
+ * `acs3` scheme routes an ak-sk request through the client's ACS3-HMAC-SHA256
+ * header seam (live-proven token mint, docs/spike/endpoints.md §Qwen
+ * token-plan quota): action/version ride the signed `x-acs-*` headers and an
+ * optional STS token is signed too. Meaningless on any other credential kind —
+ * the client refuses it before dispatch.
+ */
+export interface Acs3SigningMarker {
+  readonly scheme: 'acs3';
+  readonly action: string;
+  readonly version: string;
+  readonly securityToken?: string;
+}
+
+/**
+ * Optional per-request session-bearer marker (hito-12 C1): carries the
+ * TRANSIENT console session token (minted by the quota flow's hop 1) through
+ * the request pipeline WITHOUT it ever entering url/query/body — the client
+ * attaches it as `Authorization: Bearer <token>` exclusively at the sanctioned
+ * gateway seam. In-memory by contract: never stored, never logged, never
+ * echoed by a rejection surface. ABSENT = behavior unchanged.
+ */
+export interface SessionBearerMarker {
+  readonly token: string;
+}
+
 /** A request as built by a provider, BEFORE credentials are attached. */
 export interface ProviderRequest {
   readonly method: 'GET' | 'POST';
@@ -31,6 +62,10 @@ export interface ProviderRequest {
   readonly query?: Readonly<Record<string, string | number>>;
   /** Serialized request body (JSON). Must not contain credential material. */
   readonly body?: string;
+  /** Signing discriminator; undefined = the legacy BSS RPC query path (AD-18). */
+  readonly signing?: Acs3SigningMarker;
+  /** Session-bearer marker (hito-12 C1); undefined = credential attach as before. */
+  readonly session?: SessionBearerMarker;
 }
 
 export type NetworkRejectionReason =
@@ -65,6 +100,24 @@ export function assertNoCredentialMaterial(
     ([key, value]) => `${key}=${value}`,
   );
   const bodySurfaces: readonly string[] = request.body !== undefined ? [request.body] : [];
+
+  // Session-bearer marker (hito-12 C1): the transient token is confined to the
+  // Authorization header the client attaches — emptiness or smuggling rejects
+  // before the stored-credential dispatch below. The message never echoes the
+  // token itself.
+  if (request.session !== undefined) {
+    if (request.session.token.length === 0) {
+      throw new NetworkRejectionError('credential-placement', 'Missing session token: nothing to attach.');
+    }
+    for (const surface of [request.url, fullUrl, ...querySurfaces, ...bodySurfaces]) {
+      if (surface.includes(request.session.token)) {
+        throw new NetworkRejectionError(
+          'credential-placement',
+          'Session token found outside the Authorization header (url/query/body).',
+        );
+      }
+    }
+  }
 
   if (credential.type === 'ak-sk') {
     if (credential.accessKeyId.length === 0 || credential.accessKeySecret.length === 0) {

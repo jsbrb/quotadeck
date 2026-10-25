@@ -20,9 +20,11 @@ export const PROVIDER_METADATA: readonly ProviderMetadata[] = [
 ];
 
 /**
- * Providers shipping in the current build (hito-10 GLM-only store release):
- * the single source of the shipping filter. The default registry, the popup
- * composition, and the manifest host_permissions derivation all subset
- * through this list; non-shipped implementations stay in source, unshipped.
+ * Providers shipping in the current build: the single source of the shipping
+ * filter. The default registry, the popup composition, and the manifest
+ * host_permissions derivation all subset through this list; non-shipped
+ * implementations stay in source, unshipped. Order follows the AD-6 registry
+ * order (zai then qwen — hito-12 re-ships qwen on this branch for the quota
+ * browser E2E; the hito-10 GLM-only store release stays on develop).
  */
-export const SHIPPED_PROVIDER_IDS: readonly ProviderId[] = ['zai'];
+export const SHIPPED_PROVIDER_IDS: readonly ProviderId[] = ['zai', 'qwen'];

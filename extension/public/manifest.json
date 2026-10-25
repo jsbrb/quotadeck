@@ -23,9 +23,14 @@
   "background": {
     "service_worker": "background.js"
   },
-  "permissions": ["storage", "alarms"],
+  "permissions": ["storage", "alarms", "declarativeNetRequestWithHostAccess"],
   "host_permissions": [
     "https://api.z.ai/*",
-    "https://open.bigmodel.cn/*"
+    "https://bailian-singapore-cs.alibabacloud.com/*",
+    "https://business.aliyuncs.com/*",
+    "https://business.ap-southeast-1.aliyuncs.com/*",
+    "https://modelstudio.ap-southeast-1.aliyuncs.com/*",
+    "https://open.bigmodel.cn/*",
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com/*"
   ]
 }
