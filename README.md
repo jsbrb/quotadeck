@@ -14,8 +14,9 @@ working Manifest V3 service worker plus action popup that fetches real usage
 data every minute through an allowlist-constrained network client. ZAI usage
 comes from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
 plan level, the 5h and weekly token windows with an uncapped percentage, and
-the monthly MCP window. Qwen usage comes from the BSS account-balance call,
-the plan probe and the token-plan quota two-hop flow merged into the cycle
+the monthly MCP window. Qwen usage is quota-only (the BSS account-balance
+dispatch is suspended — for a coding plan the $0.00 balance is noise): the
+plan probe and the token-plan quota two-hop flow merge into the cycle
 snapshot. The vitest suite stays
 hermetic (recorded fixtures + injected transports — no network in tests); live
 behavior is proven by contract tests over the request shapes and by a short
@@ -44,7 +45,7 @@ specs and design.
    non-secret preference `qd:pref:badge-provider`, default ZAI): ZAI shows the
    5h percentage (uncapped above 100) with the plan level as fallback, Qwen
    shows the token-plan quota percentage when present (rendered like the 5h
-   figure) or the account balance otherwise. A chosen provider that did not
+   figure) and clears otherwise. A chosen provider that did not
    run — or is not shipped in this build — clears the badge rather than
    showing a stale figure.
 4. The badge background is threshold-colored from the chosen figure — the ZAI
@@ -57,9 +58,10 @@ specs and design.
 5. Clicking the toolbar action opens the popup on the consumption view: the
    ZAI monitor block (plan level, the 5h window with its uncapped percentage,
    used/total and reset countdown, the weekly window, and the MCP window with
-   per-tool rows) and the Qwen card (BSS balance, the token-plan quota line —
+   per-tool rows) and the Qwen card (the token-plan quota line —
    e.g. `Token Plan: 11.7% used · resets in 1h 30m`, the percentage uncapped —
-   and the binary plan line) — the same data the tick persisted for that
+   and the binary plan line; the card carries no balance figure) — the same
+   data the tick persisted for that
    cycle. Failed refreshes show a per-class error label (`Auth failed`,
    `Rate limited`, …) in the card — the badge shows `ERR` only when the
    failing provider is the chosen one — a bad or revoked key surfaces this

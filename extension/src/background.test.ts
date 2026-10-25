@@ -73,6 +73,14 @@ function liveRoutes(): Record<string, TransportResponse> {
     'https://api.moonshot.cn/v1/users/me/balance': FIXTURE_RESPONSES['kimi/users-me-balance--ok'],
     'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14':
       FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+    // WU-L: the qwen legs that survive the balance suspension — the quota
+    // step's two hops, served here so the shipped-tick scenario composes the
+    // production shape (zai engine leg + qwen quota synthesis).
+    'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken': {
+      status: 200,
+      body: { cliAccessToken: 'sess-live-routes-mint-aa11' },
+    },
+    'https://bailian-singapore-cs.alibabacloud.com/cli/api.json': FIXTURE_RESPONSES['qwen/token-plan-usage--ok'],
   };
 }
 
@@ -177,15 +185,18 @@ function engineForProviders(
 }
 
 /**
- * FixtureTransport wrapper for the qwen leg: the live client dispatches a
- * SIGNED query (timestamp/nonce vary per run), so exact-URL routing cannot
- * match. This double normalizes any BSS-host dispatch (china or the
- * international default — hito-8 flipped the default to ap-southeast-1) to
- * the recorded route key — proving the signed request still targets a BSS
- * host — and leaves every other route byte-exact. The recorded CN-shaped
- * body serves both: the tolerant qwen parse accepts numeric and string
- * envelopes alike. Which BSS host a tick targets is pinned by the dedicated
- * site-selection tests below, not by this normalization.
+ * FixtureTransport wrapper for the qwen legs: the live client dispatches
+ * SIGNED requests whose timestamp/nonce vary per run (BSS acs1, quota mint
+ * acs3), so exact-URL routing cannot match. This double normalizes ANY qwen
+ * leg dispatch — the BSS hosts (china or the international default — hito-8
+ * flipped the default to ap-southeast-1), the quota mint host, and the
+ * token-plan gateway host (the client's query encoding varies per request
+ * shape) — to the recorded route keys, proving each dispatch still targets
+ * the right host class — and leaves every other route byte-exact. The
+ * recorded CN-shaped body serves the BSS leg: the tolerant qwen parse
+ * accepts numeric and string envelopes alike. Which BSS host a tick targets
+ * is pinned by the dedicated site-selection tests below, not by this
+ * normalization.
  */
 class SignedQwenRouteTransport implements Transport {
   private readonly routes: FixtureTransport;
@@ -195,11 +206,17 @@ class SignedQwenRouteTransport implements Transport {
   }
 
   async fetch(request: AuthorizedRequest): Promise<TransportResponse> {
-    const url =
-      request.url.startsWith('https://business.aliyuncs.com/') ||
-      request.url.startsWith('https://business.ap-southeast-1.aliyuncs.com/')
-        ? 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14'
-        : request.url;
+    let url = request.url;
+    if (
+      url.startsWith('https://business.aliyuncs.com/') ||
+      url.startsWith('https://business.ap-southeast-1.aliyuncs.com/')
+    ) {
+      url = 'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14';
+    } else if (url.includes(QWEN_TOKEN_MINT_HOST)) {
+      url = 'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken';
+    } else if (url.includes(QWEN_TOKEN_PLAN_GATEWAY_HOST)) {
+      url = 'https://bailian-singapore-cs.alibabacloud.com/cli/api.json';
+    }
     return this.routes.fetch({ ...request, url });
   }
 }
@@ -308,7 +325,7 @@ describe('background — One-Minute Alarm Schedule (usage-badge spec)', () => {
 describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
   it('firing refresh-now runs the shared refresh tick: the chosen default (zai) badge renders once and exactly one snapshot write lands', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only shipped providers register (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); the qwen pair now feeds the quota step only (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -480,7 +497,7 @@ describe('background — buildTickQuery (usage-badge spec §Live refresh per tic
 describe('background — Badge Rendering + refresh per tick (usage-badge spec)', () => {
   it('the shipped worker badges the chosen provider only: one badge write per tick, stable across repeated ticks', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only shipped providers register (hito-12: zai + qwen)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — the engine dispatches zai only (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -1101,7 +1118,7 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
 
   it('hermetic proof: an injected transport serves the shipped tick with the global fetch forbidden', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); qwen rides the quota step now (WU-L)
     vi.stubGlobal('fetch', () => {
       throw new Error('live network is forbidden in the hermetic suite');
     });
@@ -1236,7 +1253,7 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
   it('tick writes exactly one snapshot per completed cycle: the shipped ok entry carries the monitor windows', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); qwen rides the quota step now (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -1256,7 +1273,17 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
 
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    expect(Object.keys(stored.results)).toEqual(['zai', 'qwen']); // shipped providers only (hito-12 re-ship)
+    // hito-12 re-ship, WU-L flip: the keys stay ['zai','qwen'] but qwen now
+    // enters through the tick-level quota-step SYNTHESIS — the engine no
+    // longer dispatches the BSS balance leg.
+    expect(Object.keys(stored.results)).toEqual(['zai', 'qwen']);
+    // WU-L honest outcome: the synthesized qwen entry is QUOTA-ONLY — no
+    // balance value ever rides the snapshot (RED before the suspension: the
+    // engine leg carried value: 100.28).
+    const qwenEntry = stored.results.qwen as { status: 'ok'; usage: { value?: number; quota?: unknown } };
+    expect(qwenEntry.status).toBe('ok');
+    expect(qwenEntry.usage.value).toBeUndefined();
+    expect(qwenEntry.usage.quota).toMatchObject({ percentage: 14.557322303961778 });
     expect(stored.results.zai).toEqual({
       status: 'ok',
       usage: expect.objectContaining({
