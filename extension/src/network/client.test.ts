@@ -425,3 +425,253 @@ describe('signed qwen dispatch — secret never transmitted (O2: every surface a
     expect(JSON.stringify(sent).includes(QWEN_PAIR.accessKeySecret)).toBe(false);
   });
 });
+
+describe('AllowlistNetworkClient — acs3 header seam (hito-12 token mint)', () => {
+  // Synthetic pair shared with the acs3-signer known-answer vector — no real
+  // key material anywhere. The injected clock/nonce match the signer vector,
+  // so the client seam must emit byte-identical auth material.
+  const ACS3_PAIR = {
+    type: 'ak-sk',
+    accessKeyId: 'LTAISyntheticTestKeyNeverReal',
+    accessKeySecret: 'synthetic-secret-never-real',
+  } as const;
+  const MINT_URL = 'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken';
+  const EXPECTED_MINT_AUTHORIZATION =
+    'ACS3-HMAC-SHA256 Credential=LTAISyntheticTestKeyNeverReal,SignedHeaders=content-type;host;x-acs-action;x-acs-content-sha256;x-acs-date;x-acs-signature-nonce;x-acs-version,Signature=3e7c5352242a7c5989616e06f03f897e7f46d5aea358c7d6d26a68c4715b6317';
+
+  function mintRequest(overrides: Partial<ProviderRequest> = {}): ProviderRequest {
+    return {
+      method: 'POST',
+      url: MINT_URL,
+      body: '{}',
+      signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10' },
+      ...overrides,
+    };
+  }
+
+  function acs3Client(transport: RecordingTransport): AllowlistNetworkClient {
+    return new AllowlistNetworkClient(transport, {
+      clock: new FakeClock(1_792_929_600_000), // 2026-10-25T12:00:00Z
+      nonce: () => 'acs3-test-nonce-000000000001',
+    });
+  }
+
+  it('routes a marked ak-sk request through ACS3: authorization + x-acs-* headers, query-less URL untouched', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = acs3Client(transport);
+
+    const response = await client.send('qwen', mintRequest(), ACS3_PAIR);
+
+    expect(response).toBe(okResponse);
+    const sent = transport.requests[0]!;
+    expect(sent.url).toBe(MINT_URL); // no signed query — the headers carry the auth
+    expect(sent.method).toBe('POST');
+    expect(sent.body).toBe('{}');
+    expect(sent.headers.Authorization).toBe(EXPECTED_MINT_AUTHORIZATION);
+    expect(sent.headers.host).toBe('modelstudio.ap-southeast-1.aliyuncs.com');
+    expect(sent.headers['content-type']).toBe('application/json');
+    expect(sent.headers['x-acs-action']).toBe('GenerateCLIAccessToken');
+    expect(sent.headers['x-acs-version']).toBe('2026-02-10');
+    expect(sent.headers['x-acs-date']).toBe('2026-10-25T12:00:00Z'); // injected clock, millis stripped
+    expect(sent.headers['x-acs-signature-nonce']).toBe('acs3-test-nonce-000000000001'); // injected nonce
+    expect(sent.headers['x-acs-content-sha256']).toBe('44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a');
+  });
+
+  it('the AccessKeySecret appears in no acs3 dispatched surface', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = acs3Client(transport);
+
+    await client.send('qwen', mintRequest(), ACS3_PAIR);
+
+    const sent = transport.requests[0]!;
+    expect(JSON.stringify(sent)).not.toContain(ACS3_PAIR.accessKeySecret);
+    expect(sent.url).not.toContain(ACS3_PAIR.accessKeySecret);
+  });
+
+  it('passes an optional STS token into the signed headers', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = acs3Client(transport);
+
+    await client.send(
+      'qwen',
+      mintRequest({
+        signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10', securityToken: 'sts-synthetic-token' },
+      }),
+      ACS3_PAIR,
+    );
+
+    const sent = transport.requests[0]!;
+    expect(sent.headers['x-acs-security-token']).toBe('sts-synthetic-token');
+    expect(sent.headers.Authorization).toContain(';x-acs-security-token;x-acs-signature-nonce;');
+    expect(sent.headers.Authorization).not.toBe(EXPECTED_MINT_AUTHORIZATION);
+  });
+
+  it('rejects a marked request carrying query params — the seam signs the live-proven query-less mint only', async () => {
+    const transport = new RecordingTransport(); // empty queue: any fetch would throw
+    const client = acs3Client(transport);
+
+    await expect(client.send('qwen', mintRequest({ query: { foo: 'bar' } }), ACS3_PAIR)).rejects.toMatchObject({
+      name: 'NetworkRejectionError',
+      reason: 'credential-placement',
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects the acs3 marker on a non-ak-sk credential with zero I/O', async () => {
+    const transport = new RecordingTransport();
+    const client = acs3Client(transport);
+
+    await expect(
+      client.send('zai', mintRequest({ url: 'https://api.z.ai/api/monitor/usage/quota/limit' }), ZAI_CREDENTIAL),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects a marked request to an off-allowlist host — host check wins, zero I/O', async () => {
+    const transport = new RecordingTransport();
+    const client = acs3Client(transport);
+
+    await expect(
+      client.send('qwen', mintRequest({ url: 'https://evil.example.com/modelstudio/cli/generateAccessToken' }), ACS3_PAIR),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'host-not-allowed' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects the acs3 marker for a non-qwen provider — ak-sk stays qwen-only', async () => {
+    const transport = new RecordingTransport();
+    const client = acs3Client(transport);
+
+    await expect(
+      client.send('openai', mintRequest({ url: 'https://api.openai.com/modelstudio/cli/generateAccessToken' }), ACS3_PAIR),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
+  });
+});
+
+describe('AllowlistNetworkClient — session-bearer route (hito-12 C1 gateway)', () => {
+  // Transient session token: a SYNTHETIC sentinel, never real material. The
+  // stored ak-sk pair stays the identity gate for the qwen flow but is NOT
+  // consumed on this hop — no signed query may appear on the gateway URL.
+  const SENTINEL_TOKEN = 'sess-synthetic-transient-token-9f3c';
+  const GATEWAY_URL =
+    'https://bailian-singapore-cs.alibabacloud.com/cli/api.json?action=IntlBroadScopeAspnGateway&product=sfm_bailian&api=zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2Fusage';
+
+  function gatewayRequest(overrides: Partial<ProviderRequest> = {}): ProviderRequest {
+    return {
+      method: 'POST',
+      url: 'https://bailian-singapore-cs.alibabacloud.com/cli/api.json',
+      query: {
+        action: 'IntlBroadScopeAspnGateway',
+        product: 'sfm_bailian',
+        api: 'zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage',
+      },
+      body: 'params={"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN"}}}&region=ap-southeast-1',
+      session: { token: SENTINEL_TOKEN },
+      ...overrides,
+    };
+  }
+
+  it('routes the session marker: Bearer header + form label, exact live URL, zero ak-sk signing material', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    const response = await client.send('qwen', gatewayRequest(), QWEN_PAIR);
+
+    expect(response).toBe(okResponse);
+    const sent = transport.requests[0]!;
+    expect(sent.url).toBe(GATEWAY_URL); // query rides through buildUrl, unsigned
+    expect(Object.keys(queryOf(sent.url)).sort()).toEqual(['action', 'api', 'product']);
+    expect(sent.body).toContain('params={"Api"');
+    expect(sent.body).not.toContain('switchAgent');
+    expect(sent.headers).toStrictEqual({
+      Authorization: `Bearer ${SENTINEL_TOKEN}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    });
+  });
+
+  it('sweep — the sentinel token appears ONLY in Authorization; the secret appears nowhere', async () => {
+    const transport = new RecordingTransport([okResponse]);
+    const client = new AllowlistNetworkClient(transport);
+
+    await client.send('qwen', gatewayRequest(), QWEN_PAIR);
+
+    const sent = transport.requests[0]!;
+    expect(sent.url).not.toContain(SENTINEL_TOKEN);
+    expect(sent.body ?? '').not.toContain(SENTINEL_TOKEN);
+    expect(sent.headers.Authorization).toBe(`Bearer ${SENTINEL_TOKEN}`);
+    expect(JSON.stringify(sent)).not.toContain(QWEN_PAIR.accessKeySecret);
+  });
+
+  it('rejects the session marker on the mint host — session rides the gateway ONLY', async () => {
+    const transport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(
+      client.send(
+        'qwen',
+        gatewayRequest({
+          url: 'https://modelstudio.ap-southeast-1.aliyuncs.com/modelstudio/cli/generateAccessToken',
+          query: undefined,
+          session: { token: SENTINEL_TOKEN },
+        }),
+        QWEN_PAIR,
+      ),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects the session marker combined with the acs3 signing marker — one auth mechanism per request', async () => {
+    const transport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(
+      client.send(
+        'qwen',
+        gatewayRequest({ signing: { scheme: 'acs3', action: 'GenerateCLIAccessToken', version: '2026-02-10' } }),
+        QWEN_PAIR,
+      ),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects the session marker on a non-ak-sk credential', async () => {
+    const transport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(transport);
+
+    await expect(client.send('qwen', gatewayRequest(), ZAI_CREDENTIAL)).rejects.toMatchObject({
+      name: 'NetworkRejectionError',
+      reason: 'credential-placement',
+    });
+    expect(transport.requests).toHaveLength(0);
+  });
+
+  it('rejects an empty session token and a token smuggled in the body — placement scan extends to the marker', async () => {
+    const emptyTransport = new RecordingTransport();
+    const client = new AllowlistNetworkClient(emptyTransport);
+    await expect(
+      client.send('qwen', gatewayRequest({ session: { token: '' } }), QWEN_PAIR),
+    ).rejects.toMatchObject({ name: 'NetworkRejectionError', reason: 'credential-placement' });
+    expect(emptyTransport.requests).toHaveLength(0);
+
+    const smuggledTransport = new RecordingTransport();
+    const smuggledClient = new AllowlistNetworkClient(smuggledTransport);
+    try {
+      await smuggledClient.send(
+        'qwen',
+        gatewayRequest({ body: `params=${SENTINEL_TOKEN}&region=ap-southeast-1` }),
+        QWEN_PAIR,
+      );
+      expect.unreachable('a session token smuggled into the body must reject');
+    } catch (error) {
+      expect(error).toBeInstanceOf(NetworkRejectionError);
+      expect((error as NetworkRejectionError).reason).toBe('credential-placement');
+      // The rejection surface never echoes the token itself.
+      expect(String(error)).not.toContain(SENTINEL_TOKEN);
+    }
+    expect(smuggledTransport.requests).toHaveLength(0);
+  });
+});
+
+// LEGACY BYTE-STABILITY: the ak-sk requests WITHOUT the signing marker keep the
+// signed BSS query path untouched — every test in the `ak-sk attach (AD-19)`
+// and `signed qwen dispatch` blocks above runs unmodified against this seam.

@@ -67,6 +67,22 @@ export interface PlanInfo {
   readonly resetAt?: number;
 }
 
+/**
+ * Qwen token-plan monthly quota window (hito-12 WU-C2; evidence
+ * docs/spike/endpoints.md §Qwen token-plan quota — session-token surface).
+ * `percentage` is the gateway's 0..1 USED fraction mapped to the 0-100
+ * window convention — UNCAPPED passthrough (a server 1.5 stays 150), never
+ * synthesized; `resetAt` is the epoch-ms reset instant carried VERBATIM.
+ * Absent fields stay absent: no used/total exists on the surface and none is
+ * derived here. `fetchedAt` is the mint+gateway hop's refresh instant.
+ */
+export interface TokenPlanQuota {
+  readonly percentage?: number;
+  readonly resetAt?: number;
+  /** Refresh instant from the injected Clock (AD-1) — never Date.now() inline. */
+  readonly fetchedAt: number;
+}
+
 /** The single result shape every provider folds into. */
 export interface NormalizedUsage {
   readonly providerId: ProviderId;
@@ -92,6 +108,11 @@ export interface NormalizedUsage {
    * `windows` — `formatBadgeText` ignores it (the badge renders the balance).
    */
   readonly plan?: PlanInfo;
+  /**
+   * Qwen token-plan quota window (hito-12 WU-C2); optional like `plan` —
+   * `formatBadgeText` ignores it (quota badge rendering is a later unit).
+   */
+  readonly quota?: TokenPlanQuota;
   /** Epoch ms from the injected Clock (AD-1) — never Date.now() inline. */
   readonly fetchedAt: number;
 }
@@ -152,6 +173,16 @@ function compactThousands(magnitude: number): string {
 }
 
 /**
+ * Integer-display badge text for a percentage (hito-12 WU-D2): UNCAPPED
+ * passthrough through the SAME rounding the ZAI 5h badge path has always
+ * used — single-sourced so the qwen quota badge can never drift from it
+ * (no rounding games, no new rules).
+ */
+export function formatPercentageBadgeText(percentage: number): string {
+  return `${Math.round(percentage)}%`;
+}
+
+/**
  * Renders a NormalizedUsage (or `null` for a failed refresh) as badge text.
  * Pure and deterministic: the same input yields the same string on every call.
  *
@@ -166,7 +197,7 @@ export function formatBadgeText(usage: NormalizedUsage | null): string {
   if (usage.windows !== undefined) {
     const percentage = usage.windows.fiveHour?.percentage;
     if (percentage !== undefined) {
-      return `${Math.round(percentage)}%`;
+      return formatPercentageBadgeText(percentage);
     }
     return usage.windows.level ?? '';
   }

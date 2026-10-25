@@ -98,6 +98,7 @@ function popupState(overrides: Partial<PopupState> = {}): PopupState {
     nowMs: NOW_MS,
     zaiPlatform: 'zai',
     qwenSite: 'international',
+    badgeProvider: 'zai',
     qwenPlanKey: undefined,
     ...overrides,
   };
@@ -163,6 +164,25 @@ describe('formatResetCountdown — pure reset countdown (AD-22)', () => {
     expect(formatResetCountdown(NOW_MS + 59.5 * 60_000, NOW_MS)).toBe('1h 0m'); // ceil(59.5) = 60
     expect(formatResetCountdown(NOW_MS, NOW_MS)).toBe('0m');
     expect(formatResetCountdown(NOW_MS - 60_000, NOW_MS)).toBe('0m');
+  });
+
+  it('renders windows over 24h as days + hours + minutes', () => {
+    // 215h29m = 12929 min = 8 days + 1409 min = 8d 23h 29m (the qwen token-plan
+    // monthly window shape the user reported as "Resets in 215h 29m").
+    expect(formatResetCountdown(NOW_MS + 215 * 3_600_000 + 29 * 60_000, NOW_MS)).toBe('8d 23h 29m');
+    expect(formatResetCountdown(NOW_MS + 48 * 3_600_000, NOW_MS)).toBe('2d 0h 0m');
+    expect(formatResetCountdown(NOW_MS + 25 * 3_600_000 + 61_000, NOW_MS)).toBe('1d 1h 2m'); // ceil(25h0m1s) = 1502 min
+  });
+
+  it('splits the 24h boundary on the RAW remaining time: 23h59m59s stays hours, 24h0m0s flips to days', () => {
+    // ceil(23h59m59s) = 1440 min — the boundary must NOT be the ceil'd minutes,
+    // or this case would wrongly render "1d 0h 0m".
+    expect(formatResetCountdown(NOW_MS + 23 * 3_600_000 + 59 * 60_000 + 59_000, NOW_MS)).toBe('24h 0m');
+    expect(formatResetCountdown(NOW_MS + 24 * 3_600_000, NOW_MS)).toBe('1d 0h 0m'); // exactly 24h → days form
+  });
+
+  it('keeps windows of 24h or less in the established hours form', () => {
+    expect(formatResetCountdown(NOW_MS + 23 * 3_600_000 + 59 * 60_000, NOW_MS)).toBe('23h 59m');
   });
 });
 
@@ -488,6 +508,210 @@ describe('renderSettings — Qwen Site Selector (popup-ui spec §Qwen Site Selec
   });
 });
 
+describe('renderSettings — Badge Provider Selector (popup-ui spec §Badge Provider Selector; hito-12 WU-D2)', () => {
+  it('renders exactly one top-level selector with unmasked displayName options from the provider list', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+
+    expect(html.match(/id="badge-provider-select"/g)).toHaveLength(1); // once, not per section
+    expect(html).toContain('<label for="badge-provider-select">Badge provider</label>');
+    expect(html).toContain('<option value="zai" selected>ZAI (Zhipu AI)</option>'); // default choice carries selected
+    expect(html).toContain('<option value="qwen">Qwen (Alibaba Cloud BSS)</option>');
+    // options come from state.providers — data-driven, never hardcoded:
+    expect(html).toContain('<option value="openai">OpenAI</option>');
+    expect(html).toContain('<option value="kimi">Kimi (Moonshot AI)</option>');
+  });
+
+  it('marks the stored choice selected, not the default', () => {
+    const html = renderSettings(popupState({ view: 'settings', badgeProvider: 'qwen' }));
+    // Scoped to the badge select itself: the ZAI platform selector renders
+    // its own `<option value="zai" selected>` and must not confuse the pin.
+    const start = html.indexOf('id="badge-provider-select"');
+    const select = html.slice(start, html.indexOf('</select>', start));
+
+    expect(select).toContain('<option value="qwen" selected>');
+    expect(select).not.toContain('<option value="zai" selected>');
+  });
+});
+
+describe('renderMain — Qwen Token Plan twin card (popup-ui spec §Qwen Token Plan Quota Line; hito-12 WU-M: visual copy of the ZAI monitor card)', () => {
+  /** A last cycle whose qwen entry carries the monthly quota window (WU-D3). */
+  function qwenQuotaSnapshot(
+    quota: { percentage?: number; resetAt?: number },
+    value: number | null = 100.28, // `null` = no balance figure at all (quota-only entry)
+  ): CycleSnapshot {
+    return {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: usage('qwen', {
+            value: value === null ? undefined : value,
+            currency: value === null ? undefined : 'CNY',
+            quota: { ...quota, fetchedAt: NOW_MS },
+          }),
+        },
+      },
+    };
+  }
+
+  it('renders the quota percentage as the card hero AND inside its monitor bar, with the resets line below (WU-M twin card)', () => {
+    const html = renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 }) }));
+    const qwen = sectionFor(html, 'qwen');
+
+    // Hero: same class, same Math.round, same threshold band as the ZAI primary (repeals the WU-D3 "no hero" pin).
+    expect(qwen).toContain('<p class="hero-percentage band-green">12%</p>'); // Math.round(11.72) = 12
+    // The SAME number again inside the monitor bar — the hito-6 dual-hero discipline, bar mirroring zai's exactly.
+    expect(qwen).toContain(
+      '<div class="bar band-green"><div class="bar-fill" style="width: 12%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">12%</span></div>',
+    );
+    // The line lost the figure to hero+bar, exactly as the ZAI 5h line did — window-label vocabulary kept.
+    expect(qwen).toContain('<p class="monitor-window">');
+    expect(qwen).toContain('Token Plan: Resets in <span class="countdown">1h 30m</span>'); // countdown from quota.resetAt at render time
+    expect(qwen).not.toContain('% used'); // the one-decimal in-line figure is repealed by the twin rule
+    expect(qwen).toContain('¥100.28'); // the balance stays below the hero
+    // Above all other card content, like the ZAI hero.
+    expect(qwen.indexOf('class="hero-percentage')).toBeLessThan(qwen.indexOf('class="usage"'));
+    expect(qwen.indexOf('class="hero-percentage')).toBeLessThan(qwen.indexOf('class="monitor"'));
+  });
+
+  it('renders whole percentages without a trailing .0; uncapped values exceed 100 in text while the bar fill caps — the ZAI bar discipline verbatim', () => {
+    const whole = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 42, resetAt: NOW_MS + 2 * 3_600_000 }) })), 'qwen');
+    expect(whole).toContain('<p class="hero-percentage band-green">42%</p>');
+    expect(whole).toContain('style="width: 42%"');
+    expect(whole).not.toContain('42.0');
+    expect(whole).toContain('Token Plan: Resets in <span class="countdown">2h 0m</span>');
+
+    const uncapped = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 127.3 }) })), 'qwen');
+    expect(uncapped).toContain('<p class="hero-percentage band-red">127%</p>'); // the server's 127.3 rounds to 127 — never capped
+    expect(uncapped).toContain('style="width: 100%"'); // fill caps at 100 exactly like the ZAI 5h bar
+    expect(uncapped).toContain('<span class="bar-pct">127%</span>'); // in-bar text stays uncapped
+    // A percentage-only quota leaves the line with no parts — the bar renders alone (the windowLine discipline).
+    expect(uncapped).not.toContain('Token Plan');
+  });
+
+  it('a reset instant without a percentage renders the resets line only — no hero and no bar, nothing synthesized', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ resetAt: NOW_MS + 45 * 60_000 }) })), 'qwen');
+
+    expect(qwen).toContain('Token Plan: Resets in <span class="countdown">45m</span>');
+    expect(qwen).not.toContain('hero-percentage'); // honest absent: nothing is synthesized
+    expect(qwen).not.toContain('class="bar'); // ZAI's absent-pct window renders the line without a bar — mirrored
+  });
+
+  it('a quota with neither figure nor reset renders no line at all — the balance carries on', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({}) })), 'qwen');
+
+    expect(qwen).not.toContain('Token Plan');
+    expect(qwen).not.toContain('hero-percentage');
+    expect(qwen).not.toContain('class="monitor"');
+    expect(qwen).toContain('¥100.28');
+  });
+
+  it('a quota-only entry (no balance value) omits the balance line gracefully — no placeholder dashes', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 }, null) })), 'qwen');
+
+    expect(qwen).toContain('<p class="usage"></p>'); // empty usage line — the established honest degradation
+    expect(qwen).not.toContain('¥');
+    expect(qwen).not.toContain('—'); // no invented placeholder
+    expect(qwen).toContain('<p class="hero-percentage band-green">12%</p>'); // the quota pct leads the card (WU-L left no balance figure)
+  });
+
+  it('quota and plan lines coexist — hero first, balance, then the quota monitor block, then the binary plan line', () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: usage('qwen', {
+            value: 100.28,
+            currency: 'CNY',
+            plan: { status: 'exhausted', resetAt: NOW_MS + 2 * 3_600_000 },
+            quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+          }),
+        },
+      },
+    };
+    const qwen = sectionFor(renderMain(popupState({ snapshot })), 'qwen');
+
+    expect(qwen).toContain('Token Plan: Resets in');
+    expect(qwen).toContain('Plan: exhausted'); // the binary plan line is unchanged
+    expect(qwen.indexOf('class="hero-percentage')).toBeLessThan(qwen.indexOf('¥100.28')); // hero above ALL content
+    expect(qwen.indexOf('¥100.28')).toBeLessThan(qwen.indexOf('Token Plan:'));
+    expect(qwen.indexOf('Token Plan:')).toBeLessThan(qwen.indexOf('Plan: exhausted')); // quota block renders FIRST of the two lines
+  });
+
+  it('repeated renders are byte-identical — the quota line is a pure function of state (W1-gap discipline)', () => {
+    const snapshot = qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 });
+    expect(renderMain(popupState({ snapshot }))).toBe(renderMain(popupState({ snapshot })));
+  });
+});
+
+describe('renderMain — click-to-choose badge + active indicator (popup-ui §Badge Provider Selector; hito-12 WU-M2)', () => {
+  /** Quota-carrying qwen entry — the twin card with a hero to click (WU-M shape). */
+  const quotaSnapshot: CycleSnapshot = {
+    results: {
+      qwen: {
+        status: 'ok',
+        usage: usage('qwen', {
+          value: 100.28,
+          currency: 'CNY',
+          quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+        }),
+      },
+    },
+  };
+
+  it('wraps every hero in the clickable chooser naming the action in its tooltip', () => {
+    // The default state chooses ZAI — the hero pin therefore carries the full
+    // affordance markup plus the chosen-provider chip in one exact string.
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+    expect(zai).toContain(
+      '<div class="hero-pick" data-action="set-badge" title="Show this provider in the toolbar badge"><p class="hero-percentage band-red">137%</p><span class="chip chip-badge">badge</span></div>',
+    );
+  });
+
+  it('a non-chosen provider hero is clickable but carries no marker', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: quotaSnapshot })), 'qwen'); // badge stays zai
+    expect(qwen).toContain(
+      '<div class="hero-pick" data-action="set-badge" title="Show this provider in the toolbar badge"><p class="hero-percentage band-green">12%</p></div>',
+    );
+    expect(qwen).not.toContain('chip-badge');
+  });
+
+  it('the chosen provider with a hero is marked beside it — exactly once', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: quotaSnapshot, badgeProvider: 'qwen' })), 'qwen');
+    expect(qwen).toContain('<p class="hero-percentage band-green">12%</p><span class="chip chip-badge">badge</span></div>');
+    expect((qwen.match(/chip-badge/g) ?? []).length).toBe(1); // marker renders once per owning card
+  });
+
+  it('a chosen card without a hero yet is marked beside the provider name — nothing synthesized', () => {
+    const planOnly: CycleSnapshot = {
+      results: { qwen: { status: 'ok', usage: usage('qwen', { plan: { status: 'available' } }) } },
+    };
+    const qwen = sectionFor(renderMain(popupState({ snapshot: planOnly, badgeProvider: 'qwen' })), 'qwen');
+    expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)<span class="chip chip-badge">badge</span></h2>');
+    expect(qwen).not.toContain('hero-percentage'); // no percentage on this card — no hero invented to click
+  });
+
+  it('the marker never leaks onto cards whose provider does not own the badge', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT })); // badge zai
+    expect(sectionFor(html, 'zai')).toContain('chip-badge');
+    for (const id of ['qwen', 'openai', 'kimi'] as const) {
+      expect(sectionFor(html, id)).not.toContain('chip-badge');
+    }
+  });
+
+  it('a chosen provider whose live entry failed marks the name row; the frozen hero stays clickable and unmarked', () => {
+    const snapshot: CycleSnapshot = {
+      results: { qwen: { status: 'error', errorClass: 'network' } },
+      lastKnown: {
+        qwen: { status: 'ok', usage: usage('qwen', { quota: { percentage: 40, fetchedAt: NOW_MS - 10 * 60_000 } }) },
+      },
+    };
+    const qwen = sectionFor(renderMain(popupState({ snapshot, badgeProvider: 'qwen' })), 'qwen');
+    expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)<span class="chip chip-badge">badge</span></h2>');
+    expect((qwen.match(/chip-badge/g) ?? []).length).toBe(1); // name row only — the dimmed freeze stays plain
+    expect(qwen).toContain('<div class="hero-pick" data-action="set-badge"'); // frozen hero is a valid pick target too
+  });
+});
+
 describe('renderMain — Qwen Plan Line (popup-ui spec §Qwen Plan Line, hito-8)', () => {
   it('renders the plan line per status: Available / exhausted · countdown / key rejected', () => {
     const available = sectionFor(renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'available' }) })), 'qwen');
@@ -597,6 +821,34 @@ describe('renderSettings — Qwen Plan Key Settings Group (popup-ui spec, hito-8
     // Site: intl default on ap-southeast-1, china selects China.
     expect(qwen).toContain('ap-southeast-1');
     expect(qwen).toContain('China');
+  });
+});
+
+describe('renderSettings — stacked qwen credential form (user-reported squeeze fix)', () => {
+  it('renders the qwen pair fields stacked: one labeled field per line, controls on their own row', () => {
+    const qwen = sectionFor(renderSettings(popupState({ view: 'settings' })), 'qwen');
+    const formStart = qwen.indexOf('<form class="key-form" data-provider="qwen">');
+    const pairForm = qwen.slice(formStart, qwen.indexOf('</form>', formStart));
+
+    expect(pairForm).toContain('<label for="key-input-qwen-ak">Access Key ID</label>');
+    expect(pairForm).toContain('<label for="key-input-qwen-sk">Access Key Secret</label>');
+    expect((pairForm.match(/class="credential-field"/g) ?? []).length).toBe(2); // one row per field
+    expect(pairForm.indexOf('class="form-actions"')).toBeGreaterThan(pairForm.lastIndexOf('class="credential-field"')); // controls AFTER the fields
+    const actions = pairForm.slice(pairForm.indexOf('class="form-actions"'));
+    expect(actions).toContain('id="key-add-qwen"');
+    expect(actions).toContain('id="key-revoke-qwen"');
+    expect((actions.match(/<input/g) ?? []).length).toBe(0); // the controls row carries no field
+  });
+
+  it('renders the plan-key group stacked the same way — its label owns a full-width row above its field', () => {
+    const qwen = sectionFor(renderSettings(popupState({ view: 'settings' })), 'qwen');
+    const groupStart = qwen.indexOf('data-provider="qwen-plan"');
+    const group = qwen.slice(groupStart, qwen.indexOf('</form>', groupStart));
+
+    expect(group).toContain('<label for="key-input-qwen-plan">Plan key (sk-sp-)</label>');
+    expect((group.match(/class="credential-field"/g) ?? []).length).toBe(1);
+    expect((group.match(/class="form-actions"/g) ?? []).length).toBe(1);
+    expect(group.indexOf('class="form-actions"')).toBeGreaterThan(group.lastIndexOf('class="credential-field"'));
   });
 });
 
@@ -916,9 +1168,13 @@ describe('renderMain — dual hero percentage (popup-ui §Provider List Renderin
     expect(zai.indexOf('class="hero-percentage')).toBeLessThan(zai.indexOf('5h:'));
   });
 
-  it('renders NO hero on monetary cards — the balance stays the leading figure', () => {
+  it('renders NO hero on cards without a headline percentage — the balance stays the leading figure (narrowed by WU-M: a quota-carrying qwen IS a hero card)', () => {
     const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
 
+    // FULL_SNAPSHOT's qwen carries NO quota — with no headline percentage it
+    // stays hero-free (the twin-card hero for a quota-carrying qwen is pinned
+    // in the WU-M describe above; the plan-only/no-quota shapes stay pinned
+    // green in the plan-line describe).
     for (const id of ['qwen', 'openai', 'kimi'] as const) {
       expect(sectionFor(html, id)).not.toContain('hero-percentage');
     }

@@ -94,6 +94,112 @@ Verification levels:
 - Source: community evidence on the Qwen token-plan (coding-plan) service,
   maintainer-ratified 2026-09.
 
+### Qwen token-plan quota — session-token surface — discovered-live
+
+- Plan identity: the maintainer's international subscription is a **Token Plan (personal,
+  Standard tier)** — NOT the Coding Plan commodity API:
+  `codingPlan.queryCodingPlanInstanceInfoV2` answers 200 with `codingPlanInstanceInfos: []`
+  for every commodity code tried. The quota lives on this token-plan surface, not on the
+  BSS balance or the probe.
+- Endpoint: `POST https://bailian-singapore-cs.alibabacloud.com/cli/api.json?action=IntlBroadScopeAspnGateway&product=sfm_bailian&api=zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2Fusage`
+- Auth: `Authorization: Bearer <cliAccessToken>` — a console access token, NOT AK/SK
+  signing on the gateway itself. Mint path 1 (live-captured): the vendor CLI's browser
+  device-flow. Mint path 2 (headless, live-verified end-to-end 2026-10-25): the AK/SK-signed
+  `GenerateCLIAccessToken` on host `modelstudio.ap-southeast-1.aliyuncs.com` — `POST
+  /modelstudio/cli/generateAccessToken` with body `{}`, headers `x-acs-action:
+  GenerateCLIAccessToken` + `x-acs-version: 2026-02-10`, ACS3-HMAC-SHA256 signing. The
+  response carries `cliAccessToken` TOP LEVEL AND ONLY ON SUCCESS (failure answers
+  top-level `Code`/`Message`; the raw failure body is never echoed) — the token value
+  is never stored or logged. The
+  cn-beijing twin `modelstudio.cn-beijing.aliyuncs.com` is NOT live-verified and is NOT
+  allowlisted.
+- Required authorizations (user-facing setup, both mandatory): (1) a RAM custom policy
+  allowing action `modelstudio:GenerateCLIAccessToken` — the system policy
+  `AliyunModelStudioReadOnlyAccess` does NOT include it (Generate is classified write);
+  (2) Model Studio WORKSPACE membership for the RAM user (console
+  Settings→Permissions→Add User, Administrator role) — without it the quota gateway
+  answers `BailianGateway.Team.NotAuthorised` even with a valid token.
+- Mint gotcha (ACS3 canonicalization): the canonical sections are joined with `\n` while
+  the canonical-headers block itself ends with a trailing newline — producing a BLANK LINE
+  before the `SignedHeaders` section; a missing or extra newline there yields
+  `SignatureDoesNotMatch`.
+- End-to-end PASS (headless chain): mint → gateway usage call → live
+  `{ "per1MonthPercentage": 0.1250, "per1MonthResetTime": 1793721600000 }` — the
+  minted token authenticated the call directly with the static, account-neutral body.
+- Request body (form-urlencoded): `params=<JSON>&region=ap-southeast-1`, where the JSON is
+  `{"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN"}}}`.
+  `switchAgent` is omitted entirely (live probe: omitted = SUCCESS,
+  `switchAgent: 0` = `BailianGateway.Workspace.NotAuthorised`) — the body is static,
+  no account identifiers.
+- Envelope keys (pinned by the REAL live usage capture, 2026-10-25, first pass through the
+  extension): success gates on the gateway `code` "200" AND `data.success === true`; the payload
+  lives at `data.DataV2.data.data`, whose inner wrapper is `{ "msg": "Success.", "code": "SUCCESS",
+  "data": { ...payload... }, "requestId": "...", "success": true }` — this surface carries **NO
+  `failed` field** (the earlier `failed: false` capture belonged to the coding-plan commodity API,
+  a DIFFERENT surface). A live body-level failure answers INSIDE HTTP 200 as
+  `{ "code": "200", "data": { "success": false, "httpStatus": 200, "errorCode": "Bad Request", "errorMsg": "Bad Request" }, "httpStatusCode": "200", "successResponse": true }`
+  — `data.success: false` with NO `DataV2`.
+- Response semantics (COMPLETE surface — exactly two fields):
+  `{ "per1MonthPercentage": 0.1172, "per1MonthResetTime": 1793721600000 }`.
+  - `per1MonthPercentage` is a **0..1 USED fraction** — NOT remaining (live cross-check:
+    console showed "Remaining 88.4%" at ≈11.7% used). The 0..1 fraction must map to the
+    0-100 window convention at the parse level; the passthrough philosophy stays uncapped —
+    no percentage, used, or total is ever synthesized beyond what the fields carry.
+  - `per1MonthResetTime` is epoch milliseconds carried **verbatim** as the reset instant
+    (the countdown renders from it at display time).
+  - There is NO used/total token count on this surface — the console's "Plan quota 45,000"
+    comes from a different subscription API, and no total is inferred from it. Values moved
+    between two live calls: near-real-time freshness.
+- Gateway matrix (reference only, from vendor CLI source): regions `cn-beijing` and
+  `ap-southeast-1`; international gateways `bailian-cs.console.alibabacloud.com`
+  (cn-beijing) and `bailian-singapore-cs.alibabacloud.com` (ap-southeast-1, action
+  `IntlBroadScopeAspnGateway`). Only the live-captured ap-southeast-1 gateway is
+  allowlisted; the china site carries NO live-verified quota surface, so the request
+  builders answer null for it (hito-12 C1) — never a guessed cn host in dispatch.
+- Verification status: honestly **community** — no official documentation exists for the
+  endpoint; the evidence is the vendor's own CLI source (`bailian-cli` 2.5.1 on npm) plus
+  maintainer live captures (2026-10-25, international account). The allowlist entry-level
+  `verification: official` describes the BSS hosts; this subsection carries the quota
+  surface's weaker evidence class.
+- Sources: `bailian-cli` 2.5.1 (npm) for the request shape and gateway matrix; maintainer
+  live captures cross-checked against the console quota page for the response values;
+  `scripts/spike-token-mint.ps1` for the headless AK/SK token-mint probe (2026-10-25).
+- Browser WAF constraint + DNR session-rule mitigation (hito-12 WU-F, live-verified
+  2026-10-25): from the MV3 service worker the gateway hop always carries the
+  forbidden `Origin: chrome-extension://<id>` header, and Alibaba's WAF answers that
+  shape with a **302 to err.taobao.com** — app-level auth is never even reached. A
+  token-less read-only header-variant probe separates the layers: chrome-extension
+  Origin → 302 err.taobao; `Origin: https://modelstudio.console.alibabacloud.com` →
+  200 `BailianGateway.Login.NotLogined` (a real app-level answer); `Sec-Fetch-*` and
+  the UA are irrelevant. `fetch()` can neither set nor remove the forbidden Origin
+  header from a worker, so the worker installs ONE `declarativeNetRequest` SESSION
+  rule at start (replaces-by-id, idempotent across SW restarts) that rewrites the
+  gateway request's Origin to that public console origin, scoped to our own extension
+  as initiator (`initiatorDomains: [runtime.id]`), the gateway host, and the
+  `/cli/api.json` path — see `extension/src/dnr/gateway-origin-rule.ts`.
+- Session-rule persistence gotcha (hito-12 WU-J, live E2E 2026-10-25): DNR session
+  rules survive service-worker restarts for the BROWSER's lifetime, so the startup
+  install MUST be remove+add by id in ONE `updateSessionRules` call
+  (`removeRuleIds: [GATEWAY_ORIGIN_RULE_ID]` beside `addRules` — the canonical
+  idempotent pattern, never a getSessionRules roundtrip first). A bare `addRules`
+  re-install throws `Error: Rule with id 1 does not have a unique ID.` and the rule
+  is never (re)applied on that start — observed verbatim in the maintainer's SW
+  console. The rule id is frozen at 1: bumping it would orphan the id-1 rule still
+  resident in long-lived browser sessions.
+- WHY this DNR use is NOT the hito-9-rejected header injection
+  (`openspec/changes/hito-9-qwen-console-session/exploration.md` §Lane 1(c), "Ruled
+  out"): that proposal would persist cookie/session **VALUES** as rule data — secret
+  material in browser-managed storage, bypassing the credential seam. The rule here
+  carries only a **public static string** (the console origin) as a WAF-compatibility
+  header plus the install's own extension id as initiator scope: zero credentials,
+  and the Bearer token still rides exclusively through the client's session-marker
+  seam (`extension/src/network/client.ts`, WU-C1 — untouched). The rule is
+  session-scoped (never persisted across browser restarts) and header-scoped
+  (`modifyHeaders` on the `origin` request header only; the tests pin that no
+  cookie/authorization operation can appear). **No allowlist or manifest-host change
+  is implied**: a session-rule header rewrite is not a new network destination — the
+  console origin is never a fetch target and `host_permissions` stay as pinned.
+
 ## OpenAI — `api.openai.com` — verified-official
 
 - Endpoint: `GET https://api.openai.com/v1/organization/costs`.
@@ -132,7 +238,9 @@ AD-5), scoped per provider. This block must stay structurally identical to
     "hosts": [
       "business.aliyuncs.com",
       "business.ap-southeast-1.aliyuncs.com",
-      "token-plan.ap-southeast-1.maas.aliyuncs.com"
+      "token-plan.ap-southeast-1.maas.aliyuncs.com",
+      "bailian-singapore-cs.alibabacloud.com",
+      "modelstudio.ap-southeast-1.aliyuncs.com"
     ],
     "verification": "official"
   },

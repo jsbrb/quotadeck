@@ -16,20 +16,36 @@ export { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider };
 /** Concrete class per metadata id — metadata stays free of implementations. */
 const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
   zai: () => new ZaiProvider(),
+  // Unregistered below (hito-12 WU-L): the class stays wired and exported for
+  // a future pay-as-you-go balance — no BSS code is deleted.
   qwen: () => new QwenProvider(),
   openai: () => new OpenAiProvider(),
   kimi: () => new KimiProvider(),
 };
 
 /**
- * Registry built from PROVIDER_METADATA in its pinned order, filtered to
- * SHIPPED_PROVIDER_IDS (hito-10): non-shipped implementations stay in source
- * but never register, so the worker refreshes only shipped providers.
+ * Providers the ENGINE dispatches for a cycle (hito-12 WU-L, product decision
+ * 2026-10-25): qwen is QUOTA-ONLY — the BSS balance leg is SUSPENDED because
+ * a coding-plan subscription balance is noise ($0.00) and the balance leg's
+ * error-wins merge would suppress a perfectly good quota. The qwen popup card
+ * still renders: the tick-level QwenQuotaStep synthesizes the quota-only ok
+ * entry and QwenPlanStep merges the plan probe, both OUTSIDE this registry
+ * (background.ts). SHIPPED_PROVIDER_IDS deliberately KEEPS qwen — popup
+ * visibility, the badge-provider choice and the manifest host pinning all
+ * subset through it.
+ */
+export const ENGINE_DISPATCHED_PROVIDER_IDS: readonly ProviderId[] = ['zai'];
+
+/**
+ * Registry built from PROVIDER_METADATA in its pinned order, filtered to the
+ * shipped AND engine-dispatched intersection (hito-10 shipping filter, hito-12
+ * WU-L quota-only qwen): everything else stays in source but never registers,
+ * so the worker refreshes only the dispatched providers.
  */
 export function createDefaultRegistry(): ProviderRegistry {
   const registry = new ProviderRegistry();
   for (const { id } of PROVIDER_METADATA) {
-    if (SHIPPED_PROVIDER_IDS.includes(id)) {
+    if (SHIPPED_PROVIDER_IDS.includes(id) && ENGINE_DISPATCHED_PROVIDER_IDS.includes(id)) {
       registry.register(PROVIDER_CLASSES[id]());
     }
   }

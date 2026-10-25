@@ -25,7 +25,7 @@
 // (platform/browser-api.ts); tests pass the in-memory fake from src/testing/.
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import type { LineItem, MonitorWindows, NormalizedUsage, PlanInfo } from '../core/usage';
+import type { LineItem, MonitorWindows, NormalizedUsage, PlanInfo, TokenPlanQuota } from '../core/usage';
 import type { StorageArea } from './key-store';
 
 /** Storage key for the last completed cycle snapshot. */
@@ -138,6 +138,25 @@ function isPlanInfo(value: unknown): value is PlanInfo {
   );
 }
 
+/**
+ * hito-12 WU-C2 shape check: quota fields are finite-number-or-absent with a
+ * required FINITE fetchedAt. The uncapped passthrough (percentage 150) is
+ * VALID as stored — validation never clamps; NaN/Infinity/string garbage
+ * rejects the whole snapshot exactly like the plan malformed shapes do.
+ */
+function isTokenPlanQuota(value: unknown): value is TokenPlanQuota {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const quota = value as Record<string, unknown>;
+  return (
+    (quota.percentage === undefined || (typeof quota.percentage === 'number' && Number.isFinite(quota.percentage))) &&
+    (quota.resetAt === undefined || (typeof quota.resetAt === 'number' && Number.isFinite(quota.resetAt))) &&
+    typeof quota.fetchedAt === 'number' &&
+    Number.isFinite(quota.fetchedAt)
+  );
+}
+
 function isNormalizedUsage(value: unknown): value is NormalizedUsage {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -154,6 +173,7 @@ function isNormalizedUsage(value: unknown): value is NormalizedUsage {
     (usage.breakdown === undefined || (Array.isArray(usage.breakdown) && usage.breakdown.every(isLineItem))) &&
     (usage.windows === undefined || isMonitorWindows(usage.windows)) &&
     (usage.plan === undefined || isPlanInfo(usage.plan)) &&
+    (usage.quota === undefined || isTokenPlanQuota(usage.quota)) &&
     typeof usage.fetchedAt === 'number'
   );
 }

@@ -9,9 +9,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { QWEN_AK_SK_GUIDANCE, QWEN_PLAN_KEY_GUIDANCE } from '../core/credentials';
 import type { Credential, ProviderId } from '../core/provider';
 import type { BrowserApi } from '../platform/browser-api';
 import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
+import { BADGE_PROVIDER_STORAGE_KEY } from '../storage/badge-provider-store';
+import { QWEN_SITE_STORAGE_KEY } from '../storage/qwen-site-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
 import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from '../storage/snapshot-store';
 import { FakeBrowser, type FakeStorageArea } from '../testing/fake-browser';
@@ -46,7 +49,7 @@ const PROVIDER_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
   kimi: { type: 'bearer', token: 'sk-kimi-bbbb2222' },
 };
 
-/** Seeds every provider credential — the shipped-subset filter then keeps only the zai card (hito-10). */
+/** Seeds every provider credential — the shipped-subset filter then keeps the zai and qwen cards (hito-12). */
 async function seedAllKeys(local: FakeStorageArea): Promise<void> {
   const keys = new KeyStore(local);
   for (const [id, credential] of Object.entries(PROVIDER_CREDENTIALS) as Array<[ProviderId, Credential]>) {
@@ -54,7 +57,7 @@ async function seedAllKeys(local: FakeStorageArea): Promise<void> {
   }
 }
 
-/** Seeds one raw ZAI credential (the only shipped slot). */
+/** Seeds one raw ZAI credential (a shipped slot). */
 async function seedZaiKey(local: FakeStorageArea, token: string): Promise<void> {
   await new KeyStore(local).saveCredential('zai', { type: 'raw', token } as const);
 }
@@ -123,7 +126,7 @@ const LAST_CYCLE: CycleSnapshot = {
 };
 
 describe('controller — Current Cycle Data on Open, main view (popup-ui spec)', () => {
-  it('opens on the main view: usage, ZAI monitor block — and ONLY the shipped zai card (hito-10)', async () => {
+  it('opens on the main view: usage, ZAI monitor block — and ONLY the shipped zai + qwen cards (hito-12 re-ship)', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, LAST_CYCLE);
     await seedAllKeys(h.local); // hito-6: cards render for keyed providers only
@@ -137,25 +140,54 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     expect(document.querySelector('.hero-percentage')?.textContent).toBe('137%'); // dual hero (hito-6)
     expect(text).toContain('Weekly: 42% · 5040 / 12000');
     expect(text).toContain('MCP: 3 / 60');
-    // Shipped-subset pin (hito-10): stored keys for qwen/openai/kimi never
-    // render — the card list is the shipped subset, not the keyed set.
+    // Shipped-subset pin (hito-12): qwen re-ships and renders its card;
+    // stored keys for openai/kimi still never render — the card list is the
+    // shipped subset, not the keyed set.
+    expect(text).toContain('Auth failed'); // qwen error entry, per class (AD-21/22)
+    expect(text).toContain('Qwen (Alibaba Cloud BSS)'); // qwen re-shipped on this branch
     expect(text).not.toContain('$20.00'); // openai unshipped
     expect(text).not.toContain('¥88.88'); // kimi unshipped
-    expect(text).not.toContain('Auth failed'); // qwen unshipped — its error entry never renders
-    expect(text).not.toContain('Qwen (Alibaba Cloud BSS)');
     expect(text).not.toContain('OpenAI');
     expect(text).not.toContain('Kimi (Moonshot AI)');
   });
 
+  it('the qwen card renders the token-plan quota as hero + in-bar figure + resets line (hito-12 WU-M twin card)', async () => {
+    const h = makePopupHarness();
+    await seedSnapshot(h.local, {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: {
+            providerId: 'qwen',
+            kind: 'balance',
+            value: 100.28,
+            currency: 'CNY',
+            quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+            fetchedAt: NOW_MS,
+          },
+        },
+      },
+    });
+    await seedAllKeys(h.local);
+    mountApp();
+    await openPopup(h);
+
+    const qwen = document.querySelector('section[data-provider="qwen"]');
+    expect(qwen?.querySelector('.hero-percentage')?.textContent).toBe('12%'); // Math.round(11.72) — the twin card's hero
+    expect(qwen?.querySelector('.bar-pct')?.textContent).toBe('12%'); // the SAME figure inside the monitor bar
+    expect(qwen?.textContent).toContain('Token Plan: Resets in 1h 30m'); // countdown from the injected now (the in-line pct is repealed)
+    expect(qwen?.textContent).toContain('¥100.28');
+  });
+
   it('opens with an empty state per KEYED SHIPPED provider when no cycle has completed yet', async () => {
     const h = makePopupHarness();
-    await seedAllKeys(h.local); // keyed, no snapshot → one "No cycle data yet" card (zai only, hito-10)
+    await seedAllKeys(h.local); // keyed, no snapshot → one "No cycle data yet" card per shipped provider (hito-12)
     mountApp();
 
     await openPopup(h);
 
     const text = document.body.textContent ?? '';
-    expect(text.match(/No cycle data yet/g)).toHaveLength(1);
+    expect(text.match(/No cycle data yet/g)).toHaveLength(2); // zai + qwen; openai/kimi stay unshipped
   });
 
   it('keyless providers render no card at all on open — the noise card is gone (hito-6)', async () => {
@@ -188,10 +220,14 @@ describe('controller — Settings Gear Surface (popup-ui spec)', () => {
 
     document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('Settings'));
-    // One form per SHIPPED provider (hito-10): the qwen section (and its
-    // plan-key group) rides the unshipped list — zai is the only form.
-    expect(document.querySelectorAll('#app form.key-form')).toHaveLength(1);
-    expect(document.querySelector('#app form.key-form')?.getAttribute('data-provider')).toBe('zai');
+    // One form per SHIPPED provider plus the qwen plan-key group (hito-12
+    // re-ship): zai, the qwen AK/SK pair, and the qwen plan group — openai
+    // and kimi ride the unshipped list.
+    expect([...document.querySelectorAll('#app form.key-form')].map((form) => form.getAttribute('data-provider'))).toEqual([
+      'zai',
+      'qwen',
+      'qwen-plan',
+    ]);
 
     document.querySelector<HTMLButtonElement>('[data-action="back"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('quotadeck'));
@@ -234,6 +270,37 @@ describe('controller — Key Addition with Validation, inside the gear (popup-ui
     expect(document.documentElement.textContent ?? '').not.toContain(key); // full-key DOM sweep
   });
 
+  it('a qwen AK/SK pair submits from TWO fields, stores one JSON pair, masks both parts', async () => {
+    const h = makePopupHarness();
+    await openSettings(h);
+
+    const accessKeyId = 'LTAI5tPopupAccessKey';
+    const accessKeySecret = 'PopupPairSecret0000000000000';
+    document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value = accessKeyId;
+    document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value = accessKeySecret;
+    document.querySelector<HTMLButtonElement>('#key-add-qwen')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'));
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ accessKeyId, accessKeySecret }); // one JSON pair (AD-17)
+    expect(document.body.textContent).toContain('AccessKeySecret: ••••0000');
+    expect(document.documentElement.textContent ?? '').not.toContain(accessKeySecret); // full pair never in DOM
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value).toBe('');
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value).toBe('');
+  });
+
+  it('a DashScope sk- value in the qwen pair is rejected with the Alibaba guidance and nothing persists', async () => {
+    const h = makePopupHarness();
+    await openSettings(h);
+
+    document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value = 'LTAI5tValidAccessKey';
+    document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value = 'sk-dashscope-abcdef123456';
+    document.querySelector<HTMLButtonElement>('#key-add-qwen')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain(QWEN_AK_SK_GUIDANCE)); // rendered verbatim
+    expect(h.local.snapshot()[storageKey('qwen')]).toBeUndefined();
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!.value).toBe('sk-dashscope-abcdef123456'); // keeps text — still editing (AD-15)
+  });
+
   it('an empty input is rejected with guidance and nothing is persisted', async () => {
     const h = makePopupHarness();
     await openSettings(h);
@@ -271,6 +338,22 @@ describe('controller — Key Addition with Validation, inside the gear (popup-ui
     await vi.waitFor(() => expect(document.body.textContent).toContain('••••7766'));
     expect(h.local.snapshot()[storageKey('zai')]).toBe(key);
     expect(document.documentElement.textContent ?? '').not.toContain(key);
+  });
+
+  it('Enter on a qwen pair input submits the pair from both fields', async () => {
+    const h = makePopupHarness();
+    await openSettings(h);
+
+    document.querySelector<HTMLInputElement>('#key-input-qwen-ak')!.value = 'LTAI5tEnterAccessKeyId';
+    const sk = document.querySelector<HTMLInputElement>('#key-input-qwen-sk')!;
+    sk.value = 'EnterPairSecret00000000000000000';
+    sk.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('AccessKeyId: ••••eyId'));
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({
+      accessKeyId: 'LTAI5tEnterAccessKeyId',
+      accessKeySecret: 'EnterPairSecret00000000000000000',
+    });
   });
 });
 
@@ -332,6 +415,370 @@ describe('controller — ZAI Platform Selector (popup-ui spec §ZAI Platform Sel
 
     expect(h.local.snapshot()[storageKey('zai')]).toBe('sk-zai-isolated-9999'); // keys untouched
     expect(document.body.textContent).toContain('••••9999'); // masked state intact
+  });
+});
+
+describe('controller — Qwen Site Selector (popup-ui spec §Qwen Site Selector)', () => {
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#qwen-site-select')).not.toBeNull());
+  }
+
+  it('defaults to International with the unmasked default-marking label when no preference is stored', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    expect(select.value).toBe('international');
+    expect(select.selectedOptions[0]!.textContent).toBe('International (default)'); // label rendered unmasked
+  });
+
+  it('selecting China persists the preference and re-renders the selector on it', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    select.value = 'china';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(h.local.snapshot()[QWEN_SITE_STORAGE_KEY]).toBe('china'));
+    const reRendered = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    expect(reRendered.value).toBe('china'); // the re-render reflects the persisted site
+  });
+
+  it('reads the stored preference on load — China shows selected after reopening the popup', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [QWEN_SITE_STORAGE_KEY]: 'china' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#qwen-site-select')!.value).toBe('china');
+  });
+
+  it('an invalid stored preference defaults the selector to International (read-on-load contract)', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [QWEN_SITE_STORAGE_KEY]: 'singapore' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#qwen-site-select')!.value).toBe('international');
+  });
+
+  it('a site switch never touches the credential namespace', async () => {
+    const h = makePopupHarness();
+    const pair = PROVIDER_CREDENTIALS.qwen as Extract<Credential, { type: 'ak-sk' }>;
+    await new KeyStore(h.local).saveCredential('qwen', pair); // the pair the selector's own section carries
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#qwen-site-select')!;
+    select.value = 'china';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(h.local.snapshot()[QWEN_SITE_STORAGE_KEY]).toBe('china'));
+
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair untouched
+      accessKeyId: pair.accessKeyId,
+      accessKeySecret: pair.accessKeySecret,
+    });
+    expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'); // masked state intact
+  });
+});
+
+describe('controller — Badge Provider Selector (popup-ui spec §Badge Provider Selector; hito-12 WU-D2)', () => {
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#badge-provider-select')).not.toBeNull());
+  }
+
+  it('defaults to ZAI with the unmasked displayName label when no preference is stored', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    expect(select.value).toBe('zai');
+    expect(select.selectedOptions[0]!.textContent).toBe('ZAI (Zhipu AI)'); // label rendered unmasked
+  });
+
+  it('lists exactly the SHIPPED providers in registry order — data-driven, no unshipped options', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const options = [...document.querySelectorAll('#badge-provider-select option')];
+    expect(options.map((option) => option.getAttribute('value'))).toEqual(['zai', 'qwen']);
+    expect(options.map((option) => option.textContent)).toEqual(['ZAI (Zhipu AI)', 'Qwen (Alibaba Cloud BSS)']);
+  });
+
+  it('selecting Qwen persists the preference and re-renders the selector on it', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    select.value = 'qwen';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+    const reRendered = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    expect(reRendered.value).toBe('qwen'); // the re-render reflects the persisted choice
+  });
+
+  it('reads the stored preference on load — Qwen shows selected after reopening the popup', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'qwen' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('qwen');
+  });
+
+  it('an invalid stored preference defaults the selector to ZAI (read-on-load contract)', async () => {
+    const h = makePopupHarness();
+    await h.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'deepseek' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('zai');
+  });
+
+  it('a badge-provider switch never touches the credential namespace', async () => {
+    const h = makePopupHarness();
+    await seedZaiKey(h.local, 'sk-zai-isolated-8888');
+    await openSettingsView(h);
+
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    select.value = 'qwen';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+
+    expect(h.local.snapshot()[storageKey('zai')]).toBe('sk-zai-isolated-8888'); // keys untouched
+    expect(document.body.textContent).toContain('••••8888'); // masked state intact
+  });
+});
+
+describe('controller — Click-to-Choose Badge Provider (hito-12 WU-M2)', () => {
+  /** Cycle where BOTH shipped cards carry a hero: zai 5h 137 + qwen quota 11.72. */
+  const TWIN_CYCLE: CycleSnapshot = {
+    results: {
+      zai: LAST_CYCLE.results.zai!,
+      qwen: {
+        status: 'ok',
+        usage: {
+          providerId: 'qwen',
+          kind: 'balance',
+          value: 100.28,
+          currency: 'CNY',
+          quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+          fetchedAt: NOW_MS,
+        },
+      },
+    },
+  };
+
+  async function openWithTwins(h: ReturnType<typeof makePopupHarness>): Promise<void> {
+    await seedSnapshot(h.local, TWIN_CYCLE);
+    await seedAllKeys(h.local);
+    mountApp();
+    await openPopup(h);
+  }
+
+  it('clicking a card hero persists that provider and moves the indicator in the immediate re-render', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+
+    // Badge defaults to zai: the marker sits on the ZAI hero, not the qwen one.
+    expect(document.querySelector('section[data-provider="zai"] .chip-badge')?.textContent).toBe('badge');
+    expect(document.querySelector('section[data-provider="qwen"] .chip-badge')).toBeNull();
+
+    document.querySelector<HTMLElement>('section[data-provider="qwen"] [data-action="set-badge"]')!.click();
+    // Wait for the optimistic re-render itself: the fake storage map updates
+    // synchronously inside the click, while writeBadgeProvider's promise chain
+    // still has to reach the state update + render() — waiting on the store
+    // value alone would race the re-render it exists to trigger.
+    await vi.waitFor(() => expect(document.querySelector('section[data-provider="qwen"] .chip-badge')?.textContent).toBe('badge'));
+
+    // The indicator moved to the clicked card without any reopening…
+    expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'); // …and it went through the same store wrapper…
+    expect(document.querySelector('section[data-provider="zai"] .chip-badge')).toBeNull(); // …the old owner is unmarked
+    // …and both heroes stay valid pick targets.
+    expect(document.querySelectorAll('[data-action="set-badge"]').length).toBe(2);
+  });
+
+  it('the settings dropdown reflects the clicked choice (both paths write one store)', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+
+    document.querySelector<HTMLElement>('section[data-provider="qwen"] [data-action="set-badge"]')!.click();
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#badge-provider-select')).not.toBeNull());
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('qwen');
+  });
+
+  it('a hero click never fires the refresh alarm — the toolbar badge updates on the next tick', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+    const createSpy = vi.spyOn(h.browser.alarms, 'create');
+
+    document.querySelector<HTMLElement>('section[data-provider="qwen"] [data-action="set-badge"]')!.click();
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+
+    expect(createSpy).not.toHaveBeenCalled(); // no refresh from the popup; the tick owns the badge
+  });
+
+  it('a data-provider payload that is unshipped or invalid is ignored — no write, marker stays', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+
+    const app = document.getElementById('app')!;
+    const forge = (provider: string): HTMLElement => {
+      const section = document.createElement('section');
+      section.setAttribute('data-provider', provider);
+      section.innerHTML = '<div class="hero-pick" data-action="set-badge"><p class="hero-percentage band-red">99%</p></div>';
+      app.appendChild(section);
+      return section.querySelector<HTMLElement>('[data-action="set-badge"]')!;
+    };
+
+    forge('kimi').click(); // known ProviderId, NOT shipped — the click guard is shipped-wide
+    forge('deepseek').click(); // not even a known provider id
+    await Promise.resolve(); // flush microtasks so a wrong write would surface
+
+    expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBeUndefined(); // nothing persisted
+    expect(document.querySelector('section[data-provider="zai"] .chip-badge')).not.toBeNull(); // owner unmoved
+  });
+});
+
+describe('controller — Qwen Plan Key Settings Group (popup-ui spec §Qwen Plan Key Settings Group, hito-8)', () => {
+  const PLAN_SLOT_KEY = `${KEY_STORAGE_PREFIX}qwen-plan`;
+  const PAIR_CREDENTIAL = PROVIDER_CREDENTIALS.qwen as Extract<Credential, { type: 'ak-sk' }>;
+
+  async function openSettingsView(h: { api: BrowserApi }): Promise<void> {
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#key-input-qwen-plan')).not.toBeNull());
+  }
+
+  it('a valid sk-sp- key persists through the plan slot and displays masked; the stored pair is unchanged', async () => {
+    const h = makePopupHarness();
+    await new KeyStore(h.local).saveCredential('qwen', PAIR_CREDENTIAL); // pair stored first
+    await openSettingsView(h);
+
+    const planKey = 'sk-sp-plan-key-abcd1234';
+    document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value = planKey;
+    document.querySelector<HTMLButtonElement>('#key-add-qwen-plan')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBe(planKey); // persisted through the plan slot
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair untouched
+      accessKeyId: PAIR_CREDENTIAL.accessKeyId,
+      accessKeySecret: PAIR_CREDENTIAL.accessKeySecret,
+    });
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value).toBe(''); // cleared on valid submit
+    expect(document.documentElement.textContent ?? '').not.toContain(planKey); // full key never in DOM
+  });
+
+  it('a non-sk-sp value is rejected with the plan-key guidance and nothing persists', async () => {
+    const h = makePopupHarness();
+    await openSettingsView(h);
+
+    document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value = 'sk-ordinary-dashscope-key';
+    document.querySelector<HTMLButtonElement>('#key-add-qwen-plan')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain(QWEN_PLAN_KEY_GUIDANCE));
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBeUndefined();
+    expect(document.querySelector<HTMLInputElement>('#key-input-qwen-plan')!.value).toBe('sk-ordinary-dashscope-key'); // keeps text
+  });
+
+  it('plan guidance and the static AK/SK guidance are distinct — the pair copy never regresses', async () => {
+    expect(QWEN_PLAN_KEY_GUIDANCE).not.toBe(QWEN_AK_SK_GUIDANCE);
+  });
+
+  it('revoking the plan key leaves the AK/SK pair stored and displayed masked', async () => {
+    const h = makePopupHarness();
+    const keys = new KeyStore(h.local);
+    await keys.saveCredential('qwen', PAIR_CREDENTIAL);
+    await keys.saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
+    await openSettingsView(h);
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
+
+    document.querySelector<HTMLButtonElement>('#key-revoke-qwen-plan')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain('••••1234'));
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBeUndefined();
+    expect(h.local.snapshot()[storageKey('qwen')]).toEqual({ // pair survives the plan revoke
+      accessKeyId: PAIR_CREDENTIAL.accessKeyId,
+      accessKeySecret: PAIR_CREDENTIAL.accessKeySecret,
+    });
+    expect(document.body.textContent).toContain('AccessKeyId: ••••sKey'); // still displayed masked
+  });
+
+  it('revoking the AK/SK pair leaves the plan key stored and displayed masked', async () => {
+    const h = makePopupHarness();
+    const keys = new KeyStore(h.local);
+    await keys.saveCredential('qwen', PAIR_CREDENTIAL);
+    await keys.saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
+    await openSettingsView(h);
+    await vi.waitFor(() => expect(document.body.textContent).toContain('Plan key: ••••1234'));
+
+    document.querySelector<HTMLButtonElement>('#key-revoke-qwen')!.click();
+
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain('AccessKeyId: ••••sKey'));
+    expect(h.local.snapshot()[storageKey('qwen')]).toBeUndefined();
+    expect(h.local.snapshot()[PLAN_SLOT_KEY]).toBe('sk-sp-plan-key-abcd1234'); // plan survives the pair revoke
+    expect(document.body.textContent).toContain('Plan key: ••••1234');
+  });
+});
+
+describe('controller — stacked qwen settings form (user-reported squeeze fix)', () => {
+  it('renders one labeled field per row for the qwen pair and the plan group, controls on their own rows', async () => {
+    const h = makePopupHarness();
+    mountApp();
+    await openPopup(h);
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#key-input-qwen-plan')).not.toBeNull());
+
+    for (const formId of ['qwen', 'qwen-plan'] as const) {
+      const form = document.querySelector<HTMLFormElement>(`form[data-provider="${formId}"]`)!;
+      const fields = form.querySelectorAll('.credential-field');
+      expect(fields.length).toBe(formId === 'qwen' ? 2 : 1); // one row per credential field
+      for (const field of fields) {
+        expect(field.querySelectorAll('input')).toHaveLength(1); // never two fields sharing a row
+        expect(field.querySelector('label')).not.toBeNull(); // each field carries its own label
+      }
+      const actions = form.querySelectorAll('.form-actions');
+      expect(actions).toHaveLength(1); // controls live on their own line after the fields
+      expect(actions[0]!.querySelectorAll('button')).toHaveLength(2); // save + revoke together
+      expect(actions[0]!.querySelectorAll('input')).toHaveLength(0); // no field inside the controls row
+    }
+  });
+});
+
+describe('controller — plan-only qwen card (popup-ui spec §Qwen Plan Line, hito-8)', () => {
+  it('a stored plan key with no pair renders the qwen card showing the plan line and no balance', async () => {
+    const h = makePopupHarness();
+    await new KeyStore(h.local).saveCredential('qwen-plan', { type: 'qwen-plan', token: 'sk-sp-plan-key-abcd1234' });
+    await seedSnapshot(h.local, {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: {
+            providerId: 'qwen',
+            kind: 'balance',
+            plan: { status: 'exhausted', resetAt: NOW_MS + 90 * 60_000 },
+            fetchedAt: NOW_MS,
+          },
+        },
+      },
+    });
+    mountApp();
+    await openPopup(h);
+
+    const qwen = document.querySelector('section[data-provider="qwen"]');
+    expect(qwen).not.toBeNull(); // the card renders on the plan key alone
+    const text = qwen!.textContent ?? '';
+    expect(text).toContain('Plan: exhausted · resets in 1h 30m');
+    expect(text).not.toContain('No cycle data yet');
+    expect(text).not.toContain('¥'); // no balance figure on a plan-only card
+    expect((qwen!.querySelector('.usage') as HTMLElement | null)?.textContent).toBe(''); // empty usage line, like monitor cards
   });
 });
 

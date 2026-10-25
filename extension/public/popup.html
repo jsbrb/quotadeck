@@ -137,6 +137,12 @@
         font-size: 9px;
         padding: 1px 4px;
       }
+      /* Badge-ownership marker (hito-12 WU-M2): existing chip vocabulary,
+         existing cyan token — no new colors. */
+      .chip-badge {
+        background: var(--cyan);
+        color: var(--ink);
+      }
       /* ---- Cards ----------------------------------------------------------- */
       .card {
         background: #ffffff;
@@ -167,6 +173,20 @@
       }
       .hero-percentage.band-red {
         color: var(--red);
+      }
+      /* Click-to-choose hero (hito-12 WU-M2): the whole row is the touch
+         target — pointer affordance, neo-brutal ink shift on hover. */
+      .hero-pick {
+        align-items: baseline;
+        cursor: pointer;
+        display: flex;
+        gap: 8px;
+      }
+      .hero-pick:hover .hero-percentage {
+        color: var(--ink);
+      }
+      .hero-pick:active .hero-percentage {
+        transform: translate(2px, 2px);
       }
       .usage {
         font: 700 20px/22px var(--font-mono);
@@ -209,6 +229,9 @@
         font: 600 11px/14px var(--font-mono);
         margin: 0 0 4px;
       }
+      /* hito-12 WU-M: the quota card is the ZAI monitor's visual twin — it
+         reuses .monitor, .monitor-window and .bar verbatim, so no quota-
+         specific rule exists. */
       .key-state {
         background: var(--paper);
         border: 2px solid var(--ink);
@@ -344,7 +367,8 @@
       }
       .key-form input,
       .platform-field select,
-      .site-field select {
+      .site-field select,
+      .badge-provider-field select {
         background: #ffffff;
         border: 2px solid var(--ink);
         color: var(--ink);
@@ -357,12 +381,34 @@
       }
       .key-form input:focus,
       .platform-field select:focus,
-      .site-field select:focus {
+      .site-field select:focus,
+      .badge-provider-field select:focus {
         box-shadow: 2px 2px 0 var(--ink);
         outline: none;
       }
       .key-form input::placeholder {
         color: #71717a;
+      }
+      /* Stacked qwen credential fields (hito-12 WU-K squeeze fix, restated
+         in the hito-11 key-form vocabulary): each .credential-field owns a
+         full flex line — the shared .key-form label rule styles the label
+         above its own full-width input — and .form-actions puts the
+         save/revoke controls on their own line. Single-field forms
+         (zai/openai/kimi) render no wrappers and keep the compact row. */
+      .credential-field {
+        display: flex;
+        flex: 1 1 100%;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .credential-field input {
+        flex: none;
+        width: 100%;
+      }
+      .form-actions {
+        display: flex;
+        flex: 1 1 100%;
+        gap: 6px;
       }
       .key-form button {
         border: 2px solid var(--ink);
@@ -385,15 +431,23 @@
         box-shadow: 0 0 0 var(--ink);
         transform: translate(4px, 4px);
       }
+      /* hito-12's badge-provider selector joins the design's select-row
+         vocabulary (same treatment as the platform/site fields); its own
+         margin states it as the view-opening row outside any card. */
       .platform-field,
-      .site-field {
+      .site-field,
+      .badge-provider-field {
         align-items: center;
         display: flex;
         gap: 8px;
         margin: 6px 0 2px;
       }
+      .badge-provider-field {
+        margin: 0 0 12px;
+      }
       .platform-field label,
-      .site-field label {
+      .site-field label,
+      .badge-provider-field label {
         font: 600 10px/12px var(--font-mono);
         letter-spacing: 0.04em;
         text-transform: uppercase;
