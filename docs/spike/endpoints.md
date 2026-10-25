@@ -94,6 +94,47 @@ Verification levels:
 - Source: community evidence on the Qwen token-plan (coding-plan) service,
   maintainer-ratified 2026-09.
 
+### Qwen token-plan quota — session-token surface — discovered-live
+
+- Plan identity: the maintainer's international subscription is a **Token Plan (personal,
+  Standard tier)** — NOT the Coding Plan commodity API:
+  `codingPlan.queryCodingPlanInstanceInfoV2` answers 200 with `codingPlanInstanceInfos: []`
+  for every commodity code tried. The quota lives on this token-plan surface, not on the
+  BSS balance or the probe.
+- Endpoint: `POST https://bailian-singapore-cs.alibabacloud.com/cli/api.json?action=IntlBroadScopeAspnGateway&product=sfm_bailian&api=zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2Fusage`
+- Auth: `Authorization: Bearer <cliAccessToken>` — a console access token, NOT AK/SK
+  signing. Live-captured mint: the vendor CLI's browser device-flow. Candidate mint (NOT
+  live-verified, documented from CLI source only): the AK/SK-signed `GenerateCLIAccessToken`
+  path — `POST /modelstudio/cli/generateAccessToken`, action `GenerateCLIAccessToken`,
+  version `2026-02-10`, host `bailian.<region>.aliyuncs.com`. The token-mint host is
+  deliberately NOT allowlisted until it carries live evidence.
+- Request body (form-urlencoded): `params=<JSON>&region=ap-southeast-1`, where the JSON is
+  `{"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN","switchAgent":<account-specific int>}}}`.
+  `switchAgent` is account-specific — a placeholder here, never a pinned literal.
+- Response semantics (COMPLETE surface — exactly two fields):
+  `{ "per1MonthPercentage": 0.1172, "per1MonthResetTime": 1793721600000 }`.
+  - `per1MonthPercentage` is a **0..1 USED fraction** — NOT remaining (live cross-check:
+    console showed "Remaining 88.4%" at ≈11.7% used). The 0..1 fraction must map to the
+    0-100 window convention at the parse level; the passthrough philosophy stays uncapped —
+    no percentage, used, or total is ever synthesized beyond what the fields carry.
+  - `per1MonthResetTime` is epoch milliseconds carried **verbatim** as the reset instant
+    (the countdown renders from it at display time).
+  - There is NO used/total token count on this surface — the console's "Plan quota 45,000"
+    comes from a different subscription API, and no total is inferred from it. Values moved
+    between two live calls: near-real-time freshness.
+- Gateway matrix (reference only, from vendor CLI source): regions `cn-beijing` and
+  `ap-southeast-1`; international gateways `bailian-cs.console.alibabacloud.com`
+  (cn-beijing) and `bailian-singapore-cs.alibabacloud.com` (ap-southeast-1, action
+  `IntlBroadScopeAspnGateway`). Only the live-captured ap-southeast-1 gateway is
+  allowlisted.
+- Verification status: honestly **community** — no official documentation exists for the
+  endpoint; the evidence is the vendor's own CLI source (`bailian-cli` 2.5.1 on npm) plus
+  maintainer live captures (2026-10-25, international account). The allowlist entry-level
+  `verification: official` describes the BSS hosts; this subsection carries the quota
+  surface's weaker evidence class.
+- Sources: `bailian-cli` 2.5.1 (npm) for the request shape and gateway matrix; maintainer
+  live captures cross-checked against the console quota page for the response values.
+
 ## OpenAI — `api.openai.com` — verified-official
 
 - Endpoint: `GET https://api.openai.com/v1/organization/costs`.
@@ -132,7 +173,8 @@ AD-5), scoped per provider. This block must stay structurally identical to
     "hosts": [
       "business.aliyuncs.com",
       "business.ap-southeast-1.aliyuncs.com",
-      "token-plan.ap-southeast-1.maas.aliyuncs.com"
+      "token-plan.ap-southeast-1.maas.aliyuncs.com",
+      "bailian-singapore-cs.alibabacloud.com"
     ],
     "verification": "official"
   },

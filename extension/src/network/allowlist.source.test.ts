@@ -39,11 +39,12 @@ describe('allowlist single-source sync (AD-4)', () => {
     );
   });
 
-  it('pins: qwen allowlists exactly the two BSS hosts plus the token-plan probe host (hito-8)', () => {
+  it('pins: qwen allowlists exactly the two BSS hosts, the token-plan probe host and the live-verified token-plan quota gateway (hito-8 + hito-12)', () => {
     deepStrictEqual(PROVIDER_ALLOWLIST.qwen.hosts, [
       'business.aliyuncs.com',
       'business.ap-southeast-1.aliyuncs.com',
       'token-plan.ap-southeast-1.maas.aliyuncs.com',
+      'bailian-singapore-cs.alibabacloud.com',
     ]);
   });
 });
