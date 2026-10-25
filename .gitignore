@@ -11,6 +11,9 @@ extension/*.zip
 # Local agent tooling
 .atl/
 
+# Internal task journals (local-only by maintainer decision, 2026-10-25)
+odd/
+
 # Environment / secrets
 .env
 .env.*
