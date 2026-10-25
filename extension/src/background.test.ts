@@ -299,7 +299,9 @@ describe('background — One-Shot Refresh Alarm (usage-badge spec)', () => {
     h.alarms.fire(REFRESH_NOW_ALARM);
     await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
 
-    expect(h.action.badgeTexts).toEqual(['32%']); // zai ships alone — one badge per tick
+    // zai then qwen badge in registration order — the last-wins qwen balance
+    // badge is interim until the badge-priority unit lands (hito-12 re-ship).
+    expect(h.action.badgeTexts).toEqual(['32%', '¥100']);
     expect(h.alarms.creates).toEqual([USAGE_REFRESH_ALARM]); // the worker registers ONLY the periodic alarm
     await expect(h.alarms.get(REFRESH_NOW_ALARM)).resolves.toBeUndefined();
   });
@@ -359,9 +361,9 @@ describe('background — buildTickQuery (usage-badge spec §Live refresh per tic
 });
 
 describe('background — Badge Rendering + refresh per tick (usage-badge spec)', () => {
-  it('the shipped worker badges the shipped subset only: one zai text per tick, stable across repeated ticks', async () => {
+  it('the shipped worker badges the shipped subset only: zai then qwen per tick, stable across repeated ticks', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only zai registers (hito-10)
+    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — only shipped providers register (hito-12: zai + qwen)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -369,7 +371,7 @@ describe('background — Badge Rendering + refresh per tick (usage-badge spec)',
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['32%'];
+    const perTick = ['32%', '¥100']; // zai then qwen — qwen last-wins is interim until badge priority
     h.alarms.fire(USAGE_REFRESH_ALARM);
     await vi.waitFor(() => expect(h.action.badgeTexts).toEqual(perTick));
 
@@ -992,7 +994,7 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
       vi.unstubAllGlobals();
     }
 
-    expect(h.action.badgeTexts).toEqual(['32%']); // zai ships alone
+    expect(h.action.badgeTexts).toEqual(['32%', '¥100']); // zai then qwen ship (hito-12 re-ship)
   });
 });
 
@@ -1121,7 +1123,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     h.fireInstalled();
     await flushTasks();
 
-    const perTick = ['32%'];
+    const perTick = ['32%', '¥100']; // zai then qwen — qwen last-wins is interim until badge priority
     h.alarms.fire(USAGE_REFRESH_ALARM);
     // The snapshot write is the tick's LAST operation — once it lands, the
     // badge sequence is final, so both can be asserted deterministically.
@@ -1133,7 +1135,7 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
 
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    expect(Object.keys(stored.results)).toEqual(['zai']); // zai ships alone (hito-10)
+    expect(Object.keys(stored.results)).toEqual(['zai', 'qwen']); // shipped providers only (hito-12 re-ship)
     expect(stored.results.zai).toEqual({
       status: 'ok',
       usage: expect.objectContaining({

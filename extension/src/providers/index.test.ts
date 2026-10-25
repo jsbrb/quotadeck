@@ -16,7 +16,7 @@ const EXPECTED_CREDENTIALS: Readonly<Record<ProviderId, CredentialType>> = {
 };
 
 describe('createDefaultRegistry (AD-6, hito-10 shipping filter)', () => {
-  it('registers exactly SHIPPED_PROVIDER_IDS in pinned order — zai only in the GLM-only build', () => {
+  it('registers exactly SHIPPED_PROVIDER_IDS in pinned order — zai then qwen on the hito-12 branch', () => {
     expect(createDefaultRegistry().ids()).toEqual([...SHIPPED_PROVIDER_IDS]);
   });
 
@@ -51,9 +51,9 @@ describe('createDefaultRegistry (AD-6, hito-10 shipping filter)', () => {
     expect(zai.parsePage(FIXTURE_RESPONSES['zai/monitor--pro-plan'].body, null).done).toBe(true);
   });
 
-  it('rejects unshipped ids — qwen/openai/kimi stay in source but never register (hito-10)', () => {
+  it('rejects unshipped ids — openai/kimi stay in source but never register (hito-12 re-ships qwen)', () => {
     const registry = createDefaultRegistry();
-    for (const id of ['qwen', 'openai', 'kimi'] as const) {
+    for (const id of ['openai', 'kimi'] as const) {
       expect(() => registry.get(id)).toThrow(new RegExp(`Unknown provider id: ${id}`));
     }
   });

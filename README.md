@@ -1,18 +1,22 @@
 # quotadeck
 
-A browser extension badge that tracks AI provider usage and balances. The
-public Chrome Web Store release is a **GLM-only build**: only the ZAI (Zhipu
-AI) provider — the GLM Coding Plan — ships. The Qwen (Alibaba Cloud), OpenAI
-and Kimi (Moonshot AI) implementations are retained in source but stay
+A browser extension badge that tracks AI provider usage and balances. This
+hito-12 feature branch re-ships the Qwen (Alibaba Cloud Model Studio)
+provider alongside ZAI (Zhipu AI, the GLM Coding Plan) so the token-plan
+quota flow can be exercised end to end in a real browser. The OpenAI and
+Kimi (Moonshot AI) implementations are retained in source but stay
 unshipped: they never register in the worker, never render in the popup, and
-are granted no host permissions.
+are granted no host permissions. (The GLM-only Chrome Web Store release lives
+on develop.)
 
-**Status: v0.2.0 — GLM-only store release.** The extension is a working
-Manifest V3 service worker plus action popup that fetches real usage data
-every minute through an allowlist-constrained network client. ZAI usage comes
-from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
+**Status: v0.2.0 — ZAI + Qwen branch build (hito-12).** The extension is a
+working Manifest V3 service worker plus action popup that fetches real usage
+data every minute through an allowlist-constrained network client. ZAI usage
+comes from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
 plan level, the 5h and weekly token windows with an uncapped percentage, and
-the monthly MCP window. The vitest suite stays
+the monthly MCP window. Qwen usage comes from the BSS account-balance call,
+the plan probe and the token-plan quota two-hop flow merged into the cycle
+snapshot. The vitest suite stays
 hermetic (recorded fixtures + injected transports — no network in tests); live
 behavior is proven by contract tests over the request shapes and by a short
 maintainer live check. See the `openspec/` change ledgers for the change
@@ -26,15 +30,18 @@ specs and design.
    npm --prefix extension run build
    ```
 2. Open `chrome://extensions`, enable **Developer mode**, click **Load
-     unpacked**, and select the `extension/dist` directory. The shipped
-     `host_permissions` cover exactly the two ZAI monitor hosts (`api.z.ai`
-     and `open.bigmodel.cn` — see Security posture below); if you upgrade
-     from an earlier multi-provider build, reload the extension so Chrome
-     re-prompts for the narrowed host permissions.
+    unpacked**, and select the `extension/dist` directory. The shipped
+    `host_permissions` cover exactly the seven hosts of the two shipped
+    providers — the ZAI monitor hosts (`api.z.ai` and `open.bigmodel.cn`)
+    plus the five Qwen BSS/token-plan hosts (see Security posture below);
+    if you previously loaded the GLM-only build, reload the extension so
+    Chrome re-prompts for the widened host permissions.
 3. The worker registers a `usage-refresh` alarm (1-minute period) on install
    and on startup. Each tick fetches live usage for every shipped provider
    with a stored credential, with all time windows derived from an injectable
-   clock; the badge shows the last successful result — for ZAI the 5h
+   clock; the badge shows the last successful result in registration order
+   (ZAI, then Qwen — so with both keyed the Qwen result wins until badge
+   priority by user preference lands). For ZAI the figure is the 5h
    percentage (uncapped above 100) with the plan level as fallback.
 4. The badge background is threshold-colored from that 5h percentage, so the
    state reads at a glance: light slate `#E2E8F0` below 50% with near-black
@@ -45,20 +52,24 @@ specs and design.
 5. Clicking the toolbar action opens the popup on the consumption view: the
    ZAI monitor block (plan level, the 5h window with its uncapped percentage,
    used/total and reset countdown, the weekly window, and the MCP window with
-   per-tool rows) — exactly the data the badge rendered for that cycle.
+   per-tool rows) and the Qwen card (BSS balance and plan line) — the same
+   data the tick persisted for that cycle.
    Failed refreshes show a per-class error label (`Auth failed`,
    `Rate limited`, …) in the card while the badge shows `ERR` — a bad or
    revoked key surfaces this way within one tick. A ZAI auth failure also
    shows the wrong-platform guidance, since a Z.AI key under the ZHIPU
    selection (or vice versa) is the most likely cause.
 6. Manage keys through the **Settings** gear in the popup header (no console
-   needed): paste the ZAI credential and **Save key**, or press **Enter** in
-   the input. Invalid input is rejected with guidance, and stored keys
-   display masked (`••••` + at most 4 trailing characters). **Revoke**
-   removes the key. The ZAI section also carries the **platform selector**
-   (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as a non-secret local
-   preference and switches the base URL of every ZAI monitor request
-   (`api.z.ai` ↔ `open.bigmodel.cn`). The main view renders no key forms.
+   needed): paste the ZAI credential — or the Qwen AccessKeyId/AccessKeySecret
+   pair plus the optional `sk-sp-` plan key — and press **Save key**, or
+   press **Enter** in the input. Invalid input is rejected with guidance, and
+   stored keys display masked (`••••` + at most 4 trailing characters).
+   **Revoke** removes the key. The ZAI section carries the **platform
+   selector** (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as a
+   non-secret local preference and switches the base URL of every ZAI monitor
+   request (`api.z.ai` ↔ `open.bigmodel.cn`); the Qwen section carries the
+   same selector for the BSS site (International ↔ China). The main view
+   renders no key forms.
 
 ## Popup security notes
 
@@ -91,8 +102,13 @@ Run from the repository root:
 - **Zero runtime npm dependencies** — the toolchain (TypeScript, esbuild,
   vitest, happy-dom for the DOM test environment) is dev-only and nothing is
   bundled but first-party code.
-- **`host_permissions` = exactly the two shipped hosts** (`api.z.ai`,
-  `open.bigmodel.cn`) — the ZAI (GLM) allowlist entries only. Live usage
+- **`host_permissions` = exactly the seven shipped hosts** — the ZAI (GLM)
+  monitor entries (`api.z.ai`, `open.bigmodel.cn`) plus the five Qwen
+  BSS/token-plan entries (`business.aliyuncs.com`,
+  `business.ap-southeast-1.aliyuncs.com`,
+  `token-plan.ap-southeast-1.maas.aliyuncs.com`,
+  `bailian-singapore-cs.alibabacloud.com`,
+  `modelstudio.ap-southeast-1.aliyuncs.com`). Live usage
   requires cross-origin fetch from the worker, so the manifest grants the
   per-provider allowlist **filtered to the shipped providers**
   (`SHIPPED_PROVIDER_IDS`) and nothing more: a sync test derives the expected

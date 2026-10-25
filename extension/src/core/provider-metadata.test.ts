@@ -21,9 +21,9 @@ describe('PROVIDER_METADATA (AD-24)', () => {
   });
 });
 
-describe('SHIPPED_PROVIDER_IDS (hito-10 GLM-only store release)', () => {
-  it('ships exactly zai — the single source of the shipping filter', () => {
-    expect(SHIPPED_PROVIDER_IDS).toEqual(['zai']);
+describe('SHIPPED_PROVIDER_IDS (hito-12 qwen re-ship)', () => {
+  it('ships exactly zai then qwen in AD-6 order — the single source of the shipping filter', () => {
+    expect(SHIPPED_PROVIDER_IDS).toEqual(['zai', 'qwen']);
   });
 
   it('is a subset of the known provider ids', () => {

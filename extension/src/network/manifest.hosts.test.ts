@@ -37,13 +37,18 @@ describe('manifest host_permissions sync (AD-16, hito-10 shipped filter)', () =>
     deepStrictEqual(manifest.host_permissions, expectedHostPatterns());
   });
 
-  it('pins the exact shipped host patterns (zai only: api.z.ai + open.bigmodel.cn)', () => {
+  it('pins the exact shipped host patterns (zai + qwen: the two shipped providers)', () => {
     const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as {
       host_permissions?: string[];
     };
     deepStrictEqual(manifest.host_permissions, [
       'https://api.z.ai/*',
+      'https://bailian-singapore-cs.alibabacloud.com/*',
+      'https://business.aliyuncs.com/*',
+      'https://business.ap-southeast-1.aliyuncs.com/*',
+      'https://modelstudio.ap-southeast-1.aliyuncs.com/*',
       'https://open.bigmodel.cn/*',
+      'https://token-plan.ap-southeast-1.maas.aliyuncs.com/*',
     ]);
   });
 });
