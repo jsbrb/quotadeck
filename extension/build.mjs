@@ -38,5 +38,10 @@ await build({
 await cp('public/manifest.json', `${outDir}/manifest.json`);
 await cp('public/popup.html', `${outDir}/popup.html`);
 await cp('public/icons', `${outDir}/icons`, { recursive: true });
+// Local OFL woff2 subsets (hito-11): the MV3 CSP forbids remote font URLs,
+// so the popup's @font-face resolves against dist/fonts/ next to popup.html.
+await cp('public/fonts', `${outDir}/fonts`, { recursive: true });
 
-console.log(`built ${outDir}/background.js + ${outDir}/popup.js + ${outDir}/manifest.json + ${outDir}/popup.html + ${outDir}/icons/`);
+console.log(
+  `built ${outDir}/background.js + ${outDir}/popup.js + ${outDir}/manifest.json + ${outDir}/popup.html + ${outDir}/icons/ + ${outDir}/fonts/`,
+);

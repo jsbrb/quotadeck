@@ -8,244 +8,478 @@
       inline scripts and inline event-handler attributes, so ALL behavior lives
       in the bundled popup.js below; the inline <style> element is CSP-legal
       (MV3 default CSP permits style elements and generated style attributes).
-      Styles cover both popup views (AD-22): the consumption main view and the
-      gear-driven settings view — minimal claro (hito-5): light surface, white
-      cards, threshold-colored bars, prominent countdown. Hito-6 adds the
-      dual hero percentage (largest, boldest element; the same number again
-      inside the primary threshold bar) and keeps the header refresh button
-      on the shared .header-action styling.
+      Hito-11 restyle: the Neo-Brutalist Developer Instrument design system
+      (docs/design/stitch/.../DESIGN.md) — warm paper #FDFDF7, ink #18181B 2px
+      borders, 0px radius, hard unblurred 4px/2px offset shadows, pressed
+      translate(4px,4px), uppercase mono chips, segmented threshold bars,
+      fixed 360px canvas. Fonts are LOCAL OFL woff2 (public/fonts/, copied to
+      dist/fonts/ by build.mjs) — zero remote references (MV3 CSP + offline
+      honesty). Space Grotesk and JetBrains Mono are variable files served by
+      Google Fonts' css2 API as one file per family covering the requested
+      weight range, hence the `font-weight: 500 700` ranges below.
     -->
     <style>
-      body {
-        background: #f6f7f9;
-        color: #1f2328;
-        font: 13px system-ui, sans-serif;
-        margin: 12px;
-        min-width: 320px;
+      @font-face {
+        font-family: 'Space Grotesk';
+        font-style: normal;
+        font-weight: 500 700;
+        font-display: swap;
+        src: url('fonts/space-grotesk-latin.woff2') format('woff2');
       }
+      @font-face {
+        font-family: 'JetBrains Mono';
+        font-style: normal;
+        font-weight: 500 700;
+        font-display: swap;
+        src: url('fonts/jetbrains-mono-latin.woff2') format('woff2');
+      }
+      :root {
+        --paper: #fdfdf7;
+        --ink: #18181b;
+        --yellow: #fde047;
+        --cyan: #67e8f9;
+        --green: #16a34a;
+        --amber: #f59e0b;
+        --red: #dc2626;
+        --green-bg: #dcfce7;
+        --amber-bg: #fef3c7;
+        --red-bg: #fee2e2;
+        --green-text: #166534;
+        --amber-text: #b45309;
+        --font-display: 'Space Grotesk', system-ui, 'Segoe UI', sans-serif;
+        --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+      }
+      * {
+        border-radius: 0; /* DESIGN.md: rounding is forbidden */
+        box-sizing: border-box;
+      }
+      body {
+        background: var(--paper);
+        color: var(--ink);
+        font: 500 13px/1.25 var(--font-display);
+        margin: 0;
+        width: 360px;
+      }
+      #app {
+        padding: 12px;
+      }
+      .icon {
+        display: inline-block;
+        flex: none;
+        height: 16px;
+        vertical-align: -3px;
+        width: 16px;
+      }
+      /* ---- Header -------------------------------------------------------- */
       .popup-header {
-        align-items: center;
+        align-items: flex-start;
         display: flex;
         justify-content: space-between;
-        margin: 0 0 10px;
+        margin: 0 0 12px;
+      }
+      .brand {
+        align-items: center;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
       .popup-header h1 {
-        font-size: 15px;
+        font: 700 24px/1 var(--font-display);
+        letter-spacing: -0.03em;
         margin: 0;
       }
       .header-actions {
         display: flex;
-        gap: 6px;
+        gap: 8px;
       }
       .header-action {
         background: #ffffff;
-        border: 1px solid #d0d7de;
-        border-radius: 999px;
-        color: #1f2328;
+        border: 2px solid var(--ink);
+        box-shadow: 4px 4px 0 var(--ink);
+        color: var(--ink);
         cursor: pointer;
-        font: inherit;
-        padding: 3px 12px;
+        display: inline-flex;
+        padding: 6px;
       }
       .header-action:hover {
-        border-color: #2563eb;
-        color: #2563eb;
+        background: var(--yellow);
       }
+      .header-action:active {
+        box-shadow: 0 0 0 var(--ink);
+        transform: translate(4px, 4px);
+      }
+      /* ---- Chips (uppercase mono micro-tags) ------------------------------ */
+      .chip {
+        align-items: center;
+        border: 2px solid var(--ink);
+        display: inline-flex;
+        font: 600 10px/12px var(--font-mono);
+        gap: 4px;
+        letter-spacing: 0.04em;
+        padding: 2px 6px;
+        text-transform: uppercase;
+      }
+      .chip .icon {
+        height: 12px;
+        width: 12px;
+      }
+      .chip-plan {
+        background: var(--yellow);
+        color: var(--ink);
+      }
+      .chip-known {
+        background: #ffffff;
+        color: var(--ink);
+      }
+      .chip-mcp {
+        background: var(--cyan);
+        color: var(--ink);
+        font-size: 9px;
+        padding: 1px 4px;
+      }
+      /* ---- Cards ----------------------------------------------------------- */
       .card {
         background: #ffffff;
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        box-shadow: 0 1px 2px rgba(31, 35, 40, 0.06);
-        margin: 0 0 10px;
-        padding: 10px 12px;
+        border: 2px solid var(--ink);
+        box-shadow: 4px 4px 0 var(--ink);
+        margin: 0 0 20px;
+        padding: 12px;
       }
       .provider-name {
-        font-size: 13px;
-        font-weight: 600;
-        margin: 0 0 6px;
+        border-bottom: 2px solid var(--ink);
+        font: 700 15px/18px var(--font-display);
+        letter-spacing: -0.01em;
+        margin: 0 0 8px;
+        padding: 0 0 4px;
+        text-transform: uppercase;
       }
       .hero-percentage {
-        font-size: 24px;
-        font-weight: 600;
-        letter-spacing: -0.3px;
-        line-height: 1.1;
-        margin: 0 0 6px;
+        font: 700 44px/1 var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.02em;
+        margin: 0 0 4px;
+      }
+      .hero-percentage.band-green {
+        color: var(--green);
+      }
+      .hero-percentage.band-amber {
+        color: var(--amber);
+      }
+      .hero-percentage.band-red {
+        color: var(--red);
       }
       .usage {
-        font-size: 18px;
-        font-weight: 700;
-        margin: 0 0 4px;
+        font: 700 20px/22px var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        margin: 0 0 6px;
       }
-      .refresh-error,
+      .refresh-error {
+        background: var(--red);
+        border: 2px solid var(--ink);
+        color: #ffffff;
+        font: 700 18px/22px var(--font-display);
+        letter-spacing: -0.02em;
+        margin: 0 0 6px;
+        padding: 4px 8px;
+        text-transform: uppercase;
+      }
+      .card-error {
+        border-color: var(--ink);
+      }
       .guidance {
-        color: #dc2626;
-        margin: 0 0 4px;
+        background: var(--amber-bg);
+        border: 2px solid var(--ink);
+        color: var(--amber-text);
+        font: 500 12px/16px var(--font-display);
+        margin: 0 0 6px;
+        padding: 6px 8px;
       }
       .settings-guidance {
-        background: #f6f7f9;
-        border-radius: 8px;
-        color: #57606a;
-        margin: 0 0 6px;
-        padding: 6px 10px;
+        border: 2px dashed var(--ink);
+        color: #47464b;
+        font: 500 11px/14px var(--font-display);
+        margin: 0 0 8px;
+        padding: 6px 8px;
       }
       .tier,
       .no-cycle,
-      .key-state {
-        color: #57606a;
+      .key-state,
+      .plan-status,
+      /* hito-12 quota line rides the design's normal-weight secondary lines
+         (never a hero — that treatment is a later unit). */
+      .quota-status {
+        color: #47464b;
+        font: 600 11px/14px var(--font-mono);
         margin: 0 0 4px;
       }
+      .key-state {
+        background: var(--paper);
+        border: 2px solid var(--ink);
+        padding: 3px 6px;
+      }
+      /* ---- LAST KNOWN (frozen) block -------------------------------------- */
+      .last-known {
+        border: 2px dashed var(--ink);
+        margin: 8px 0 0;
+        opacity: 0.6;
+        padding: 8px;
+      }
+      .last-known > .chip {
+        margin: 0 0 6px;
+      }
+      /* ---- Monitor block --------------------------------------------------- */
       .monitor {
-        background: #f6f7f9;
-        border-radius: 8px;
-        margin: 0 0 4px;
-        padding: 8px 10px;
+        border: 2px solid var(--ink);
+        box-shadow: 2px 2px 0 var(--ink);
+        margin: 4px 0 8px;
+        padding: 8px;
       }
       .monitor-level {
-        font-weight: 600;
-        margin: 0 0 4px;
+        font: 600 11px/14px var(--font-mono);
+        letter-spacing: 0.02em;
+        margin: 0 0 6px;
+        text-transform: uppercase;
       }
       .monitor-window,
       .monitor-mcp {
+        align-items: baseline;
+        display: flex;
+        font: 500 11px/14px var(--font-mono);
+        gap: 4px;
+        letter-spacing: 0.02em;
         margin: 0 0 2px;
       }
       .countdown {
-        background: #eef2ff;
-        border-radius: 999px;
-        color: #3730a3;
-        font-weight: 600;
-        padding: 0 6px;
+        background: var(--yellow);
+        border: 2px solid var(--ink);
+        color: var(--ink);
+        font-weight: 700;
+        padding: 0 4px;
+        text-transform: uppercase;
       }
+      /* ---- Segmented threshold bars ---------------------------------------- */
       .bar {
-        background: #e6e8eb;
-        border-radius: 999px;
-        height: 6px;
-        margin: 2px 0 6px;
+        background: #ffffff;
+        border: 2px solid var(--ink);
+        height: 18px;
+        margin: 2px 0 8px;
         position: relative;
       }
       .bar-fill {
-        border-radius: 999px;
         height: 100%;
       }
-      .bar:has(.bar-pct) {
-        height: 10px;
+      .band-green .bar-fill {
+        background: var(--green);
+      }
+      .band-amber .bar-fill {
+        background: var(--amber);
+      }
+      .band-red .bar-fill {
+        background: var(--red);
+      }
+      /* Notch lines at 25 / 50 / 75 / 90 % — hard ink stops, zero blur. */
+      .bar-ticks {
+        background-image: linear-gradient(
+          to right,
+          transparent 0 calc(25% - 2px),
+          var(--ink) calc(25% - 2px) 25%,
+          transparent 25% calc(50% - 2px),
+          var(--ink) calc(50% - 2px) 50%,
+          transparent 50% calc(75% - 2px),
+          var(--ink) calc(75% - 2px) 75%,
+          transparent 75% calc(90% - 2px),
+          var(--ink) calc(90% - 2px) 90%,
+          transparent 90% 100%
+        );
+        inset: 0;
+        pointer-events: none;
+        position: absolute;
       }
       .bar-pct {
         color: #ffffff;
-        font-size: 9px;
-        font-weight: 600;
-        line-height: 1;
-        padding: 0 6px;
+        font: 700 11px/1 var(--font-mono);
+        padding: 0 4px;
         position: absolute;
         right: 0;
-        text-shadow: 0 1px 2px rgba(31, 35, 40, 0.45);
         top: 50%;
         transform: translateY(-50%);
       }
-      .band-green .bar-fill {
-        background: #2e9e5b;
-      }
-      .band-amber .bar-fill {
-        background: #d97706;
-      }
-      .band-red .bar-fill {
-        background: #dc2626;
-      }
-      .mcp-tools {
-        color: #57606a;
+      .mcp-tools,
+      .model-rows {
         list-style: none;
         margin: 2px 0 0;
         padding: 0;
       }
-      .mcp-tool {
-        margin: 0 0 2px;
-      }
-      .platform-field {
-        align-items: center;
-        display: flex;
-        gap: 6px;
-        margin: 6px 0 2px;
-      }
-      .platform-field label {
-        color: #57606a;
-      }
-      .badge-provider-field {
-        align-items: center;
-        display: flex;
-        gap: 6px;
-        margin: 0 0 10px;
-      }
-      .badge-provider-field label {
-        color: #57606a;
-      }
-      .model-rows {
-        color: #57606a;
-        list-style: none;
-        margin: 0 0 4px;
-        padding: 0;
-      }
+      .mcp-tool,
       .model-row {
-        margin: 0 0 2px;
+        border-top: 2px dashed var(--ink);
+        font: 500 11px/14px var(--font-mono);
+        margin: 0;
+        padding: 3px 0 3px 12px;
+        position: relative;
       }
+      .mcp-tool::before,
+      .model-row::before {
+        background: var(--ink);
+        content: '';
+        display: block;
+        height: 6px;
+        left: 2px;
+        position: absolute;
+        top: 7px;
+        width: 6px;
+      }
+      /* ---- Settings forms -------------------------------------------------- */
       .key-form {
+        border: 2px solid var(--ink);
+        box-shadow: 2px 2px 0 var(--ink);
         display: flex;
         flex-wrap: wrap;
-        gap: 4px;
-        margin: 4px 0;
+        gap: 6px;
+        margin: 6px 0;
+        padding: 8px;
+      }
+      .key-form label {
+        font: 600 10px/12px var(--font-mono);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        width: 100%;
       }
       .key-form input,
       .platform-field select,
+      .site-field select,
       .badge-provider-field select {
         background: #ffffff;
-        border: 1px solid #d0d7de;
-        border-radius: 6px;
-        font: inherit;
-        padding: 4px 8px;
+        border: 2px solid var(--ink);
+        color: var(--ink);
+        font: 500 12px/16px var(--font-mono);
+        padding: 5px 8px;
       }
       .key-form input {
         flex: 1;
         min-width: 0;
       }
-      /* Stacked qwen credential fields (user-reported squeeze fix): each
-         .credential-field takes a full flex line — label above its own
-         full-width input — and .form-actions puts the save/revoke controls
-         on their own line. Single-field forms (zai/openai/kimi) render no
-         such wrappers and keep the compact row. */
+      .key-form input:focus,
+      .platform-field select:focus,
+      .site-field select:focus,
+      .badge-provider-field select:focus {
+        box-shadow: 2px 2px 0 var(--ink);
+        outline: none;
+      }
+      .key-form input::placeholder {
+        color: #71717a;
+      }
+      /* Stacked qwen credential fields (hito-12 WU-K squeeze fix, restated
+         in the hito-11 key-form vocabulary): each .credential-field owns a
+         full flex line — the shared .key-form label rule styles the label
+         above its own full-width input — and .form-actions puts the
+         save/revoke controls on their own line. Single-field forms
+         (zai/openai/kimi) render no wrappers and keep the compact row. */
       .credential-field {
         display: flex;
         flex: 1 1 100%;
         flex-direction: column;
         gap: 2px;
       }
-      .credential-field label {
-        color: #57606a;
+      .credential-field input {
+        flex: none;
+        width: 100%;
       }
       .form-actions {
         display: flex;
         flex: 1 1 100%;
-        gap: 4px;
+        gap: 6px;
       }
       .key-form button {
-        border: none;
-        border-radius: 6px;
+        border: 2px solid var(--ink);
+        box-shadow: 4px 4px 0 var(--ink);
         cursor: pointer;
-        font: inherit;
-        padding: 4px 12px;
+        font: 600 11px/14px var(--font-mono);
+        letter-spacing: 0.02em;
+        padding: 6px 12px;
+        text-transform: uppercase;
       }
       .key-form button[type='submit'] {
-        background: #2563eb;
-        color: #ffffff;
+        background: var(--yellow);
+        color: var(--ink);
       }
       .key-form button.revoke {
-        background: #fef2f2;
-        color: #dc2626;
+        background: var(--red);
+        color: #ffffff;
       }
+      .key-form button:active {
+        box-shadow: 0 0 0 var(--ink);
+        transform: translate(4px, 4px);
+      }
+      /* hito-12's badge-provider selector joins the design's select-row
+         vocabulary (same treatment as the platform/site fields); its own
+         margin states it as the view-opening row outside any card. */
+      .platform-field,
+      .site-field,
+      .badge-provider-field {
+        align-items: center;
+        display: flex;
+        gap: 8px;
+        margin: 6px 0 2px;
+      }
+      .badge-provider-field {
+        margin: 0 0 12px;
+      }
+      .platform-field label,
+      .site-field label,
+      .badge-provider-field label {
+        font: 600 10px/12px var(--font-mono);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      /* ---- Footer nav (exactly QUOTAS + KEYS) ------------------------------ */
+      .tabbar {
+        display: flex;
+        gap: 8px;
+        margin: 0 0 12px;
+      }
+      .tab {
+        align-items: center;
+        background: #ffffff;
+        border: 2px solid var(--ink);
+        box-shadow: 4px 4px 0 var(--ink);
+        color: var(--ink);
+        cursor: pointer;
+        display: inline-flex;
+        flex: 1;
+        font: 600 11px/14px var(--font-mono);
+        gap: 6px;
+        justify-content: center;
+        letter-spacing: 0.02em;
+        padding: 8px 4px;
+        text-transform: uppercase;
+      }
+      .tab-active {
+        background: var(--yellow);
+        cursor: default;
+      }
+      .tab:not(.tab-active):active {
+        box-shadow: 0 0 0 var(--ink);
+        transform: translate(4px, 4px);
+      }
+      /* ---- Branding footer -------------------------------------------------- */
       .popup-footer {
-        color: #57606a;
-        font-size: 12px;
-        margin-top: 2px;
+        border: 2px solid var(--ink);
+        color: #47464b;
+        font: 500 10px/14px var(--font-mono);
+        letter-spacing: 0.04em;
+        margin: 0;
+        padding: 6px 8px;
         text-align: center;
+        text-transform: uppercase;
       }
       .popup-footer a {
-        color: inherit;
+        color: var(--ink);
+        font-weight: 700;
+      }
+      .popup-footer .version {
+        color: var(--ink);
+        font-weight: 700;
       }
     </style>
   </head>

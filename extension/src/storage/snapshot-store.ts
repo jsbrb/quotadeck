@@ -5,7 +5,9 @@
 // - The last completed refresh cycle's per-provider outcomes live exclusively
 //   in the injected `chrome.storage.local` area under the single key
 //   `qd:snapshot`. One `write` per completed cycle keeps cycle semantics
-//   atomic — a reader never observes half a cycle (AD-10).
+//   atomic — a reader never observes half a cycle (AD-10). `write` first
+//   reads the previous snapshot to carry the additive `lastKnown` map
+//   forward (hito-11); the cycle itself remains the single atomic write.
 // - Error entries carry ONLY their taxonomy class (AD-13/21): the worker
 //   drops the thrown value, and nothing here can reintroduce it.
 // - The snapshot types contain no credential field (AD-15) — key material has
@@ -34,6 +36,9 @@ export type ProviderSnapshotEntry =
   | { readonly status: 'ok'; readonly usage: NormalizedUsage }
   | { readonly status: 'error'; readonly errorClass: ErrorClass }; // class only (AD-13/21)
 
+/** The ok arm alone — the only shape `lastKnown` persists (hito-11). */
+export type ProviderOkEntry = Extract<ProviderSnapshotEntry, { status: 'ok' }>;
+
 /**
  * The last completed refresh cycle: one entry per provider that had a stored
  * key when the cycle ran. An absent id means "no key at cycle time" — the
@@ -41,6 +46,15 @@ export type ProviderSnapshotEntry =
  */
 export interface CycleSnapshot {
   readonly results: Readonly<Partial<Record<ProviderId, ProviderSnapshotEntry>>>;
+  /**
+   * LAST KNOWN (frozen) surface (hito-11): per provider, the most recent
+   * SUCCESSFUL entry across cycles — error ticks never wipe it, later ok
+   * ticks update it, providers never seen ok carry no entry. OWNED BY
+   * `write`: the merge derives the map from the previously stored snapshot
+   * plus the cycle's ok results, so a caller-provided value is recomputed,
+   * never honored. Additive: snapshots without the key stay valid.
+   */
+  readonly lastKnown?: Readonly<Partial<Record<ProviderId, ProviderOkEntry>>>;
 }
 
 const ERROR_CLASSES: readonly ErrorClass[] = ['auth', 'rate-limit', 'server', 'network', 'unknown'];
@@ -175,24 +189,60 @@ function isProviderSnapshotEntry(value: unknown): value is ProviderSnapshotEntry
   return entry.status === 'ok' && isNormalizedUsage(entry.usage);
 }
 
+/** A lastKnown slot must hold the ok arm specifically (hito-11). */
+function isLastKnownEntry(value: unknown): value is ProviderOkEntry {
+  return isProviderSnapshotEntry(value) && value.status === 'ok';
+}
+
 function isCycleSnapshot(value: unknown): value is CycleSnapshot {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
-  const results = (value as Record<string, unknown>).results;
+  const snapshot = value as Record<string, unknown>;
+  const results = snapshot.results;
   if (typeof results !== 'object' || results === null) {
     return false;
   }
-  return Object.values(results).every(isProviderSnapshotEntry);
+  if (!Object.values(results).every(isProviderSnapshotEntry)) {
+    return false;
+  }
+  // `lastKnown` is optional (additive); when present it must be a record of
+  // ok entries — garbage reads as "no cycle yet", same strictness as results.
+  const lastKnown = snapshot.lastKnown;
+  if (lastKnown === undefined) {
+    return true;
+  }
+  return (
+    typeof lastKnown === 'object' &&
+    lastKnown !== null &&
+    Object.values(lastKnown).every(isLastKnownEntry)
+  );
 }
 
 /** Typed wrapper over the `qd:snapshot` key — the KeyStore wrapper pattern (AD-12). */
 export class SnapshotStore {
   constructor(private readonly local: StorageArea) {}
 
-  /** Persists a completed cycle; a single set() keeps the cycle atomic. */
+  /**
+   * Persists a completed cycle; a single set() keeps the cycle atomic. The
+   * `lastKnown` map is OWNED here (hito-11): the previously stored map is
+   * carried over and every ok entry of the new cycle overwrites its slot —
+   * error entries never touch it, so the most recent success survives later
+   * error ticks. An empty map is omitted (no key on all-error cycles).
+   */
   async write(snapshot: CycleSnapshot): Promise<void> {
-    await this.local.set({ [SNAPSHOT_STORAGE_KEY]: snapshot });
+    const previous = await this.read();
+    const lastKnown: Partial<Record<ProviderId, ProviderOkEntry>> = { ...previous?.lastKnown };
+    for (const [providerId, entry] of Object.entries(snapshot.results)) {
+      if (entry !== undefined && entry.status === 'ok') {
+        lastKnown[providerId as ProviderId] = entry;
+      }
+    }
+    const stored: CycleSnapshot =
+      Object.keys(lastKnown).length === 0
+        ? { results: snapshot.results }
+        : { results: snapshot.results, lastKnown };
+    await this.local.set({ [SNAPSHOT_STORAGE_KEY]: stored });
   }
 
   /** Reads the last completed cycle; `undefined` = no valid snapshot yet. */

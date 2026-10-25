@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "quotadeck",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minimum_chrome_version": "110",
   "description": "Track your GLM Coding Plan usage live — 5-hour and weekly token windows, MCP quota and balance in one toolbar badge.",
   "icons": {

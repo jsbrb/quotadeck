@@ -54,4 +54,12 @@ describe('milestone copy (AD-24)', () => {
     expect(readme).toContain('seven shipped hosts'); // hito-12 re-ship: host_permissions is the allowlist filtered to SHIPPED_PROVIDER_IDS
     expect(readme).toMatch(/raw key|verbatim/i); // raw-auth note: no Bearer on monitor hosts
   });
+
+  it('the README documents the 0.3.0 restyle: design system, local fonts, last-known card', () => {
+    const readme = read('../../README.md');
+    expect(readme).toContain('v0.3.0'); // status line tracks the manifest version
+    expect(readme).toMatch(/neo-brutalist/i); // the imported design system is named
+    expect(readme).toMatch(/local (OFL )?woff2 fonts|fonts are local/i); // no remote fonts
+    expect(readme).toContain('LAST KNOWN'); // the frozen-telemetry cherry-pick
+  });
 });

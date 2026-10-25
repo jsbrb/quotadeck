@@ -16,7 +16,7 @@ import { KEY_STORAGE_PREFIX, KeyStore } from '../storage/key-store';
 import { BADGE_PROVIDER_STORAGE_KEY } from '../storage/badge-provider-store';
 import { QWEN_SITE_STORAGE_KEY } from '../storage/qwen-site-store';
 import { ZAI_PLATFORM_STORAGE_KEY } from '../storage/zai-platform-store';
-import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY, SnapshotStore } from '../storage/snapshot-store';
+import { type CycleSnapshot, SNAPSHOT_STORAGE_KEY } from '../storage/snapshot-store';
 import { FakeBrowser, type FakeStorageArea } from '../testing/fake-browser';
 import { startPopup } from './controller';
 import { ZAI_WRONG_PLATFORM_GUIDANCE } from './view';
@@ -63,7 +63,10 @@ async function seedZaiKey(local: FakeStorageArea, token: string): Promise<void> 
 }
 
 async function seedSnapshot(local: FakeStorageArea, snapshot: CycleSnapshot): Promise<void> {
-  await new SnapshotStore(local).write(snapshot);
+  // Raw area write, not SnapshotStore.write: since hito-11 the store's
+  // lastKnown merge performs an extra internal read, and the re-read-count
+  // pins below must attribute reads to the popup only.
+  await local.set({ [SNAPSHOT_STORAGE_KEY]: snapshot });
 }
 
 /** Replaces the page body with the static popup shell, like popup.html does. */
