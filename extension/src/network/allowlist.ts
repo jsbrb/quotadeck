@@ -27,6 +27,7 @@ export const PROVIDER_ALLOWLIST: AllowlistConfig = {
       'business.ap-southeast-1.aliyuncs.com',
       'token-plan.ap-southeast-1.maas.aliyuncs.com',
       'bailian-singapore-cs.alibabacloud.com',
+      'modelstudio.ap-southeast-1.aliyuncs.com',
     ],
     verification: 'official',
   },

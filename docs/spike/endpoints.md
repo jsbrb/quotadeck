@@ -103,11 +103,27 @@ Verification levels:
   BSS balance or the probe.
 - Endpoint: `POST https://bailian-singapore-cs.alibabacloud.com/cli/api.json?action=IntlBroadScopeAspnGateway&product=sfm_bailian&api=zeldaHttp.apikeyMgr.%2Ftokenplan%2Fpersonal%2Fapi%2Fv2%2Fusage`
 - Auth: `Authorization: Bearer <cliAccessToken>` — a console access token, NOT AK/SK
-  signing. Live-captured mint: the vendor CLI's browser device-flow. Candidate mint (NOT
-  live-verified, documented from CLI source only): the AK/SK-signed `GenerateCLIAccessToken`
-  path — `POST /modelstudio/cli/generateAccessToken`, action `GenerateCLIAccessToken`,
-  version `2026-02-10`, host `bailian.<region>.aliyuncs.com`. The token-mint host is
-  deliberately NOT allowlisted until it carries live evidence.
+  signing on the gateway itself. Mint path 1 (live-captured): the vendor CLI's browser
+  device-flow. Mint path 2 (headless, live-verified end-to-end 2026-10-25): the AK/SK-signed
+  `GenerateCLIAccessToken` on host `modelstudio.ap-southeast-1.aliyuncs.com` — `POST
+  /modelstudio/cli/generateAccessToken` with body `{}`, headers `x-acs-action:
+  GenerateCLIAccessToken` + `x-acs-version: 2026-02-10`, ACS3-HMAC-SHA256 signing. The
+  response carries `cliAccessToken` — the token value is never stored or logged. The
+  cn-beijing twin `modelstudio.cn-beijing.aliyuncs.com` is NOT live-verified and is NOT
+  allowlisted.
+- Required authorizations (user-facing setup, both mandatory): (1) a RAM custom policy
+  allowing action `modelstudio:GenerateCLIAccessToken` — the system policy
+  `AliyunModelStudioReadOnlyAccess` does NOT include it (Generate is classified write);
+  (2) Model Studio WORKSPACE membership for the RAM user (console
+  Settings→Permissions→Add User, Administrator role) — without it the quota gateway
+  answers `BailianGateway.Team.NotAuthorised` even with a valid token.
+- Mint gotcha (ACS3 canonicalization): the canonical sections are joined with `\n` while
+  the canonical-headers block itself ends with a trailing newline — producing a BLANK LINE
+  before the `SignedHeaders` section; a missing or extra newline there yields
+  `SignatureDoesNotMatch`.
+- End-to-end PASS (headless chain): mint → gateway usage call → live
+  `{ "per1MonthPercentage": 0.1250, "per1MonthResetTime": 1793721600000 }`; the
+  `switchAgent` value from the browser-login config worked as-is in the gateway body.
 - Request body (form-urlencoded): `params=<JSON>&region=ap-southeast-1`, where the JSON is
   `{"Api":"zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage","V":"1.0","Data":{"cornerstoneParam":{"protocol":"V2","console":"ONE_CONSOLE","productCode":"p_efm","switchUserType":3,"consoleSite":"BAILIAN_ALIYUN","switchAgent":<account-specific int>}}}`.
   `switchAgent` is account-specific — a placeholder here, never a pinned literal.
@@ -133,7 +149,8 @@ Verification levels:
   `verification: official` describes the BSS hosts; this subsection carries the quota
   surface's weaker evidence class.
 - Sources: `bailian-cli` 2.5.1 (npm) for the request shape and gateway matrix; maintainer
-  live captures cross-checked against the console quota page for the response values.
+  live captures cross-checked against the console quota page for the response values;
+  `scripts/spike-token-mint.ps1` for the headless AK/SK token-mint probe (2026-10-25).
 
 ## OpenAI — `api.openai.com` — verified-official
 
@@ -174,7 +191,8 @@ AD-5), scoped per provider. This block must stay structurally identical to
       "business.aliyuncs.com",
       "business.ap-southeast-1.aliyuncs.com",
       "token-plan.ap-southeast-1.maas.aliyuncs.com",
-      "bailian-singapore-cs.alibabacloud.com"
+      "bailian-singapore-cs.alibabacloud.com",
+      "modelstudio.ap-southeast-1.aliyuncs.com"
     ],
     "verification": "official"
   },
