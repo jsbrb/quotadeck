@@ -4,7 +4,7 @@ import { SystemClock } from "@shared/core/clock";
 import type { ProviderId } from "@shared/core/provider";
 import { SnapshotStore } from "@shared/storage/snapshot-store";
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
-import { createDesktopTransport } from "./lib/desktop-transport";
+import { createDesktopTransport, capturedResponses } from "./lib/desktop-transport";
 import { setupKeysView } from "./lib/keys-view";
 import { renderSegments, renderTickNotice, shortName, visibleCount } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
@@ -27,6 +27,22 @@ const LAST_TICK_ERROR_KEY = "qd:last-tick-error";
 window.addEventListener("error", (event) => {
   document.title = `BOOT ERR: ${event.message}`;
 });
+
+// T12 diagnostic (temporary): the shared qwen steps swallow failures by
+// contract and only log to console.error — capture those lines so the
+// headless debug session can read the exact failure class from prefs.
+const capturedErrors: string[] = [];
+const originalConsoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  const line = args
+    .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === "string" ? a : JSON.stringify(a)))
+    .join(" ");
+  capturedErrors.push(line.slice(0, 200));
+  if (capturedErrors.length > 20) {
+    capturedErrors.shift();
+  }
+  originalConsoleError(...args);
+};
 
 const bar = document.getElementById("bar");
 const keysView = document.getElementById("keys");
@@ -90,6 +106,9 @@ async function tick(): Promise<void> {
     if (mode === "bar") {
       reflowBar();
     }
+    await prefs
+      .set({ "qd:console-log": [...capturedErrors, ...capturedResponses] })
+      .catch(() => {});
     // The tray icon IS the desktop badge: band color from ZAI's threshold,
     // figure in the tooltip. No badge choice — the segments carry every
     // provider already (S10).

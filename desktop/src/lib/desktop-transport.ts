@@ -26,24 +26,56 @@ import type { Transport } from "@shared/network/transport";
 
 const GATEWAY_URL_SUFFIX = `${QWEN_TOKEN_PLAN_GATEWAY_HOST}${QWEN_GATEWAY_API_PATH}`;
 
+/** TEMP diagnostic (T12): captures gateway response metadata for prefs. */
+export const capturedResponses: string[] = [];
+
 function isGatewayUrl(url: string): boolean {
   return url.includes(GATEWAY_URL_SUFFIX);
 }
 
-/** FetchImpl over plugin-http with the gateway Origin rewrite. */
 export function createDesktopFetchImpl() {
-  return (
+  return async (
     url: string,
     init: { method: string; headers: Readonly<Record<string, string>>; body?: string },
   ): Promise<FetchResponseLike> => {
     const headers = isGatewayUrl(url)
-      ? { ...init.headers, Origin: QWEN_GATEWAY_TRUSTED_ORIGIN }
+      ? {
+          ...init.headers,
+          Origin: QWEN_GATEWAY_TRUSTED_ORIGIN,
+          // The gateway host's WAF answers header-fingerprinted non-browser
+          // clients with a 200 HTML block page (T12 capture: Taobao
+          // detail-exception page). Reproduce the browser request shape:
+          // webview UA, fetch-like Accept, browser Accept-Language.
+          "User-Agent": navigator.userAgent,
+          Accept: "*/*",
+          "Accept-Language": navigator.language || "en-US,en",
+        }
       : init.headers;
-    return pluginFetch(url, {
+    const response = await pluginFetch(url, {
       method: init.method as "GET" | "POST",
       headers,
       ...(init.body !== undefined ? { body: init.body } : {}),
-    }) as Promise<FetchResponseLike>;
+    });
+    if (isGatewayUrl(url)) {
+      try {
+        const text = await response.clone().text();
+        const headerNames: string[] = [];
+        response.headers.forEach((value, key) => {
+          headerNames.push(
+            `${key}: ${key.includes("access-control") || key === "server" || key === "content-type" ? value.slice(0, 40) : "?"}`,
+          );
+        });
+        capturedResponses.push(
+          `status=${response.status} len=${text.length} headers=[${headerNames.join("; ")}] FULLBODY=${text}`,
+        );
+        if (capturedResponses.length > 3) {
+          capturedResponses.shift();
+        }
+      } catch {
+        capturedResponses.push("gateway capture failed");
+      }
+    }
+    return response as unknown as FetchResponseLike;
   };
 }
 
