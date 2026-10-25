@@ -112,6 +112,8 @@ Run from the repository root:
 | `npm --prefix extension run typecheck` | `tsc --noEmit` (strict) |
 | `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.2.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
 
+Beyond these, `scripts/live-contract.ps1` is the opt-in **live contract publish gate**: it runs the real builder → signer → allowlist client → transport → parser pipeline against the live Qwen endpoints (credentials extracted in memory, never printed). Its test skips silently in the hermetic suite and only runs when the script opts it in via `QUOTADECK_LIVE=1` — run it green before any publish decision on the qwen token-plan feature.
+
 ## Security posture
 
 - **Zero runtime npm dependencies** — the toolchain (TypeScript, esbuild,
