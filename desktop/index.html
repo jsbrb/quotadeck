@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QuotaDeck</title>
+    <style>
+      :root {
+        --paper: #f5f1e8;
+        --ink: #0f172a;
+        --slate: #e2e8f0;
+        --warn-50: #f97316;
+        --warn-80: #ea580c;
+        --warn-90: #dc2626;
+        --shadow-offset: 4px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
+        user-select: none;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 14px;
+        border-bottom: 2px solid var(--ink);
+      }
+      header h1 {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0.08em;
+      }
+      #pin {
+        border: 2px solid var(--ink);
+        background: var(--slate);
+        color: var(--ink);
+        font: inherit;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        padding: 4px 10px;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--ink);
+      }
+      #pin:active {
+        transform: translate(2px, 2px);
+        box-shadow: none;
+      }
+      #pin.pinned {
+        background: var(--warn-50);
+        color: #ffffff;
+      }
+      main {
+        flex: 1;
+        padding: 14px;
+      }
+      .placeholder {
+        border: 2px solid var(--ink);
+        background: #ffffff;
+        box-shadow: var(--shadow-offset) var(--shadow-offset) 0 var(--ink);
+        padding: 16px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      footer {
+        padding: 8px 14px;
+        border-top: 2px solid var(--ink);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        opacity: 0.75;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>QUOTADECK</h1>
+      <button id="pin" type="button" aria-pressed="false" title="Pin the flyout above other windows">PIN</button>
+    </header>
+    <main>
+      <section class="placeholder" id="cards">LOADING SNAPSHOT…</section>
+    </main>
+    <footer>DESKTOP SHELL — PROVIDER WIRING LANDS IN WU-C</footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
