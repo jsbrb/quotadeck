@@ -29,7 +29,11 @@
 //   while percentage text stays uncapped; MCP fill derives from
 //   used/ceiling — presentation only, never a synthesized percentage);
 //   OpenAI renders per-model rows from `usage.breakdown` sorted by
-//   (model, usageType) for determinism; failed providers render a
+//   (model, usageType) for determinism; a qwen entry carrying the token-plan
+//   quota renders the `Token Plan:` line (hito-12 WU-D3 — percentage with at
+//   most one decimal, UNCAPPED, countdown derived at display time from
+//   `quota.resetAt`) between the balance and the binary plan line; failed
+//   providers render a
 //   per-class error label inside the same card structure (AD-21), and a ZAI
 //   auth failure additionally surfaces the static wrong-platform guidance
 //   (AD-27 — derived here from (provider, class), never transported in the
@@ -54,7 +58,7 @@ import type { CredentialType, ProviderId } from '../core/provider';
 import type { QwenSite } from '../core/qwen-sites';
 import { QWEN_SITES } from '../core/qwen-sites';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type UsageWindow } from '../core/usage';
+import { currencySymbol, type LineItem, type NormalizedUsage, type PlanInfo, type TokenPlanQuota, type UsageWindow } from '../core/usage';
 import { ZAI_PLATFORMS, type ZaiPlatform } from '../core/zai-platforms';
 import type { CredentialSlot, MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
@@ -305,6 +309,32 @@ function planLine(plan: PlanInfo, state: PopupState): string {
   return `<p class="plan-status">Plan: exhausted · resets in <span class="countdown">${countdown}</span></p>`;
 }
 
+/**
+ * Qwen token-plan quota line (popup-ui §Qwen Token Plan Quota Line, hito-12
+ * WU-D3): the monthly window carried by `usage.quota` (WU-C2 maps the
+ * gateway's 0..1 fraction to the 0-100 convention at parse level — this line
+ * renders it VERBATIM, uncapped, with at most one decimal: whole numbers
+ * keep no decimal — no display-time rounding games). The countdown derives
+ * from `quota.resetAt` at display time through the SAME pure
+ * `formatResetCountdown` discipline as the plan line, rendered as the
+ * established `.countdown` element. A reset instant without a percentage
+ * renders the countdown only; a quota carrying neither field renders NO
+ * line — nothing is synthesized. The line sits right below the balance and
+ * ABOVE the binary plan line; the two coexist independently.
+ */
+function quotaLine(quota: TokenPlanQuota, state: PopupState): string {
+  const figure = quota.percentage !== undefined ? `${quota.percentage.toFixed(1).replace(/\.0$/, '')}% used` : undefined;
+  const reset =
+    quota.resetAt !== undefined
+      ? `resets in <span class="countdown">${formatResetCountdown(quota.resetAt, state.nowMs)}</span>`
+      : undefined;
+  if (figure === undefined && reset === undefined) {
+    return '';
+  }
+  const body = figure !== undefined && reset !== undefined ? `${figure} · ${reset}` : (figure ?? reset ?? '');
+  return `<p class="quota-status">Token Plan: ${body}</p>`;
+}
+
 function providerMainSection(provider: PopupProvider, state: PopupState): string {
   const entry = state.snapshot?.results[provider.id];
   // Card wrapper (popup-ui §Provider List Rendering): one card per provider —
@@ -332,6 +362,9 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
       parts.push(`<p class="hero-percentage">${Math.round(heroPercentage)}%</p>`);
     }
     parts.push(`<p class="usage">${formatUsageText(entry.usage)}</p>`);
+    if (entry.usage.quota !== undefined) {
+      parts.push(quotaLine(entry.usage.quota, state)); // WU-D3: quota line — below the balance, above the plan line
+    }
     if (entry.usage.plan !== undefined) {
       parts.push(planLine(entry.usage.plan, state)); // hito-8: below the balance
     }

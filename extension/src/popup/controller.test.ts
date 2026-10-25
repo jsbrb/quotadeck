@@ -148,6 +148,32 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     expect(text).not.toContain('Kimi (Moonshot AI)');
   });
 
+  it('the qwen card renders the token-plan quota line from the snapshot with a display-time countdown (hito-12 WU-D3)', async () => {
+    const h = makePopupHarness();
+    await seedSnapshot(h.local, {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: {
+            providerId: 'qwen',
+            kind: 'balance',
+            value: 100.28,
+            currency: 'CNY',
+            quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+            fetchedAt: NOW_MS,
+          },
+        },
+      },
+    });
+    await seedAllKeys(h.local);
+    mountApp();
+    await openPopup(h);
+
+    const qwen = document.querySelector('section[data-provider="qwen"]');
+    expect(qwen?.textContent).toContain('Token Plan: 11.7% used · resets in 1h 30m'); // countdown from the injected now
+    expect(qwen?.textContent).toContain('¥100.28');
+  });
+
   it('opens with an empty state per KEYED SHIPPED provider when no cycle has completed yet', async () => {
     const h = makePopupHarness();
     await seedAllKeys(h.local); // keyed, no snapshot → one "No cycle data yet" card per shipped provider (hito-12)

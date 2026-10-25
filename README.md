@@ -39,37 +39,52 @@ specs and design.
 3. The worker registers a `usage-refresh` alarm (1-minute period) on install
    and on startup. Each tick fetches live usage for every shipped provider
    with a stored credential, with all time windows derived from an injectable
-   clock; the badge shows the last successful result in registration order
-   (ZAI, then Qwen — so with both keyed the Qwen result wins until badge
-   priority by user preference lands). For ZAI the figure is the 5h
-   percentage (uncapped above 100) with the plan level as fallback.
-4. The badge background is threshold-colored from that 5h percentage, so the
-   state reads at a glance: light slate `#E2E8F0` below 50% with near-black
-   text `#0F172A`, orange `#F97316` from 50%, deep orange `#EA580C` from 80%,
-   and red `#DC2626` from 90% (uncapped — 137% is still red), with white text
-   from 50% upward. A failed refresh shows `ERR` on the same light band with
-   near-black text until the next successful tick (≤1 minute).
+   clock; the toolbar badge renders exactly **one provider — the one you
+   choose** in Settings (the **Badge provider** selector, persisted as the
+   non-secret preference `qd:pref:badge-provider`, default ZAI): ZAI shows the
+   5h percentage (uncapped above 100) with the plan level as fallback, Qwen
+   shows the token-plan quota percentage when present (rendered like the 5h
+   figure) or the account balance otherwise. A chosen provider that did not
+   run — or is not shipped in this build — clears the badge rather than
+   showing a stale figure.
+4. The badge background is threshold-colored from the chosen figure — the ZAI
+   5h percentage, or the Qwen quota percentage — so the state reads at a
+   glance: light slate `#E2E8F0` below 50% with near-black text `#0F172A`,
+   orange `#F97316` from 50%, deep orange `#EA580C` from 80%, and red
+   `#DC2626` from 90% (uncapped — 137% is still red), with white text from 50%
+   upward. A failed refresh of the chosen provider shows `ERR` on the same
+   light band with near-black text until the next successful tick (≤1 minute).
 5. Clicking the toolbar action opens the popup on the consumption view: the
    ZAI monitor block (plan level, the 5h window with its uncapped percentage,
    used/total and reset countdown, the weekly window, and the MCP window with
-   per-tool rows) and the Qwen card (BSS balance and plan line) — the same
-   data the tick persisted for that cycle.
-   Failed refreshes show a per-class error label (`Auth failed`,
-   `Rate limited`, …) in the card while the badge shows `ERR` — a bad or
-   revoked key surfaces this way within one tick. A ZAI auth failure also
-   shows the wrong-platform guidance, since a Z.AI key under the ZHIPU
-   selection (or vice versa) is the most likely cause.
+   per-tool rows) and the Qwen card (BSS balance, the token-plan quota line —
+   e.g. `Token Plan: 11.7% used · resets in 1h 30m`, the percentage uncapped —
+   and the binary plan line) — the same data the tick persisted for that
+   cycle. Failed refreshes show a per-class error label (`Auth failed`,
+   `Rate limited`, …) in the card — the badge shows `ERR` only when the
+   failing provider is the chosen one — a bad or revoked key surfaces this
+   way within one tick. A ZAI auth failure also shows the wrong-platform
+   guidance, since a Z.AI key under the ZHIPU selection (or vice versa) is
+   the most likely cause.
 6. Manage keys through the **Settings** gear in the popup header (no console
    needed): paste the ZAI credential — or the Qwen AccessKeyId/AccessKeySecret
    pair plus the optional `sk-sp-` plan key — and press **Save key**, or
    press **Enter** in the input. Invalid input is rejected with guidance, and
    stored keys display masked (`••••` + at most 4 trailing characters).
-   **Revoke** removes the key. The ZAI section carries the **platform
-   selector** (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as a
-   non-secret local preference and switches the base URL of every ZAI monitor
-   request (`api.z.ai` ↔ `open.bigmodel.cn`); the Qwen section carries the
-   same selector for the BSS site (International ↔ China). The main view
-   renders no key forms.
+   **Revoke** removes the key. The settings view opens with the **Badge
+   provider** selector (ZAI ↔ Qwen, default ZAI) — the single provider whose
+   figure the toolbar badge renders; the choice persists as a non-secret
+   local preference (`qd:pref:badge-provider`). The ZAI section carries the
+   **platform selector** (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as
+   a non-secret local preference and switches the base URL of every ZAI
+   monitor request (`api.z.ai` ↔ `open.bigmodel.cn`); the Qwen section carries
+   the same selector for the BSS site (International ↔ China). The main view
+   renders no key forms. The Qwen **token-plan quota** window (the
+   `Token Plan:` card line and the Qwen badge figure) reads the monthly quota
+   through a minted console session token, and needs BOTH account
+   authorizations: a RAM custom policy allowing the action
+   `modelstudio:GenerateCLIAccessToken` (the read-only system policy does not
+   include it) and Model Studio workspace membership for the RAM user.
 
 ## Popup security notes
 

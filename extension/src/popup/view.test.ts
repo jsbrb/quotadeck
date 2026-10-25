@@ -508,6 +508,96 @@ describe('renderSettings — Badge Provider Selector (popup-ui spec §Badge Prov
   });
 });
 
+describe('renderMain — Qwen Token Plan Quota Line (popup-ui spec §Qwen Token Plan Quota Line; hito-12 WU-D3)', () => {
+  /** A last cycle whose qwen entry carries the monthly quota window (WU-D3). */
+  function qwenQuotaSnapshot(
+    quota: { percentage?: number; resetAt?: number },
+    value: number | null = 100.28, // `null` = no balance figure at all (quota-only entry)
+  ): CycleSnapshot {
+    return {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: usage('qwen', {
+            value: value === null ? undefined : value,
+            currency: value === null ? undefined : 'CNY',
+            quota: { ...quota, fetchedAt: NOW_MS },
+          }),
+        },
+      },
+    };
+  }
+
+  it('renders the quota line with one-decimal percentage and display-time countdown — no hero is synthesized', () => {
+    const html = renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 }) }));
+    const qwen = sectionFor(html, 'qwen');
+
+    expect(qwen).toContain('class="quota-status"');
+    expect(qwen).toContain('Token Plan: 11.7% used · resets in <span class="countdown">1h 30m</span>'); // countdown from quota.resetAt at render time
+    expect(qwen).toContain('¥100.28'); // the balance line stays the leading figure
+    expect(qwen).not.toContain('hero-percentage'); // monetary card: the quota percentage is never a monitor hero
+  });
+
+  it('renders whole percentages without a decimal and keeps UNCAPPED values verbatim', () => {
+    const whole = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 42, resetAt: NOW_MS + 2 * 3_600_000 }) })), 'qwen');
+    expect(whole).toContain('Token Plan: 42% used · resets in <span class="countdown">2h 0m</span>');
+    expect(whole).not.toContain('42.0%');
+
+    const uncapped = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 127.3 }) })), 'qwen');
+    expect(uncapped).toContain('Token Plan: 127.3% used'); // the server's 127.3 renders 127.3 — never capped
+  });
+
+  it('a reset instant without a percentage renders countdown-only — no figure is synthesized', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ resetAt: NOW_MS + 45 * 60_000 }) })), 'qwen');
+
+    expect(qwen).toContain('Token Plan: resets in <span class="countdown">45m</span>');
+    expect(qwen).not.toContain('% used');
+  });
+
+  it('a quota with neither figure nor reset renders no line at all — the balance carries on', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({}) })), 'qwen');
+
+    expect(qwen).not.toContain('Token Plan');
+    expect(qwen).toContain('¥100.28');
+  });
+
+  it('a quota-only entry (no balance value) omits the balance line gracefully — no placeholder dashes', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 }, null) })), 'qwen');
+
+    expect(qwen).toContain('<p class="usage"></p>'); // empty usage line — the established honest degradation
+    expect(qwen).not.toContain('¥');
+    expect(qwen).not.toContain('—'); // no invented placeholder
+    expect(qwen).toContain('Token Plan: 11.7% used');
+  });
+
+  it('quota and plan lines coexist — balance first, then quota, then the binary plan line', () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        qwen: {
+          status: 'ok',
+          usage: usage('qwen', {
+            value: 100.28,
+            currency: 'CNY',
+            plan: { status: 'exhausted', resetAt: NOW_MS + 2 * 3_600_000 },
+            quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+          }),
+        },
+      },
+    };
+    const qwen = sectionFor(renderMain(popupState({ snapshot })), 'qwen');
+
+    expect(qwen).toContain('Token Plan: 11.7% used');
+    expect(qwen).toContain('Plan: exhausted'); // the binary plan line is unchanged
+    expect(qwen.indexOf('¥100.28')).toBeLessThan(qwen.indexOf('Token Plan:'));
+    expect(qwen.indexOf('Token Plan:')).toBeLessThan(qwen.indexOf('Plan: exhausted')); // quota renders FIRST of the two lines
+  });
+
+  it('repeated renders are byte-identical — the quota line is a pure function of state (W1-gap discipline)', () => {
+    const snapshot = qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 });
+    expect(renderMain(popupState({ snapshot }))).toBe(renderMain(popupState({ snapshot })));
+  });
+});
+
 describe('renderMain — Qwen Plan Line (popup-ui spec §Qwen Plan Line, hito-8)', () => {
   it('renders the plan line per status: Available / exhausted · countdown / key rejected', () => {
     const available = sectionFor(renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'available' }) })), 'qwen');
