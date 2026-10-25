@@ -36,12 +36,13 @@
         flex-direction: row;
         flex-wrap: nowrap;
         align-items: stretch;
-        height: 52px;
+        height: 68px;
       }
       .seg {
         display: flex;
-        align-items: center;
-        gap: 10px;
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
         padding: 0 16px;
         border-left: 1px solid var(--bar-sep);
         flex: 0 0 auto;
@@ -49,6 +50,11 @@
       }
       .seg:first-child {
         border-left: none;
+      }
+      .seg-top {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
       }
       .seg-name {
         font-size: 12px;

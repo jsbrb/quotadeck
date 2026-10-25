@@ -93,8 +93,10 @@ function okSegment(id: ProviderId, usage: NormalizedUsage, now: number): string 
   const reset = segmentReset(usage, now);
   return `
     <div class="seg">
-      <span class="seg-name">${escapeHtml(shortName(id))}</span>
-      <span class="seg-pct" style="color:${color}">${escapeHtml(text)}</span>
+      <div class="seg-top">
+        <span class="seg-name">${escapeHtml(shortName(id))}</span>
+        <span class="seg-pct" style="color:${color}">${escapeHtml(text)}</span>
+      </div>
       <span class="seg-reset">${escapeHtml(reset)}</span>
     </div>`;
 }
@@ -103,7 +105,9 @@ function errorSegment(id: ProviderId, entry: Extract<ProviderSnapshotEntry, { st
   const label = ERROR_LABELS[entry.errorClass] ?? "ERROR";
   return `
     <div class="seg">
-      <span class="seg-name">${escapeHtml(shortName(id))}</span>
+      <div class="seg-top">
+        <span class="seg-name">${escapeHtml(shortName(id))}</span>
+      </div>
       <span class="seg-err">${escapeHtml(label)}</span>
     </div>`;
 }
@@ -122,7 +126,9 @@ export function renderSegments(snapshot: CycleSnapshot, now: number): string {
   if (ordered.length === 0) {
     return `
       <div class="seg">
-        <span class="seg-name">NO KEYS YET</span>
+        <div class="seg-top">
+          <span class="seg-name">NO KEYS YET</span>
+        </div>
         <span class="seg-reset">RIGHT-CLICK TRAY ICON → KEYS</span>
       </div>`;
   }
@@ -141,7 +147,9 @@ export function renderSegments(snapshot: CycleSnapshot, now: number): string {
 export function renderTickNotice(message: string): string {
   return `
     <div class="seg">
-      <span class="seg-name">TICK FAILED</span>
+      <div class="seg-top">
+        <span class="seg-name">TICK FAILED</span>
+      </div>
       <span class="seg-err">${escapeHtml(message.slice(0, 90))}</span>
     </div>`;
 }

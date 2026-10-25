@@ -16,7 +16,7 @@ import { resolveChosenBand } from "./lib/tray-badge";
 
 const REFRESH_PERIOD_MS = 60_000;
 const SEG_WIDTH = 230;
-const BAR_HEIGHT = 52;
+const BAR_HEIGHT = 68;
 const BAR_PAD_X = 16;
 const EMPTY_BAR_WIDTH = 330;
 const LAST_TICK_ERROR_KEY = "qd:last-tick-error";
