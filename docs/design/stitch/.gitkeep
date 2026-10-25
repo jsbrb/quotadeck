@@ -1,0 +1,4 @@
+# Drop Google Stitch exports here:
+# - *.png            screen captures (visual reference)
+# - code/            contents of the .zip from Stitch's "More -> Download"
+# These files are design references only - they never ship in the extension.
