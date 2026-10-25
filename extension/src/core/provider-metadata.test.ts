@@ -22,9 +22,9 @@ describe('PROVIDER_METADATA (AD-24)', () => {
   });
 });
 
-describe('SHIPPED_PROVIDER_IDS (hito-12 qwen re-ship; hito-13 deepseek pending)', () => {
-  it('ships exactly zai then qwen in AD-6 order — deepseek flips on in WU-B with its manifest host (hito-13)', () => {
-    expect(SHIPPED_PROVIDER_IDS).toEqual(['zai', 'qwen']);
+describe('SHIPPED_PROVIDER_IDS (hito-13 deepseek ships third)', () => {
+  it('ships exactly zai, qwen, deepseek in AD-6 order — deepseek flipped on in WU-B together with its manifest host (hito-13)', () => {
+    expect(SHIPPED_PROVIDER_IDS).toEqual(['zai', 'qwen', 'deepseek']);
   });
 
   it('is a subset of the known provider ids', () => {

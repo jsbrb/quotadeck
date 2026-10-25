@@ -25,10 +25,9 @@ export const PROVIDER_METADATA: readonly ProviderMetadata[] = [
  * filter. The default registry, the popup composition, and the manifest
  * host_permissions derivation all subset through this list; non-shipped
  * implementations stay in source, unshipped. Order follows the AD-6 registry
- * order (zai then qwen — hito-12 re-ships qwen on this branch for the quota
- * browser E2E; the hito-10 GLM-only store release stays on develop).
- * deepseek (hito-13) stays UNSHIPPED in WU-A — it flips on in WU-B, in the
- * same unit that pins its manifest host, keeping the shipped manifest =
+ * order (zai, qwen, deepseek — openai and kimi stay unshipped).
+ * deepseek ships with hito-13: WU-B flipped it on in the same unit that
+ * pinned its manifest host, keeping the shipped manifest =
  * allowlist ∩ SHIPPED invariant green at every commit.
  */
-export const SHIPPED_PROVIDER_IDS: readonly ProviderId[] = ['zai', 'qwen'];
+export const SHIPPED_PROVIDER_IDS: readonly ProviderId[] = ['zai', 'qwen', 'deepseek'];

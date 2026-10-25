@@ -73,6 +73,15 @@ function liveRoutes(): Record<string, TransportResponse> {
     'https://api.moonshot.cn/v1/users/me/balance': FIXTURE_RESPONSES['kimi/users-me-balance--ok'],
     'https://business.aliyuncs.com/?Action=QueryAccountBalance&Version=2017-12-14':
       FIXTURE_RESPONSES['qwen/query-account-balance--ok'],
+    // hito-13 WU-B: the shipped deepseek balance leg — the live-capture shape
+    // (ALL figures decimal STRINGS; docs/spike/endpoints.md).
+    'https://api.deepseek.com/user/balance': {
+      status: 200,
+      body: {
+        is_available: true,
+        balance_infos: [{ currency: 'USD', total_balance: '2.00', granted_balance: '0.00', topped_up_balance: '2.00' }],
+      },
+    },
     // WU-L: the qwen legs that survive the balance suspension — the quota
     // step's two hops, served here so the shipped-tick scenario composes the
     // production shape (zai engine leg + qwen quota synthesis).
@@ -499,7 +508,7 @@ describe('background — buildTickQuery (usage-badge spec §Live refresh per tic
 describe('background — Badge Rendering + refresh per tick (usage-badge spec)', () => {
   it('the shipped worker badges the chosen provider only: one badge write per tick, stable across repeated ticks', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert — the engine dispatches zai only (WU-L)
+    await saveKeys(h.local, ALL_KEYS); // deepseek ships too now (hito-13 WU-B) but stays UNKEYED in ALL_KEYS — the tick still composes zai + the qwen quota step
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -1120,7 +1129,7 @@ describe('background — default live transport (FetchTransport, AD-19)', () => 
 
   it('hermetic proof: an injected transport serves the shipped tick with the global fetch forbidden', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); qwen rides the quota step now (WU-L)
+    await saveKeys(h.local, ALL_KEYS); // deepseek shipped-but-unkeyed here (hito-13 WU-B); qwen rides the quota step now (WU-L)
     vi.stubGlobal('fetch', () => {
       throw new Error('live network is forbidden in the hermetic suite');
     });
@@ -1255,7 +1264,7 @@ describe('background — Error Taxonomy Mapping (usage-badge spec)', () => {
 describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on Open)', () => {
   it('tick writes exactly one snapshot per completed cycle: the shipped ok entry carries the monitor windows', async () => {
     const h = makeApi();
-    await saveKeys(h.local, ALL_KEYS); // unshipped keys sit inert (hito-10); qwen rides the quota step now (WU-L)
+    await saveKeys(h.local, ALL_KEYS); // deepseek shipped-but-unkeyed here (hito-13 WU-B); qwen rides the quota step now (WU-L)
     startWorker(h.api, {
       clock: new FixedClock(),
       transport: new SignedQwenRouteTransport(liveRoutes()),
@@ -1275,9 +1284,9 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
     expect(h.action.badgeTexts).toEqual([...perTick, ...perTick]);
 
     const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
-    // hito-12 re-ship, WU-L flip: the keys stay ['zai','qwen'] but qwen now
-    // enters through the tick-level quota-step SYNTHESIS — the engine no
-    // longer dispatches the BSS balance leg.
+    // hito-12 re-ship, WU-L flip: with deepseek UNKEYED in this graph the keys
+    // stay ['zai','qwen'] — qwen enters through the tick-level quota-step
+    // SYNTHESIS, the engine no longer dispatches the BSS balance leg.
     expect(Object.keys(stored.results)).toEqual(['zai', 'qwen']);
     // WU-L honest outcome: the synthesized qwen entry is QUOTA-ONLY — no
     // balance value ever rides the snapshot (RED before the suspension: the
@@ -1306,6 +1315,37 @@ describe('background — Cycle Snapshot (popup-ui spec §Current Cycle Data on O
             ],
           },
         },
+      }),
+    });
+  });
+
+  it('the shipped tick dispatches keyed deepseek and records its derived wallet entry (hito-13 WU-B ship flip)', async () => {
+    const h = makeApi();
+    await saveKeys(h.local, [...ALL_KEYS, 'deepseek']); // deepseek SHIPPED now — the keyed balance leg joins the production tick
+    startWorker(h.api, {
+      clock: new FixedClock(),
+      transport: new SignedQwenRouteTransport(liveRoutes()),
+    });
+    h.fireInstalled();
+    await flushTasks();
+
+    h.alarms.fire(USAGE_REFRESH_ALARM);
+    await vi.waitFor(() => expect(snapshotWrites(h.local)).toBe(1));
+    expect(h.action.badgeTexts).toEqual(['32%']); // the chosen default (zai) still owns the tick's ONE badge write
+
+    const stored = h.local.snapshot()[SNAPSHOT_STORAGE_KEY] as CycleSnapshot;
+    // Registry order (zai, deepseek) with the qwen quota-step synthesis last.
+    expect(Object.keys(stored.results)).toEqual(['zai', 'deepseek', 'qwen']);
+    // The live-capture figures are decimal STRINGS on the wire and NUMBERS in
+    // the wallet: total = topped_up + granted = 2, consumed = total − balance = 0.
+    expect(stored.results.deepseek).toEqual({
+      status: 'ok',
+      usage: expect.objectContaining({
+        providerId: 'deepseek',
+        kind: 'balance',
+        value: 2,
+        currency: 'USD',
+        wallet: { currency: 'USD', total: 2, consumed: 0, percentage: 0 },
       }),
     });
   });

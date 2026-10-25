@@ -28,13 +28,13 @@ import {
   ZAI_WRONG_PLATFORM_GUIDANCE,
 } from './view';
 
-/** Registry metadata as production supplies it (PROVIDER_METADATA, AD-6/24 order). */
+/** The full PROVIDER_METADATA registry (AD-6/24 order). The view is list-driven, so the fixture exercises every metadata entry; production supplies the SHIPPED_PROVIDER_IDS slice. */
 const PROVIDERS: readonly PopupProvider[] = [
   { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'raw' },
   { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
+  { id: 'deepseek', displayName: 'DeepSeek', credentialType: 'bearer' }, // shipped with hito-13 WU-B (rendered card wallet in WU-D)
   { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
   { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
-  // deepseek joins the rendered set in WU-B/WU-D, when it ships and renders its card.
 ];
 
 const NOW_MS = 1_754_000_000_000;
@@ -518,6 +518,7 @@ describe('renderSettings — Badge Provider Selector (popup-ui spec §Badge Prov
     expect(html).toContain('<label for="badge-provider-select">Badge provider</label>');
     expect(html).toContain('<option value="zai" selected>ZAI (Zhipu AI)</option>'); // default choice carries selected
     expect(html).toContain('<option value="qwen">Qwen (Alibaba Cloud BSS)</option>');
+    expect(html).toContain('<option value="deepseek">DeepSeek</option>'); // shipped with hito-13 WU-B
     // options come from state.providers — data-driven, never hardcoded:
     expect(html).toContain('<option value="openai">OpenAI</option>');
     expect(html).toContain('<option value="kimi">Kimi (Moonshot AI)</option>');
