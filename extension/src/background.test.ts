@@ -1546,6 +1546,9 @@ describe('background — resolveChosenBadge (hito-12 WU-D2 badge resolution, pur
   const qwenEntry = (overrides: Partial<NormalizedUsage>): Partial<Record<ProviderId, ProviderSnapshotEntry>> => ({
     qwen: { status: 'ok', usage: { providerId: 'qwen', kind: 'balance', fetchedAt: TICK_NOW, ...overrides } },
   });
+  const deepseekEntry = (overrides: Partial<NormalizedUsage>): Partial<Record<ProviderId, ProviderSnapshotEntry>> => ({
+    deepseek: { status: 'ok', usage: { providerId: 'deepseek', kind: 'balance', fetchedAt: TICK_NOW, ...overrides } },
+  });
 
   it('an absent choice clears — empty text, no percentage', () => {
     expect(resolveChosenBadge({}, 'zai')).toEqual({ text: '' });
@@ -1561,6 +1564,7 @@ describe('background — resolveChosenBadge (hito-12 WU-D2 badge resolution, pur
 
   it('the chosen error entry renders the ERR marker — the class never changes the render', () => {
     expect(resolveChosenBadge({ zai: { status: 'error', errorClass: 'rate-limit' } }, 'zai')).toEqual({ text: 'ERR' });
+    expect(resolveChosenBadge({ deepseek: { status: 'error', errorClass: 'auth' } }, 'deepseek')).toEqual({ text: 'ERR' });
   });
 
   it('chosen zai renders the 5h percentage and hands it to the threshold band', () => {
@@ -1604,5 +1608,20 @@ describe('background — resolveChosenBadge (hito-12 WU-D2 badge resolution, pur
 
   it('chosen qwen with neither quota nor balance clears — the honest empty badge', () => {
     expect(resolveChosenBadge(qwenEntry({ plan: { status: 'available' } }), 'qwen')).toEqual({ text: '' });
+  });
+
+  it('chosen deepseek renders the wallet percentage and hands it to the band — the SAME helper as zai/qwen', () => {
+    expect(
+      resolveChosenBadge(
+        deepseekEntry({ value: 2, currency: 'USD', wallet: { currency: 'USD', total: 10, consumed: 3.7, percentage: 37 } }),
+        'deepseek',
+      ),
+    ).toEqual({ text: '37%', percentage: 37 });
+  });
+
+  it('chosen deepseek with a zero-total wallet (percentage omitted) falls back to the balance format', () => {
+    expect(
+      resolveChosenBadge(deepseekEntry({ value: 2, currency: 'USD', wallet: { currency: 'USD', total: 0, consumed: 0 } }), 'deepseek'),
+    ).toEqual({ text: '$2.0' });
   });
 });
