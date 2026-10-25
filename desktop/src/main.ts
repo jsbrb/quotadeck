@@ -2,9 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { SystemClock } from "@shared/core/clock";
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
 import { createDesktopTransport } from "./lib/desktop-transport";
+import { displayName, renderSnapshot, renderTickError } from "./lib/render";
 import { setupKeysView } from "./lib/keys-view";
-import { renderSnapshot, renderTickError } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
+import { resolveChosenBand } from "./lib/tray-badge";
 
 // Flyout shell (WU-D): pin toggle talks to the Rust shell; QUOTAS/KEYS tabs
 // switch views; the refresh loop runs here on the extension's One-Minute
@@ -48,6 +49,10 @@ async function tick(): Promise<void> {
     if (cards !== null) {
       cards.innerHTML = renderSnapshot(outcome.snapshot, clock.now());
     }
+    // The tray icon IS the desktop badge (WU-E): band color from the chosen
+    // provider's threshold, figure in the tooltip.
+    const chosen = resolveChosenBand(outcome.snapshot.results, outcome.badgeProvider, displayName);
+    await invoke("set_tray_badge", { band: chosen.band, tooltip: chosen.tooltip });
   } catch (error) {
     console.error("[quotadeck-desktop] tick failed:", error);
     if (cards !== null) {

@@ -29,7 +29,8 @@ function escapeHtml(value: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function displayName(id: ProviderId): string {
+/** Display name for a provider id, shared by the cards and the tray tooltip. */
+export function displayName(id: ProviderId): string {
   return PROVIDER_METADATA.find((entry) => entry.id === id)?.displayName ?? id;
 }
 
