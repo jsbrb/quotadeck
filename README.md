@@ -1,15 +1,15 @@
 # quotadeck
 
 A browser extension badge that tracks AI provider usage and balances. This
-hito-12 feature branch re-ships the Qwen (Alibaba Cloud Model Studio)
-provider alongside ZAI (Zhipu AI, the GLM Coding Plan) so the token-plan
-quota flow can be exercised end to end in a real browser. The OpenAI and
-Kimi (Moonshot AI) implementations are retained in source but stay
-unshipped: they never register in the worker, never render in the popup, and
-are granted no host permissions. (The GLM-only Chrome Web Store release lives
-on develop.)
+v0.4.0 public build ships the Qwen (Alibaba Cloud Model Studio) provider
+alongside ZAI (Zhipu AI, the GLM Coding Plan): the Chrome Web Store public
+line is no longer GLM-only — this release covers the Z.ai GLM monitors and
+the Qwen Token Plan quota window. The OpenAI and Kimi (Moonshot AI)
+implementations are retained in source but stay unshipped: they never
+register in the worker, never render in the popup, and are granted no host
+permissions.
 
-**Status: v0.3.0 — restyled ZAI + Qwen branch build (hito-12).** The extension is a
+**Status: v0.4.0 — Qwen Token Plan quota, twin cards, one-touch badge.** The extension is a
 working Manifest V3 service worker plus action popup that fetches real usage
 data every minute through an allowlist-constrained network client. ZAI usage
 comes from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
@@ -132,7 +132,7 @@ Run from the repository root:
 | `npm --prefix extension run build` | esbuild: bundle `extension/src/background.ts` → `extension/dist/background.js` and `extension/src/popup/main.ts` → `extension/dist/popup.js`, copy the MV3 manifest + `popup.html` + `icons/` + local `fonts/` |
 | `npm --prefix extension run test` | vitest: hermetic unit suite (no Chrome runtime, no network) |
 | `npm --prefix extension run typecheck` | `tsc --noEmit` (strict) |
-| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.3.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
+| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.4.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
 
 Beyond these, `scripts/live-contract.ps1` is the opt-in **live contract publish gate**: it runs the real builder → signer → allowlist client → transport → parser pipeline against the live Qwen endpoints (credentials extracted in memory, never printed). Its test skips silently in the hermetic suite and only runs when the script opts it in via `QUOTADECK_LIVE=1` — run it green before any publish decision on the qwen token-plan feature.
 

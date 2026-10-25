@@ -13,9 +13,9 @@ const read = (relative: string): string => readFileSync(join(here, relative), 'u
 describe('milestone copy (AD-24)', () => {
   it('the manifest description announces live provider usage', () => {
     const manifest = JSON.parse(read('../public/manifest.json')) as { description: string };
-    // Store listing copy (hito-10): GLM Coding Plan usage, verbatim from the manifest.
+    // Store listing copy (v0.4.0): GLM + Qwen plan usage, verbatim from the manifest.
     expect(manifest.description).toBe(
-      'Track your GLM Coding Plan usage live — 5-hour and weekly token windows, MCP quota and balance in one toolbar badge.',
+      'Track your GLM and Qwen plan usage live — 5-hour, weekly and monthly quota windows in one toolbar badge.',
     );
   });
 
@@ -57,7 +57,7 @@ describe('milestone copy (AD-24)', () => {
 
   it('the README documents the 0.3.0 restyle: design system, local fonts, last-known card', () => {
     const readme = read('../../README.md');
-    expect(readme).toContain('v0.3.0'); // status line tracks the manifest version
+    expect(readme).toContain('v0.4.0'); // status line tracks the manifest version
     expect(readme).toMatch(/neo-brutalist/i); // the imported design system is named
     expect(readme).toMatch(/local (OFL )?woff2 fonts|fonts are local/i); // no remote fonts
     expect(readme).toContain('LAST KNOWN'); // the frozen-telemetry cherry-pick

@@ -18,6 +18,9 @@ extension/*.zip
 # Test coverage
 coverage/
 
+# vitest runtime cache
+extension/.vitest/
+
 # OS / editor noise
 .DS_Store
 Thumbs.db
