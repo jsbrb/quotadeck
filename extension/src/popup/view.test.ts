@@ -28,10 +28,11 @@ import {
   ZAI_WRONG_PLATFORM_GUIDANCE,
 } from './view';
 
-/** Registry metadata as production supplies it (PROVIDER_METADATA, AD-6/24 order). */
+/** The full PROVIDER_METADATA registry (AD-6/24 order). The view is list-driven, so the fixture exercises every metadata entry; production supplies the SHIPPED_PROVIDER_IDS slice. */
 const PROVIDERS: readonly PopupProvider[] = [
   { id: 'zai', displayName: 'ZAI (Zhipu AI)', credentialType: 'raw' },
   { id: 'qwen', displayName: 'Qwen (Alibaba Cloud BSS)', credentialType: 'ak-sk' },
+  { id: 'deepseek', displayName: 'DeepSeek', credentialType: 'bearer' }, // shipped with hito-13 WU-B (rendered card wallet in WU-D)
   { id: 'openai', displayName: 'OpenAI', credentialType: 'openai-admin-read' },
   { id: 'kimi', displayName: 'Kimi (Moonshot AI)', credentialType: 'bearer' },
 ];
@@ -49,6 +50,7 @@ const KEYED_STATES: Readonly<Record<ProviderId, MaskedCredential>> = {
   qwen: { type: 'ak-sk', maskedAccessKeyId: '••••AK00', maskedAccessKeySecret: '••••0000' },
   openai: { type: 'openai-admin-read', maskedToken: '••••1234' },
   kimi: { type: 'bearer', maskedToken: '••••cdef' },
+  deepseek: { type: 'bearer', maskedToken: '••••ds00' },
 };
 
 /** Full monitor payload (AD-26/27): level, both windows, MCP with two tools. */
@@ -516,6 +518,7 @@ describe('renderSettings — Badge Provider Selector (popup-ui spec §Badge Prov
     expect(html).toContain('<label for="badge-provider-select">Badge provider</label>');
     expect(html).toContain('<option value="zai" selected>ZAI (Zhipu AI)</option>'); // default choice carries selected
     expect(html).toContain('<option value="qwen">Qwen (Alibaba Cloud BSS)</option>');
+    expect(html).toContain('<option value="deepseek">DeepSeek</option>'); // shipped with hito-13 WU-B
     // options come from state.providers — data-driven, never hardcoded:
     expect(html).toContain('<option value="openai">OpenAI</option>');
     expect(html).toContain('<option value="kimi">Kimi (Moonshot AI)</option>');
@@ -640,6 +643,115 @@ describe('renderMain — Qwen Token Plan twin card (popup-ui spec §Qwen Token P
   it('repeated renders are byte-identical — the quota line is a pure function of state (W1-gap discipline)', () => {
     const snapshot = qwenQuotaSnapshot({ percentage: 11.72, resetAt: NOW_MS + 90 * 60_000 });
     expect(renderMain(popupState({ snapshot }))).toBe(renderMain(popupState({ snapshot })));
+  });
+});
+
+describe('renderMain — DeepSeek wallet twin card (hito-13 WU-D; pay-as-you-go wallet under the hito-12 WU-M twin-card rule)', () => {
+  /** A last cycle whose deepseek entry carries the derived wallet (WU-A shape); `remaining` = the balance figure. */
+  function deepseekWalletSnapshot(
+    wallet: { currency: string; total: number; consumed: number; percentage?: number },
+    remaining = wallet.total,
+  ): CycleSnapshot {
+    return {
+      results: {
+        deepseek: {
+          status: 'ok',
+          usage: usage('deepseek', { value: remaining, currency: wallet.currency, wallet }),
+        },
+      },
+    };
+  }
+
+  it('renders the wallet percentage as the card hero AND inside its monitor bar, with the Wallet line below (twin card)', () => {
+    const deepseek = sectionFor(
+      renderMain(popupState({ snapshot: deepseekWalletSnapshot({ currency: 'USD', total: 2, consumed: 0, percentage: 0 }) })),
+      'deepseek',
+    );
+
+    // Hero: same class, same Math.round, same threshold band as the zai/qwen heroes.
+    expect(deepseek).toContain('<p class="hero-percentage band-green">0%</p>');
+    // The SAME number again inside the monitor bar — the hito-6 dual-hero discipline, bar mirroring zai's exactly.
+    expect(deepseek).toContain(
+      '<div class="bar band-green"><div class="bar-fill" style="width: 0%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">0%</span></div>',
+    );
+    expect(deepseek).toContain('Wallet: $0.00 of $2.00 used'); // consumed first, total second, money via the formatUsageText convention
+    expect(deepseek).toContain('<p class="usage">$2.00</p>'); // the balance line (total_balance) survives below
+    // The hero sits in the existing click-to-choose wrapper — no new markup invented for the wallet.
+    expect(deepseek).toContain('<div class="hero-pick" data-action="set-badge" title="Show this provider in the toolbar badge">');
+    expect(deepseek.indexOf('class="hero-percentage')).toBeLessThan(deepseek.indexOf('class="usage"')); // hero above the balance
+    expect(deepseek.indexOf('class="usage"')).toBeLessThan(deepseek.indexOf('class="monitor"')); // block below the balance
+  });
+
+  it('bands the wallet figures through thresholdBand — 60 consumed stays green, 72 flips amber', () => {
+    const consumed = sectionFor(
+      renderMain(popupState({ snapshot: deepseekWalletSnapshot({ currency: 'USD', total: 10, consumed: 6, percentage: 60 }) })),
+      'deepseek',
+    );
+    expect(consumed).toContain('<p class="hero-percentage band-green">60%</p>');
+    expect(consumed).toContain('Wallet: $6.00 of $10.00 used');
+
+    const amber = sectionFor(
+      renderMain(popupState({ snapshot: deepseekWalletSnapshot({ currency: 'USD', total: 10, consumed: 7.2, percentage: 72 }) })),
+      'deepseek',
+    );
+    expect(amber).toContain('<p class="hero-percentage band-amber">72%</p>'); // thresholdBand(72) — band wiring on the wallet path
+    expect(amber).toContain('band-amber"><div class="bar-fill"');
+  });
+
+  it('stays uncapped in text while the bar fill caps at 100 — the twin bar discipline verbatim', () => {
+    const uncapped = sectionFor(
+      renderMain(popupState({ snapshot: deepseekWalletSnapshot({ currency: 'USD', total: 2, consumed: 2.74, percentage: 137 }) })),
+      'deepseek',
+    );
+    expect(uncapped).toContain('<p class="hero-percentage band-red">137%</p>'); // never capped in the hero
+    expect(uncapped).toContain('style="width: 100%"'); // fill caps at 100 exactly like the zai/qwen bars
+    expect(uncapped).toContain('<span class="bar-pct">137%</span>'); // in-bar text stays uncapped
+  });
+
+  it('an empty wallet (total 0, no percentage) renders no hero, no bar, no Wallet line — the balance line stays (honest absence)', () => {
+    const deepseek = sectionFor(
+      renderMain(popupState({ snapshot: deepseekWalletSnapshot({ currency: 'USD', total: 0, consumed: 0 }) })),
+      'deepseek',
+    );
+
+    expect(deepseek).not.toContain('hero-percentage'); // no hero invented
+    expect(deepseek).not.toContain('class="bar'); // no bar invented
+    expect(deepseek).not.toContain('class="monitor"'); // no block at all
+    expect(deepseek).not.toContain('Wallet:'); // no wallet line
+    expect(deepseek).toContain('<p class="usage">$0.00</p>'); // the balance still renders
+  });
+
+  it('renders CNY wallet money through the currencySymbol table', () => {
+    const deepseek = sectionFor(
+      renderMain(popupState({ snapshot: deepseekWalletSnapshot({ currency: 'CNY', total: 50, consumed: 12.5, percentage: 25 }) })),
+      'deepseek',
+    );
+    expect(deepseek).toContain('Wallet: ¥12.50 of ¥50.00 used');
+    expect(deepseek).toContain('<p class="hero-percentage band-green">25%</p>');
+  });
+
+  it('a frozen LAST KNOWN deepseek success renders the same wallet block — it travels with its usage', () => {
+    const snapshot: CycleSnapshot = {
+      results: { deepseek: { status: 'error', errorClass: 'network' } },
+      lastKnown: {
+        deepseek: {
+          status: 'ok',
+          usage: usage('deepseek', {
+            value: 2,
+            currency: 'USD',
+            wallet: { currency: 'USD', total: 2, consumed: 0.4, percentage: 20 },
+            fetchedAt: NOW_MS - 10 * 60_000,
+          }),
+        },
+      },
+    };
+    const deepseek = sectionFor(renderMain(popupState({ snapshot })), 'deepseek');
+
+    expect(deepseek).toContain('Network error'); // the real error label stays leading
+    expect(deepseek).toContain('<div class="last-known">');
+    expect(stripTags(deepseek)).toContain('LAST KNOWN · T-10M');
+    expect(deepseek).toContain('<p class="hero-percentage band-green">20%</p>'); // frozen hero, same structure as live
+    expect(deepseek).toContain('Wallet: $0.40 of $2.00 used');
   });
 });
 
