@@ -137,6 +137,12 @@
         font-size: 9px;
         padding: 1px 4px;
       }
+      /* Badge-ownership marker (hito-12 WU-M2): existing chip vocabulary,
+         existing cyan token — no new colors. */
+      .chip-badge {
+        background: var(--cyan);
+        color: var(--ink);
+      }
       /* ---- Cards ----------------------------------------------------------- */
       .card {
         background: #ffffff;
@@ -167,6 +173,20 @@
       }
       .hero-percentage.band-red {
         color: var(--red);
+      }
+      /* Click-to-choose hero (hito-12 WU-M2): the whole row is the touch
+         target — pointer affordance, neo-brutal ink shift on hover. */
+      .hero-pick {
+        align-items: baseline;
+        cursor: pointer;
+        display: flex;
+        gap: 8px;
+      }
+      .hero-pick:hover .hero-percentage {
+        color: var(--ink);
+      }
+      .hero-pick:active .hero-percentage {
+        transform: translate(2px, 2px);
       }
       .usage {
         font: 700 20px/22px var(--font-mono);

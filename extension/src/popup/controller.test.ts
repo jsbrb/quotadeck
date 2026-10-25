@@ -553,6 +553,99 @@ describe('controller — Badge Provider Selector (popup-ui spec §Badge Provider
   });
 });
 
+describe('controller — Click-to-Choose Badge Provider (hito-12 WU-M2)', () => {
+  /** Cycle where BOTH shipped cards carry a hero: zai 5h 137 + qwen quota 11.72. */
+  const TWIN_CYCLE: CycleSnapshot = {
+    results: {
+      zai: LAST_CYCLE.results.zai!,
+      qwen: {
+        status: 'ok',
+        usage: {
+          providerId: 'qwen',
+          kind: 'balance',
+          value: 100.28,
+          currency: 'CNY',
+          quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+          fetchedAt: NOW_MS,
+        },
+      },
+    },
+  };
+
+  async function openWithTwins(h: ReturnType<typeof makePopupHarness>): Promise<void> {
+    await seedSnapshot(h.local, TWIN_CYCLE);
+    await seedAllKeys(h.local);
+    mountApp();
+    await openPopup(h);
+  }
+
+  it('clicking a card hero persists that provider and moves the indicator in the immediate re-render', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+
+    // Badge defaults to zai: the marker sits on the ZAI hero, not the qwen one.
+    expect(document.querySelector('section[data-provider="zai"] .chip-badge')?.textContent).toBe('badge');
+    expect(document.querySelector('section[data-provider="qwen"] .chip-badge')).toBeNull();
+
+    document.querySelector<HTMLElement>('section[data-provider="qwen"] [data-action="set-badge"]')!.click();
+    // Wait for the optimistic re-render itself: the fake storage map updates
+    // synchronously inside the click, while writeBadgeProvider's promise chain
+    // still has to reach the state update + render() — waiting on the store
+    // value alone would race the re-render it exists to trigger.
+    await vi.waitFor(() => expect(document.querySelector('section[data-provider="qwen"] .chip-badge')?.textContent).toBe('badge'));
+
+    // The indicator moved to the clicked card without any reopening…
+    expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'); // …and it went through the same store wrapper…
+    expect(document.querySelector('section[data-provider="zai"] .chip-badge')).toBeNull(); // …the old owner is unmarked
+    // …and both heroes stay valid pick targets.
+    expect(document.querySelectorAll('[data-action="set-badge"]').length).toBe(2);
+  });
+
+  it('the settings dropdown reflects the clicked choice (both paths write one store)', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+
+    document.querySelector<HTMLElement>('section[data-provider="qwen"] [data-action="set-badge"]')!.click();
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+
+    document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#badge-provider-select')).not.toBeNull());
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('qwen');
+  });
+
+  it('a hero click never fires the refresh alarm — the toolbar badge updates on the next tick', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+    const createSpy = vi.spyOn(h.browser.alarms, 'create');
+
+    document.querySelector<HTMLElement>('section[data-provider="qwen"] [data-action="set-badge"]')!.click();
+    await vi.waitFor(() => expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBe('qwen'));
+
+    expect(createSpy).not.toHaveBeenCalled(); // no refresh from the popup; the tick owns the badge
+  });
+
+  it('a data-provider payload that is unshipped or invalid is ignored — no write, marker stays', async () => {
+    const h = makePopupHarness();
+    await openWithTwins(h);
+
+    const app = document.getElementById('app')!;
+    const forge = (provider: string): HTMLElement => {
+      const section = document.createElement('section');
+      section.setAttribute('data-provider', provider);
+      section.innerHTML = '<div class="hero-pick" data-action="set-badge"><p class="hero-percentage band-red">99%</p></div>';
+      app.appendChild(section);
+      return section.querySelector<HTMLElement>('[data-action="set-badge"]')!;
+    };
+
+    forge('kimi').click(); // known ProviderId, NOT shipped — the click guard is shipped-wide
+    forge('deepseek').click(); // not even a known provider id
+    await Promise.resolve(); // flush microtasks so a wrong write would surface
+
+    expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBeUndefined(); // nothing persisted
+    expect(document.querySelector('section[data-provider="zai"] .chip-badge')).not.toBeNull(); // owner unmoved
+  });
+});
+
 describe('controller — Qwen Plan Key Settings Group (popup-ui spec §Qwen Plan Key Settings Group, hito-8)', () => {
   const PLAN_SLOT_KEY = `${KEY_STORAGE_PREFIX}qwen-plan`;
   const PAIR_CREDENTIAL = PROVIDER_CREDENTIALS.qwen as Extract<Credential, { type: 'ak-sk' }>;

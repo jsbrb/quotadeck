@@ -92,7 +92,11 @@ encryption claims.
    **Revoke** removes the key. The settings view opens with the **Badge
    provider** selector (ZAI ↔ Qwen, default ZAI) — the single provider whose
    figure the toolbar badge renders; the choice persists as a non-secret
-   local preference (`qd:pref:badge-provider`). The ZAI section carries the
+    local preference (`qd:pref:badge-provider`). Clicking a card's big hero
+    percentage chooses that provider for the badge as well — the same store,
+    both paths stay in sync, and the owning card carries a small `badge`
+    chip (beside its hero, or beside the provider name while the card has no
+    hero yet). The ZAI section carries the
    **platform selector** (Z.AI ↔ ZHIPU, default Z.AI): the choice persists as
    a non-secret local preference and switches the base URL of every ZAI
    monitor request (`api.z.ai` ↔ `open.bigmodel.cn`); the Qwen section carries

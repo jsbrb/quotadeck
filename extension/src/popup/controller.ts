@@ -206,6 +206,25 @@ export function startPopup(deps: PopupDeps): void {
     const action = target.closest('[data-action]');
     if (action !== null) {
       const name = action.getAttribute('data-action');
+      if (name === 'set-badge') {
+        // Click-to-choose the toolbar badge (hito-12 WU-M2, user-ratified
+        // Option B): the payload is DOM-sourced, so the enclosing card's
+        // data-provider passes the store guard AND the shipped slice before
+        // anything is persisted. The popup re-renders optimistically (the
+        // indicator and the settings dropdown read the same state field);
+        // the toolbar badge itself refreshes on the next background tick —
+        // this path never touches the alarms port or the snapshot.
+        const chosen = action.closest('section[data-provider]')?.getAttribute('data-provider') ?? null;
+        if (chosen === null || !isBadgeProviderId(chosen) || !SHIPPED_PROVIDER_IDS.includes(chosen)) {
+          return; // forged or unshipped data-provider payload: ignored, nothing written
+        }
+        void (async (): Promise<void> => {
+          await writeBadgeProvider(deps.browser.storage.local, chosen);
+          state.badgeProvider = chosen;
+          render();
+        })();
+        return;
+      }
       if (name === 'refresh') {
         // Subscribe FIRST (idempotently), THEN fire the one-shot alarm — the
         // tick's snapshot write can never race the subscription. The worker

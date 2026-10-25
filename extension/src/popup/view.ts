@@ -19,6 +19,13 @@
 //   (`data-action="refresh"`, hito-6 §Manual Refresh Control) next to the
 //   gear, plus a real `PLAN · <level>` chip derived from the ZAI cycle entry
 //   (hito-11 — the design's LIVE badge is fake telemetry and never renders).
+//   Every card hero sits inside a click-to-choose affordance (`.hero-pick`
+//   carrying `data-action="set-badge"` and a static title tooltip): clicking
+//   it makes that provider the toolbar badge (hito-12 WU-M2 — the settings
+//   dropdown remains the explicit path and BOTH write the same store). The
+//   badge-owning card shows a `.chip-badge` marker exactly once — beside the
+//   hero when the live card renders one, beside the provider name otherwise;
+//   cards without a hero have no click target and nothing is synthesized.
 //   ZAI renders its monitor block from `usage.windows` (plan level, 5h/weekly
 //   windows with the percentage uncapped, used/total, countdown via the pure
 //   `formatResetCountdown` from `windows.*.resetAt` rendered as a distinct
@@ -158,6 +165,37 @@ const ERROR_CLASS_LABELS: Readonly<Record<ErrorClass, string>> = {
   network: 'Network error',
   unknown: 'Refresh failed',
 };
+
+/**
+ * Click-to-choose affordance (hito-12 WU-M2 §Badge Provider Selector,
+ * user-ratified Option B): EVERY card hero is wrapped in this static div —
+ * the controller's delegated click handler validates the enclosing card's
+ * `data-provider` against the shipped slice and writes the badge preference.
+ * The settings dropdown stays and writes the SAME store; the controller keeps
+ * both paths in sync through one state field. Static strings, never
+ * interpolated — no dynamic text enters the affordance markup.
+ */
+const BADGE_PICK_ACTION = 'set-badge';
+const BADGE_PICK_TOOLTIP = 'Show this provider in the toolbar badge';
+
+/**
+ * The persistent "this provider owns the toolbar badge" marker (hito-12
+ * WU-M2): a chip from the hito-11 chip vocabulary, rendered EXACTLY ONCE per
+ * owning card — beside the hero when the live card renders one, beside the
+ * provider name otherwise (plan-only, quota-less, failed or frozen-only
+ * shapes). Non-owning cards carry no marker: nothing is synthesized.
+ */
+const BADGE_CHIP = '<span class="chip chip-badge">badge</span>';
+
+/**
+ * The card's headline percentage (hito-12 WU-M2 helper): the same precedence
+ * the dual hero uses — the ZAI 5h window first, then the qwen token-plan
+ * quota; `undefined` when the card has no hero at all. One rule, two
+ * consumers (the hero render and the provider-name indicator fallback).
+ */
+function headlinePercentage(usage: NormalizedUsage): number | undefined {
+  return usage.windows?.fiveHour?.percentage ?? usage.quota?.percentage;
+}
 
 /**
  * Inline 2px-stroke icons (hito-11): hand-drawn paths, currentColor, no icon
@@ -457,7 +495,7 @@ function quotaMonitorBlock(quota: TokenPlanQuota, state: PopupState): string {
  * quota monitor block (hito-12 WU-M) ports into this body: it travels with
  * the usage it belongs to, frozen LAST KNOWN renders included.
  */
-function usageBody(usage: NormalizedUsage, state: PopupState): string {
+function usageBody(usage: NormalizedUsage, state: PopupState, badgeHero = false): string {
   const parts: string[] = [];
   // Dual hero percentage (hito-6 §Provider List Rendering): where a card's
   // primary percentage exists it renders as the card's largest, boldest
@@ -467,10 +505,16 @@ function usageBody(usage: NormalizedUsage, state: PopupState): string {
   // qwen token-plan quota percentage. Precedence is windows.fiveHour first,
   // then quota: a card never has two heroes and nothing is synthesized when
   // both are absent (a plan-only or quota-less qwen stays hero-free, the
-  // balance remaining the leading figure).
-  const heroPercentage = usage.windows?.fiveHour?.percentage ?? usage.quota?.percentage;
+  // balance remaining the leading figure). Every hero sits inside the
+  // click-to-choose wrapper (hito-12 WU-M2), and the badge-owning card's
+  // hero row additionally carries the chip marker (only for LIVE bodies —
+  // frozen LAST KNOWN renders never take the marker, the name row owns it).
+  const heroPercentage = headlinePercentage(usage);
   if (heroPercentage !== undefined) {
-    parts.push(`<p class="hero-percentage ${thresholdBand(heroPercentage)}">${Math.round(heroPercentage)}%</p>`);
+    const hero = `<p class="hero-percentage ${thresholdBand(heroPercentage)}">${Math.round(heroPercentage)}%</p>`;
+    parts.push(
+      `<div class="hero-pick" data-action="${BADGE_PICK_ACTION}" title="${BADGE_PICK_TOOLTIP}">${hero}${badgeHero ? BADGE_CHIP : ''}</div>`,
+    );
   }
   parts.push(`<p class="usage">${formatUsageText(usage)}</p>`);
   if (usage.quota !== undefined) {
@@ -509,10 +553,21 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
   // ok results and error cards share the same structure; the error card adds
   // the `card-error` marker for the AUTH-FAILED-style treatment (hito-11).
   const error = entry !== undefined && entry.status === 'error';
+  // Badge marker rule (hito-12 WU-M2): the owning card carries the chip EXACTLY
+  // ONCE — beside its live hero when one renders, beside the provider name
+  // otherwise (plan-only, quota-less, failed with a frozen hero, or no-cycle).
+  // Chosen-without-data stays honest: the marker names the preference, not a
+  // figure, and nothing else is synthesized.
+  const badgeHero =
+    provider.id === state.badgeProvider &&
+    entry !== undefined &&
+    entry.status === 'ok' &&
+    headlinePercentage(entry.usage) !== undefined;
+  const nameChip = provider.id === state.badgeProvider && !badgeHero ? BADGE_CHIP : '';
   const parts: string[] = [
     `<section class="provider card${error ? ' card-error' : ''}" data-provider="${provider.id}">`,
   ];
-  parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}</h2>`);
+  parts.push(`<h2 class="provider-name">${escapeHtml(provider.displayName)}${nameChip}</h2>`);
   if (entry === undefined) {
     parts.push('<p class="no-cycle">No cycle data yet</p>');
   } else if (entry.status === 'error') {
@@ -527,7 +582,7 @@ function providerMainSection(provider: PopupProvider, state: PopupState): string
       parts.push(lastKnownBlock(known.usage, state));
     }
   } else {
-    parts.push(usageBody(entry.usage, state));
+    parts.push(usageBody(entry.usage, state, badgeHero)); // WU-M2: the owning live hero carries the marker
   }
   parts.push('</section>');
   return parts.join('');

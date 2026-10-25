@@ -643,6 +643,75 @@ describe('renderMain — Qwen Token Plan twin card (popup-ui spec §Qwen Token P
   });
 });
 
+describe('renderMain — click-to-choose badge + active indicator (popup-ui §Badge Provider Selector; hito-12 WU-M2)', () => {
+  /** Quota-carrying qwen entry — the twin card with a hero to click (WU-M shape). */
+  const quotaSnapshot: CycleSnapshot = {
+    results: {
+      qwen: {
+        status: 'ok',
+        usage: usage('qwen', {
+          value: 100.28,
+          currency: 'CNY',
+          quota: { percentage: 11.72, resetAt: NOW_MS + 90 * 60_000, fetchedAt: NOW_MS },
+        }),
+      },
+    },
+  };
+
+  it('wraps every hero in the clickable chooser naming the action in its tooltip', () => {
+    // The default state chooses ZAI — the hero pin therefore carries the full
+    // affordance markup plus the chosen-provider chip in one exact string.
+    const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
+    expect(zai).toContain(
+      '<div class="hero-pick" data-action="set-badge" title="Show this provider in the toolbar badge"><p class="hero-percentage band-red">137%</p><span class="chip chip-badge">badge</span></div>',
+    );
+  });
+
+  it('a non-chosen provider hero is clickable but carries no marker', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: quotaSnapshot })), 'qwen'); // badge stays zai
+    expect(qwen).toContain(
+      '<div class="hero-pick" data-action="set-badge" title="Show this provider in the toolbar badge"><p class="hero-percentage band-green">12%</p></div>',
+    );
+    expect(qwen).not.toContain('chip-badge');
+  });
+
+  it('the chosen provider with a hero is marked beside it — exactly once', () => {
+    const qwen = sectionFor(renderMain(popupState({ snapshot: quotaSnapshot, badgeProvider: 'qwen' })), 'qwen');
+    expect(qwen).toContain('<p class="hero-percentage band-green">12%</p><span class="chip chip-badge">badge</span></div>');
+    expect((qwen.match(/chip-badge/g) ?? []).length).toBe(1); // marker renders once per owning card
+  });
+
+  it('a chosen card without a hero yet is marked beside the provider name — nothing synthesized', () => {
+    const planOnly: CycleSnapshot = {
+      results: { qwen: { status: 'ok', usage: usage('qwen', { plan: { status: 'available' } }) } },
+    };
+    const qwen = sectionFor(renderMain(popupState({ snapshot: planOnly, badgeProvider: 'qwen' })), 'qwen');
+    expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)<span class="chip chip-badge">badge</span></h2>');
+    expect(qwen).not.toContain('hero-percentage'); // no percentage on this card — no hero invented to click
+  });
+
+  it('the marker never leaks onto cards whose provider does not own the badge', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT })); // badge zai
+    expect(sectionFor(html, 'zai')).toContain('chip-badge');
+    for (const id of ['qwen', 'openai', 'kimi'] as const) {
+      expect(sectionFor(html, id)).not.toContain('chip-badge');
+    }
+  });
+
+  it('a chosen provider whose live entry failed marks the name row; the frozen hero stays clickable and unmarked', () => {
+    const snapshot: CycleSnapshot = {
+      results: { qwen: { status: 'error', errorClass: 'network' } },
+      lastKnown: {
+        qwen: { status: 'ok', usage: usage('qwen', { quota: { percentage: 40, fetchedAt: NOW_MS - 10 * 60_000 } }) },
+      },
+    };
+    const qwen = sectionFor(renderMain(popupState({ snapshot, badgeProvider: 'qwen' })), 'qwen');
+    expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)<span class="chip chip-badge">badge</span></h2>');
+    expect((qwen.match(/chip-badge/g) ?? []).length).toBe(1); // name row only — the dimmed freeze stays plain
+    expect(qwen).toContain('<div class="hero-pick" data-action="set-badge"'); // frozen hero is a valid pick target too
+  });
+});
+
 describe('renderMain — Qwen Plan Line (popup-ui spec §Qwen Plan Line, hito-8)', () => {
   it('renders the plan line per status: Available / exhausted · countdown / key rejected', () => {
     const available = sectionFor(renderMain(popupState({ snapshot: qwenPlanSnapshot({ status: 'available' }) })), 'qwen');
