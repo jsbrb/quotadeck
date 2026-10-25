@@ -3,7 +3,7 @@ import type { Credential, Provider, ProviderId, UsageQuery } from '../core/provi
 import type { NormalizedUsage } from '../core/usage';
 import { ProviderRegistry } from '../core/registry';
 import { FIXTURE_RESPONSES } from '../fixtures';
-import { KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from '../providers';
+import { DeepSeekProvider, KimiProvider, OpenAiProvider, QwenProvider, ZaiProvider } from '../providers';
 import { AllowlistNetworkClient } from '../network/client';
 import { KeyStore } from '../storage/key-store';
 import { FakeBrowser } from '../testing/fake-browser';
@@ -29,6 +29,7 @@ const PROVIDER_CLASSES: Readonly<Record<ProviderId, () => Provider>> = {
   qwen: () => new QwenProvider(),
   openai: () => new OpenAiProvider(),
   kimi: () => new KimiProvider(),
+  deepseek: () => new DeepSeekProvider(),
 };
 
 /** Registry containing exactly the given ids, in the given (pinned-subset) order. */
@@ -65,6 +66,7 @@ const TEST_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
   qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tEngineTestAK00', accessKeySecret: 'EngineTestSecret000000000000' },
   openai: { type: 'openai-admin-read', token: 'engine-test-credential' },
   kimi: { type: 'bearer', token: 'engine-test-credential' },
+  deepseek: { type: 'bearer', token: 'engine-test-credential' },
 };
 
 async function makeEngine(

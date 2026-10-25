@@ -47,6 +47,7 @@ const PROVIDER_CREDENTIALS: Readonly<Record<ProviderId, Credential>> = {
   qwen: { type: 'ak-sk', accessKeyId: 'LTAI5tPopupAccessKey', accessKeySecret: 'PopupPairSecret0000000000000' },
   openai: { type: 'openai-admin-read', token: 'sk-admin-abcdefgh1234' },
   kimi: { type: 'bearer', token: 'sk-kimi-bbbb2222' },
+  deepseek: { type: 'bearer', token: 'sk-deepseek-eeee5555' },
 };
 
 /** Seeds every provider credential — the shipped-subset filter then keeps the zai and qwen cards (hito-12). */
@@ -126,7 +127,7 @@ const LAST_CYCLE: CycleSnapshot = {
 };
 
 describe('controller — Current Cycle Data on Open, main view (popup-ui spec)', () => {
-  it('opens on the main view: usage, ZAI monitor block — and ONLY the shipped zai + qwen cards (hito-12 re-ship)', async () => {
+  it('opens on the main view: usage, ZAI monitor block — and ONLY the shipped zai + qwen + deepseek cards (hito-13 ship)', async () => {
     const h = makePopupHarness();
     await seedSnapshot(h.local, LAST_CYCLE);
     await seedAllKeys(h.local); // hito-6: cards render for keyed providers only
@@ -140,11 +141,13 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     expect(document.querySelector('.hero-percentage')?.textContent).toBe('137%'); // dual hero (hito-6)
     expect(text).toContain('Weekly: 42% · 5040 / 12000');
     expect(text).toContain('MCP: 3 / 60');
-    // Shipped-subset pin (hito-12): qwen re-ships and renders its card;
-    // stored keys for openai/kimi still never render — the card list is the
-    // shipped subset, not the keyed set.
+    // Shipped-subset pin (hito-12 + hito-13 WU-B): qwen re-ships and deepseek
+    // ships third; stored keys for openai/kimi still never render — the card
+    // list is the shipped subset, not the keyed set.
     expect(text).toContain('Auth failed'); // qwen error entry, per class (AD-21/22)
     expect(text).toContain('Qwen (Alibaba Cloud BSS)'); // qwen re-shipped on this branch
+    expect(text).toContain('DeepSeek'); // deepseek shipped (hito-13 WU-B): keyed, no cycle entry yet
+    expect(text).toContain('No cycle data yet'); // the deepseek card's honest empty state
     expect(text).not.toContain('$20.00'); // openai unshipped
     expect(text).not.toContain('¥88.88'); // kimi unshipped
     expect(text).not.toContain('OpenAI');
@@ -187,7 +190,7 @@ describe('controller — Current Cycle Data on Open, main view (popup-ui spec)',
     await openPopup(h);
 
     const text = document.body.textContent ?? '';
-    expect(text.match(/No cycle data yet/g)).toHaveLength(2); // zai + qwen; openai/kimi stay unshipped
+    expect(text.match(/No cycle data yet/g)).toHaveLength(3); // zai + qwen + deepseek; openai/kimi stay unshipped
   });
 
   it('keyless providers render no card at all on open — the noise card is gone (hito-6)', async () => {
@@ -221,12 +224,14 @@ describe('controller — Settings Gear Surface (popup-ui spec)', () => {
     document.querySelector<HTMLButtonElement>('[data-action="open-settings"]')!.click();
     await vi.waitFor(() => expect(document.querySelector('#app h1')?.textContent).toBe('Settings'));
     // One form per SHIPPED provider plus the qwen plan-key group (hito-12
-    // re-ship): zai, the qwen AK/SK pair, and the qwen plan group — openai
+    // re-ship + hito-13 WU-B deepseek ship): zai, the qwen AK/SK pair, the
+    // qwen plan group (inside the qwen section), and deepseek — openai
     // and kimi ride the unshipped list.
     expect([...document.querySelectorAll('#app form.key-form')].map((form) => form.getAttribute('data-provider'))).toEqual([
       'zai',
       'qwen',
       'qwen-plan',
+      'deepseek',
     ]);
 
     document.querySelector<HTMLButtonElement>('[data-action="back"]')!.click();
@@ -505,8 +510,8 @@ describe('controller — Badge Provider Selector (popup-ui spec §Badge Provider
     await openSettingsView(h);
 
     const options = [...document.querySelectorAll('#badge-provider-select option')];
-    expect(options.map((option) => option.getAttribute('value'))).toEqual(['zai', 'qwen']);
-    expect(options.map((option) => option.textContent)).toEqual(['ZAI (Zhipu AI)', 'Qwen (Alibaba Cloud BSS)']);
+    expect(options.map((option) => option.getAttribute('value'))).toEqual(['zai', 'qwen', 'deepseek']);
+    expect(options.map((option) => option.textContent)).toEqual(['ZAI (Zhipu AI)', 'Qwen (Alibaba Cloud BSS)', 'DeepSeek']);
   });
 
   it('selecting Qwen persists the preference and re-renders the selector on it', async () => {
@@ -530,12 +535,27 @@ describe('controller — Badge Provider Selector (popup-ui spec §Badge Provider
     expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('qwen');
   });
 
-  it('an invalid stored preference defaults the selector to ZAI (read-on-load contract)', async () => {
+  it('an unshipped stored preference defaults the selector to ZAI (read-on-load contract)', async () => {
+    const h = makePopupHarness();
+    // 'deepseek' shipped in hito-13 WU-B — 'kimi' is the known-but-unshipped
+    // sentinel now: valid ProviderId, outside SHIPPED_PROVIDER_IDS.
+    await h.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'kimi' });
+    await openSettingsView(h);
+
+    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('zai');
+  });
+
+  it('a stored deepseek choice reads as selected after the hito-13 ship (re-shipping never invalidates stored values)', async () => {
     const h = makePopupHarness();
     await h.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'deepseek' });
     await openSettingsView(h);
 
-    expect(document.querySelector<HTMLSelectElement>('#badge-provider-select')!.value).toBe('zai');
+    // Pinned via the rendered selected OPTION, not select.value: happy-dom's
+    // parser mis-syncs selectedness when the selected attribute sits on the
+    // LAST option (observed: property lands on the preceding option), while
+    // the rendered markup — the production contract — is correct.
+    const select = document.querySelector<HTMLSelectElement>('#badge-provider-select')!;
+    expect(select.querySelector('option[selected]')?.getAttribute('value')).toBe('deepseek');
   });
 
   it('a badge-provider switch never touches the credential namespace', async () => {
@@ -638,7 +658,7 @@ describe('controller — Click-to-Choose Badge Provider (hito-12 WU-M2)', () => 
     };
 
     forge('kimi').click(); // known ProviderId, NOT shipped — the click guard is shipped-wide
-    forge('deepseek').click(); // not even a known provider id
+    forge('openai').click(); // same: known, unshipped (deepseek became a VALID shipped choice in hito-13 WU-B)
     await Promise.resolve(); // flush microtasks so a wrong write would surface
 
     expect(h.local.snapshot()[BADGE_PROVIDER_STORAGE_KEY]).toBeUndefined(); // nothing persisted

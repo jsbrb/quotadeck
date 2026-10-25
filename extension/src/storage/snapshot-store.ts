@@ -16,7 +16,8 @@
 // - `read` shape-validates stored bytes: anything that is not a CycleSnapshot
 //   reads as `undefined` ("no cycle yet"), never as garbage for the popup.
 //   Error entries require a valid `errorClass` (AD-21) and ok entries have
-//   their `windows` validated when present (AD-26) — a pre-hitó-3 error entry
+//   their `windows` validated when present (AD-26), as are `plan` (hito-8),
+//   `quota` (hito-12) and `wallet` (hito-13) — a pre-hitó-3 error entry
 //   without a class therefore reads as "no cycle yet" until the next tick
 //   (≤1 min) rewrites it (transient by design). A pre-hitó-4 `usage.budget`
 //   field is simply ignored (unknown keys don't invalidate; AD-26 migration).
@@ -25,7 +26,14 @@
 // (platform/browser-api.ts); tests pass the in-memory fake from src/testing/.
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
-import type { LineItem, MonitorWindows, NormalizedUsage, PlanInfo, TokenPlanQuota } from '../core/usage';
+import type {
+  LineItem,
+  MonitorWindows,
+  NormalizedUsage,
+  PlanInfo,
+  TokenPlanQuota,
+  WalletUsage,
+} from '../core/usage';
 import type { StorageArea } from './key-store';
 
 /** Storage key for the last completed cycle snapshot. */
@@ -157,6 +165,31 @@ function isTokenPlanQuota(value: unknown): value is TokenPlanQuota {
   );
 }
 
+/**
+ * hito-13 WU-A shape check: the DeepSeek wallet's DERIVED figures — every
+ * field finite-number-or-absent with a required currency string. The
+ * percentage is omitted when the wallet total is 0 (honest absence) and is
+ * otherwise the UNCAPPED passthrough share — validation never clamps, and
+ * negative consumed (expired-grant caveat) is valid as stored, exactly like
+ * the quota check's discipline. NaN/Infinity/string garbage rejects the
+ * whole snapshot.
+ */
+function isWalletUsage(value: unknown): value is WalletUsage {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const wallet = value as Record<string, unknown>;
+  return (
+    typeof wallet.currency === 'string' &&
+    typeof wallet.total === 'number' &&
+    Number.isFinite(wallet.total) &&
+    typeof wallet.consumed === 'number' &&
+    Number.isFinite(wallet.consumed) &&
+    (wallet.percentage === undefined ||
+      (typeof wallet.percentage === 'number' && Number.isFinite(wallet.percentage)))
+  );
+}
+
 function isNormalizedUsage(value: unknown): value is NormalizedUsage {
   if (typeof value !== 'object' || value === null) {
     return false;
@@ -174,6 +207,7 @@ function isNormalizedUsage(value: unknown): value is NormalizedUsage {
     (usage.windows === undefined || isMonitorWindows(usage.windows)) &&
     (usage.plan === undefined || isPlanInfo(usage.plan)) &&
     (usage.quota === undefined || isTokenPlanQuota(usage.quota)) &&
+    (usage.wallet === undefined || isWalletUsage(usage.wallet)) &&
     typeof usage.fetchedAt === 'number'
   );
 }

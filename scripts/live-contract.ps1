@@ -15,8 +15,13 @@
 # test and dies there.
 #
 # Usage:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\live-contract.ps1
-# The live test skips silently in the normal suite; QUOTADECK_LIVE=1 + the two
-# QWEN_AK_* variables (set by this script) are the only way it runs.
+# The live tests skip silently in the normal suite. Two legs run under
+# QUOTADECK_LIVE=1: the qwen leg (the two QWEN_AK_* variables, extracted by
+# this script) and the deepseek leg (hito-13 WU-F) — its bearer key arrives
+# as DEEPSEEK_LIVE_KEY in THIS process's environment (the caller/parent
+# supplies it at run time; the script never reads storage, prints, or writes
+# it — it only forwards the variable in memory to the vitest child and
+# clears it in the finally block).
 $ErrorActionPreference = 'Stop'
 
 function Read-BytesFileShared {
@@ -86,6 +91,13 @@ if ($null -eq $creds) {
 Write-Host ('creds-found: ak {0}...{1} | secret len {2} (held in memory only)' -f
     $creds.Id.Substring(0, 4), $creds.Id.Substring($creds.Id.Length - 4), $creds.Secret.Length)
 
+# deepseek leg (hito-13 WU-F): provenance only — presence, never the value.
+if ($null -ne $env:DEEPSEEK_LIVE_KEY -and $env:DEEPSEEK_LIVE_KEY -ne '') {
+    Write-Host 'deepseek key: provided via DEEPSEEK_LIVE_KEY (held in memory only)'
+} else {
+    Write-Host 'deepseek key NOT provided (DEEPSEEK_LIVE_KEY unset) - the deepseek leg will fail actionably'
+}
+
 try {
     $env:QWEN_AK_ID = $creds.Id
     $env:QWEN_AK_SECRET = $creds.Secret
@@ -96,22 +108,25 @@ try {
     # without PowerShell 5.1 turning each line into an ErrorRecord.
     # --reporter=verbose is REQUIRED for the gate contract: the default
     # reporter prints only the summary when piped (non-TTY), swallowing
-    # the test's single {percentage,resetAtISO} console.log line.
+    # the tests' contract console.log lines ({percentage,resetAtISO} and
+    # the deepseek wallet JSON).
     $output = & cmd /c 'npx vitest run src/contract/live.contract.test.ts --reporter=verbose 2>&1'
     $vitestRc = $LASTEXITCODE
     Pop-Location
 } finally {
     $env:QWEN_AK_ID = $null
     $env:QWEN_AK_SECRET = $null
+    $env:DEEPSEEK_LIVE_KEY = $null
     $env:QUOTADECK_LIVE = $null
     $creds = $null
     [GC]::Collect()
 }
 
-# The single contract line printed by the test itself ({percentage,resetAtISO}
-# — no material), then the result tail. Neither can carry credentials: the
-# pipeline never prints them, by construction (pinned across WU-B..WU-G).
-$contractLine = @($output | Where-Object { $_ -match 'resetAtISO' })
+# The single contract line per leg printed by the tests themselves
+# ({percentage,resetAtISO} for qwen; the deepseek wallet JSON carries
+# "wallet") — no material in either: the pipelines never print credentials,
+# by construction (pinned across WU-B..WU-G, hito-13 WU-F).
+$contractLine = @($output | Where-Object { $_ -match 'resetAtISO' -or $_ -match '"wallet"' })
 if ($contractLine.Count -gt 0) {
     Write-Host '--- live quota contract ---'
     $contractLine | ForEach-Object { Write-Host $_ }

@@ -25,6 +25,7 @@
   },
   "permissions": ["storage", "alarms", "declarativeNetRequestWithHostAccess"],
   "host_permissions": [
+    "https://api.deepseek.com/*",
     "https://api.z.ai/*",
     "https://bailian-singapore-cs.alibabacloud.com/*",
     "https://business.aliyuncs.com/*",
