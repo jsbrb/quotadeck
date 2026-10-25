@@ -1,14 +1,14 @@
 {
   "name": "quotadeck-extension",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "quotadeck browser extension — provider usage badge (MV3, live usage)",
   "scripts": {
     "build": "node build.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "zip": "powershell -NoProfile -Command \"Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; $dist = (Resolve-Path 'dist').Path; $fs = [System.IO.File]::Open((Join-Path (Get-Location).Path 'quotadeck-v0.2.0.zip'), [System.IO.FileMode]::Create); $archive = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create); try { Get-ChildItem 'dist' -Recurse -File | ForEach-Object { $rel = $_.FullName.Substring($dist.Length + 1).Replace('\\', '/'); [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $rel) | Out-Null } } finally { $archive.Dispose(); $fs.Dispose() }\""
+    "zip": "powershell -NoProfile -Command \"Add-Type -AssemblyName System.IO.Compression; Add-Type -AssemblyName System.IO.Compression.FileSystem; $dist = (Resolve-Path 'dist').Path; $fs = [System.IO.File]::Open((Join-Path (Get-Location).Path 'quotadeck-v0.3.0.zip'), [System.IO.FileMode]::Create); $archive = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create); try { Get-ChildItem 'dist' -Recurse -File | ForEach-Object { $rel = $_.FullName.Substring($dist.Length + 1).Replace('\\', '/'); [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $rel) | Out-Null } } finally { $archive.Dispose(); $fs.Dispose() }\""
   },
   "devDependencies": {
     "@types/chrome": "^0.2.8",

@@ -77,9 +77,12 @@ describe('SnapshotStore', () => {
 
     await store.write(snapshot);
 
-    expect(await store.read()).toEqual(snapshot);
+    // write owns the additive lastKnown map (hito-11): the cycle's ok arm is
+    // carried under the SAME single key; the error arm never enters it.
+    const expected: CycleSnapshot = { results: snapshot.results, lastKnown: { zai: { status: 'ok', usage: zaiUsage } } };
+    expect(await store.read()).toEqual(expected);
     // The value resides in the local area, under the single namespace key — nowhere else.
-    expect(browser.local.snapshot()).toEqual({ [SNAPSHOT_STORAGE_KEY]: snapshot });
+    expect(browser.local.snapshot()).toEqual({ [SNAPSHOT_STORAGE_KEY]: expected });
   });
 
   it('an error entry round-trips as { status, errorClass } with no other payload (AD-13/21)', async () => {
@@ -130,7 +133,7 @@ describe('SnapshotStore', () => {
 
     await store.write(snapshot);
 
-    expect(await store.read()).toEqual(snapshot);
+    expect(await store.read()).toEqual({ results: snapshot.results, lastKnown: { zai: snapshot.results.zai } });
   });
 
   it('a total-less live-shaped window round-trips (percentage-only is valid)', async () => {
@@ -151,7 +154,7 @@ describe('SnapshotStore', () => {
 
     await store.write(snapshot);
 
-    expect(await store.read()).toEqual(snapshot);
+    expect(await store.read()).toEqual({ results: snapshot.results, lastKnown: { zai: snapshot.results.zai } });
   });
 
   it('a monitor usage alongside monetary results round-trips together', async () => {
@@ -165,7 +168,11 @@ describe('SnapshotStore', () => {
 
     await store.write(snapshot);
 
-    expect(await store.read()).toEqual(snapshot);
+    // Both ok arms land in lastKnown; the qwen error arm never does (hito-11).
+    expect(await store.read()).toEqual({
+      results: snapshot.results,
+      lastKnown: { zai: snapshot.results.zai, openai: snapshot.results.openai },
+    });
   });
 
   it.each([
@@ -278,7 +285,7 @@ describe('SnapshotStore', () => {
     ] as const) {
       const snapshot: CycleSnapshot = { results: { qwen: { status: 'ok', usage: { ...qwenUsage, plan } } } };
       await store.write(snapshot);
-      expect(await store.read()).toEqual(snapshot);
+      expect(await store.read()).toEqual({ results: snapshot.results, lastKnown: { qwen: snapshot.results.qwen } });
       await browser.local.remove(SNAPSHOT_STORAGE_KEY); // isolate per form
     }
   });
@@ -294,7 +301,73 @@ describe('SnapshotStore', () => {
 
     await store.write(snapshot);
 
-    expect(await store.read()).toEqual(snapshot);
+    expect(await store.read()).toEqual({ results: snapshot.results, lastKnown: { qwen: snapshot.results.qwen } });
+  });
+
+  describe('lastKnown — per-provider last-successful survival (hito-11)', () => {
+    const okZai: ProviderSnapshotEntry = { status: 'ok', usage: zaiUsage };
+    const okZaiV2: ProviderSnapshotEntry = { status: 'ok', usage: { ...zaiUsage, value: 42 } };
+    const authError: ProviderSnapshotEntry = { status: 'error', errorClass: 'auth' };
+
+    it('a later error tick keeps the most recent successful entry in lastKnown', async () => {
+      await store.write({ results: { zai: okZai } });
+      await store.write({ results: { zai: authError } });
+
+      const read = await store.read();
+      expect(read?.results.zai).toEqual(authError); // the cycle arm is the error…
+      expect(read?.lastKnown?.zai).toEqual(okZai); // …and the last success survives
+    });
+
+    it('a later ok tick UPDATES lastKnown to the newest success', async () => {
+      await store.write({ results: { zai: okZai } });
+      await store.write({ results: { zai: okZaiV2 } });
+
+      expect((await store.read())?.lastKnown?.zai).toEqual(okZaiV2);
+    });
+
+    it('providers never seen ok carry no entry — an all-error cycle stores no lastKnown key at all', async () => {
+      await store.write({ results: { zai: authError, kimi: { status: 'error', errorClass: 'network' } } });
+
+      expect(SNAPSHOT_STORAGE_KEY in browser.local.snapshot()).toBe(true);
+      expect(Object.keys(browser.local.snapshot()[SNAPSHOT_STORAGE_KEY] as object)).toEqual(['results']);
+      expect((await store.read())?.lastKnown).toBeUndefined();
+    });
+
+    it('a provider absent from a later cycle keeps its lastKnown entry (revoked-key silence never wipes it)', async () => {
+      await store.write({ results: { zai: okZai, kimi: { status: 'ok', usage: { ...qwenUsage, providerId: 'kimi' } } } });
+      await store.write({ results: { kimi: authError } }); // zai not refreshed this cycle
+
+      const read = await store.read();
+      expect(read?.results.zai).toBeUndefined();
+      expect(read?.lastKnown?.zai).toEqual(okZai);
+    });
+
+    it('write owns lastKnown: a caller-provided lastKnown field is recomputed from the stored cycle history', async () => {
+      await store.write({ results: { zai: okZai } });
+      // A caller (e.g. a stale tab) passing its own lastKnown cannot forge or
+      // drop entries — the merge derives the map from previous + results.
+      await store.write({ results: { qwen: authError }, lastKnown: { zai: okZaiV2 } } as CycleSnapshot);
+
+      expect((await store.read())?.lastKnown).toEqual({ zai: okZai });
+    });
+
+    it('a legacy snapshot without lastKnown still reads as valid (additive shape)', async () => {
+      await browser.local.set({ [SNAPSHOT_STORAGE_KEY]: { results: { zai: okZai } } });
+
+      const read = await store.read();
+      expect(read?.results.zai).toEqual(okZai);
+      expect(read?.lastKnown).toBeUndefined();
+    });
+
+    it.each([
+      ['lastKnown is not an object', { results: {}, lastKnown: 'frozen' }],
+      ['a lastKnown entry is an error arm', { results: {}, lastKnown: { zai: { status: 'error', errorClass: 'auth' } } }],
+      ['a lastKnown entry has a malformed usage', { results: {}, lastKnown: { zai: { status: 'ok', usage: { providerId: 'zai' } } } }],
+    ])('a malformed lastKnown reads as undefined: %s', async (_label, stored) => {
+      await browser.local.set({ [SNAPSHOT_STORAGE_KEY]: stored });
+
+      expect(await store.read()).toBeUndefined();
+    });
   });
 
   it('carries no credential material: no credential field on the snapshot types, none in stored bytes', async () => {

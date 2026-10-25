@@ -1,8 +1,12 @@
 // Popup view tests (popup-ui spec §Settings Gear Surface, §Per-Model
-// Consumption View, §ZAI Platform Selector; AD-22/26/27/28) — node
-// environment by design (AD-11): the view is a pure string-producing module,
-// so determinism is plain strict string equality.
+// Consumption View, §ZAI Platform Selector; AD-22/26/27/28; hito-11 design
+// system + LAST KNOWN + honesty pins) — node environment by design (AD-11):
+// the view is a pure string-producing module, so determinism is plain strict
+// string equality.
 import { strictEqual } from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import type { ProviderId } from '../core/provider';
 import type { ErrorClass } from '../refresh/error-taxonomy';
@@ -11,10 +15,12 @@ import type { MaskedCredential } from '../storage/key-store';
 import type { CycleSnapshot } from '../storage/snapshot-store';
 import {
   escapeHtml,
+  formatKnownAge,
   formatResetCountdown,
   formatUsageText,
   type PopupProvider,
   type PopupState,
+  POPUP_VERSION,
   renderMain,
   renderSettings,
   SETTINGS_GUIDANCE,
@@ -206,7 +212,7 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     // percentage lives in the hero + bar-pct now (hito-6) — the line keeps
     // label, used/total and countdown.
     expect(stripTags(zai)).toContain('5h: 16440 / 12000 · Resets in 1h 30m');
-    expect(zai).toContain('<p class="hero-percentage">137%</p>'); // 137 stays 137 — uncapped
+    expect(zai).toContain('<p class="hero-percentage band-red">137%</p>'); // 137 stays 137 — uncapped
     expect(stripTags(zai)).toContain('Weekly: 42% · 5040 / 12000');
     expect(zai).toContain('MCP: 3 / 60');
     // Per-tool rows sorted by name for determinism (AD-27 ordering, view-side too).
@@ -264,7 +270,7 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
     expect(zai).toContain('5h: 12000 total'); // no used part; the pct lives in hero + bar (hito-6)
-    expect(zai).toContain('<p class="hero-percentage">43%</p>'); // Math.round(42.6) for display
+    expect(zai).toContain('<p class="hero-percentage band-green">43%</p>'); // Math.round(42.6) for display
     expect(zai).toContain('Weekly: 130000 total');
   });
 
@@ -285,7 +291,7 @@ describe('renderMain — Per-Model Consumption View (popup-ui spec)', () => {
     const zai = sectionFor(renderMain(popupState({ snapshot })), 'zai');
 
     expect(zai).toContain('Level: pro');
-    expect(zai).toContain('<p class="hero-percentage">32%</p>'); // pct-only window: hero + bar, no line parts
+    expect(zai).toContain('<p class="hero-percentage band-green">32%</p>'); // pct-only window: hero + bar, no line parts
     expect(stripTags(zai)).toContain('Resets in 1h 30m'); // countdown stays in the line's combined text
     expect(zai).not.toContain('undefined'); // the absent total must not leak into text
   });
@@ -679,16 +685,16 @@ describe('renderMain — Threshold bands + capped fill (popup-ui spec)', () => {
     // The 5h bar is the primary bar: it carries the same percentage as a
     // bar-pct overlay (hito-6 — the figure renders twice: hero + in-bar).
     expect(renderFiveHour(55)).toContain(
-      '<div class="bar band-green"><div class="bar-fill" style="width: 55%"></div><span class="bar-pct">55%</span></div>',
+      '<div class="bar band-green"><div class="bar-fill" style="width: 55%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">55%</span></div>',
     );
     expect(renderFiveHour(70)).toContain(
-      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div><span class="bar-pct">70%</span></div>',
+      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">70%</span></div>',
     );
     expect(renderFiveHour(90)).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div><span class="bar-pct">90%</span></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">90%</span></div>',
     );
     expect(renderFiveHour(137)).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-pct">137%</span></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">137%</span></div>',
     );
   });
 
@@ -696,7 +702,7 @@ describe('renderMain — Threshold bands + capped fill (popup-ui spec)', () => {
     const zai = renderFiveHour(137);
 
     expect(zai).toContain('style="width: 100%"'); // fill capped…
-    expect(zai).toContain('<p class="hero-percentage">137%</p>'); // …hero text uncapped…
+    expect(zai).toContain('<p class="hero-percentage band-red">137%</p>'); // …hero text uncapped…
     expect(zai).toContain('<span class="bar-pct">137%</span>'); // …in-bar text uncapped too
   });
 });
@@ -719,7 +725,7 @@ describe('renderMain — MCP bar from used/ceiling (popup-ui spec)', () => {
     const zai = renderMcp({ used: 0, ceiling: 1000, tools: [] });
 
     expect(zai).toContain(
-      '<div class="bar band-green"><div class="bar-fill" style="width: 0%"></div></div>',
+      '<div class="bar band-green"><div class="bar-fill" style="width: 0%"></div><span class="bar-ticks" aria-hidden="true"></span></div>',
     );
     expect(stripTags(zai)).not.toContain('%'); // the view must not synthesize a percentage
     expect(zai).toContain('MCP: 0 / 1000'); // the line itself stays a plain used/ceiling line
@@ -729,7 +735,7 @@ describe('renderMain — MCP bar from used/ceiling (popup-ui spec)', () => {
     const zai = renderMcp({ used: 54, ceiling: 60, tools: [] });
 
     expect(zai).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 90%"></div><span class="bar-ticks" aria-hidden="true"></span></div>',
     );
     expect(zai).toContain('MCP: 54 / 60');
   });
@@ -738,7 +744,7 @@ describe('renderMain — MCP bar from used/ceiling (popup-ui spec)', () => {
     const zai = renderMcp({ used: 42, ceiling: 60, tools: [] });
 
     expect(zai).toContain(
-      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div></div>',
+      '<div class="bar band-amber"><div class="bar-fill" style="width: 70%"></div><span class="bar-ticks" aria-hidden="true"></span></div>',
     );
   });
 
@@ -746,7 +752,7 @@ describe('renderMain — MCP bar from used/ceiling (popup-ui spec)', () => {
     const zai = renderMcp({ used: 90, ceiling: 60, tools: [{ name: 'web-search', used: 90 }] });
 
     expect(zai).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-ticks" aria-hidden="true"></span></div>',
     );
   });
 });
@@ -770,7 +776,9 @@ describe('renderMain — provider cards (popup-ui spec)', () => {
     const snapshot: CycleSnapshot = { results: { qwen: { status: 'error', errorClass: 'auth' } } };
     const html = renderMain(popupState({ snapshot }));
 
-    expect(html).toContain('<section class="provider card" data-provider="qwen">');
+    // hito-11: the error card adds the card-error marker for the AUTH-FAILED
+    // treatment — same provider/card structure underneath.
+    expect(html).toContain('<section class="provider card card-error" data-provider="qwen">');
     const qwen = sectionFor(html, 'qwen');
     expect(qwen).toContain('<h2 class="provider-name">Qwen (Alibaba Cloud BSS)</h2>');
     expect(qwen).toContain('Auth failed'); // per-class label inside the card
@@ -845,9 +853,11 @@ describe('renderSettings — SETTINGS_GUIDANCE (popup-ui spec §Settings Guidanc
   });
 });
 
-describe('Branding footer (popup-ui spec §Branding Footer)', () => {
+describe('Branding footer (popup-ui spec §Branding Footer, hito-11 honest version)', () => {
   const EXPECTED_FOOTER =
-    '<footer class="popup-footer">Built by <a href="https://www.thenorthcode.es/" target="_blank" rel="noreferrer">The North Code</a></footer>';
+    '<footer class="popup-footer"><span class="version">' +
+    POPUP_VERSION +
+    '</span> · Built by <a href="https://www.thenorthcode.es/" target="_blank" rel="noreferrer">The North Code</a></footer>';
 
   const extractFooter = (html: string): string =>
     html.slice(html.indexOf('<footer'), html.indexOf('</footer>') + '</footer>'.length);
@@ -879,14 +889,14 @@ describe('renderMain — ZAI budget block (popup-ui spec)', () => {
     // Combined textContent: the 5h line keeps used/total + countdown; the 137
     // itself renders twice — hero above all content, bar-pct in the bar.
     expect(stripTags(zai)).toContain('5h: 16440 / 12000 · Resets in 1h 30m');
-    expect(zai).toContain('<p class="hero-percentage">137%</p>');
+    expect(zai).toContain('<p class="hero-percentage band-red">137%</p>');
     // …while the countdown renders as a distinct, prominent element.
     expect(zai).toContain('Resets in <span class="countdown">1h 30m</span>');
     // One bar per window: 5h 137% → red (fill capped, pct overlay), weekly 42% → green.
     expect(zai).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-pct">137%</span></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">137%</span></div>',
     );
-    expect(zai).toContain('<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div></div>');
+    expect(zai).toContain('<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div><span class="bar-ticks" aria-hidden="true"></span></div>');
     expect(zai).toContain('MCP: 3 / 60');
     expect(zai).toContain('web-search · 2'); // per-tool rows
   });
@@ -897,12 +907,13 @@ describe('renderMain — dual hero percentage (popup-ui §Provider List Renderin
     const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
 
     // An own element — independently assertable from the in-bar figure.
-    expect(zai).toContain('<p class="hero-percentage">137%</p>'); // uncapped: 137, never 100
+    expect(zai).toContain('<p class="hero-percentage band-red">137%</p>'); // uncapped: 137, never 100
     // Above all other card content: right after the provider name, before the
-    // monitor block and every window line.
-    expect(zai.indexOf('class="hero-percentage"')).toBeGreaterThan(zai.indexOf('class="provider-name"'));
-    expect(zai.indexOf('class="hero-percentage"')).toBeLessThan(zai.indexOf('class="monitor"'));
-    expect(zai.indexOf('class="hero-percentage"')).toBeLessThan(zai.indexOf('5h:'));
+    // monitor block and every window line (hito-11: the class now carries a
+    // band suffix, so the prefix match drops the closing quote).
+    expect(zai.indexOf('class="hero-percentage')).toBeGreaterThan(zai.indexOf('class="provider-name"'));
+    expect(zai.indexOf('class="hero-percentage')).toBeLessThan(zai.indexOf('class="monitor"'));
+    expect(zai.indexOf('class="hero-percentage')).toBeLessThan(zai.indexOf('5h:'));
   });
 
   it('renders NO hero on monetary cards — the balance stays the leading figure', () => {
@@ -945,7 +956,7 @@ describe('renderMain — dual hero percentage (popup-ui §Provider List Renderin
         },
       },
     };
-    expect(sectionFor(renderMain(popupState({ snapshot })), 'zai')).toContain('<p class="hero-percentage">43%</p>');
+    expect(sectionFor(renderMain(popupState({ snapshot })), 'zai')).toContain('<p class="hero-percentage band-green">43%</p>');
   });
 });
 
@@ -954,10 +965,10 @@ describe('renderMain — in-bar percentage (popup-ui §Provider List Rendering, 
     const zai = sectionFor(renderMain(popupState({ snapshot: FULL_SNAPSHOT })), 'zai');
 
     expect(zai).toContain(
-      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-pct">137%</span></div>',
+      '<div class="bar band-red"><div class="bar-fill" style="width: 100%"></div><span class="bar-ticks" aria-hidden="true"></span><span class="bar-pct">137%</span></div>',
     );
     // Hero and in-bar figures are separate elements — trimming one leaves the other.
-    expect(zai).toContain('<p class="hero-percentage">137%</p>');
+    expect(zai).toContain('<p class="hero-percentage band-red">137%</p>');
   });
 
   it('the primary line drops its percentage part — the number renders exactly twice', () => {
@@ -974,7 +985,7 @@ describe('renderMain — in-bar percentage (popup-ui §Provider List Rendering, 
     expect((zai.match(/class="bar-pct"/g) ?? []).length).toBe(1);
     expect(zai).toContain('Weekly: 42% · 5040 / 12000');
     expect(zai).toContain(
-      '<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div></div>',
+      '<div class="bar band-green"><div class="bar-fill" style="width: 42%"></div><span class="bar-ticks" aria-hidden="true"></span></div>',
     );
   });
 });
@@ -1019,5 +1030,242 @@ describe('renderMain — refresh affordance (popup-ui §Manual Refresh Control, 
     expect(main.indexOf('data-action="refresh"')).toBeLessThan(main.indexOf('<section'));
 
     expect(renderSettings(popupState({ view: 'settings' }))).not.toContain('data-action="refresh"');
+  });
+});
+
+/* ---------------------------------------------------------------------------
+ * hito-11 — Neo-Brutalist Developer Instrument restyle pins.
+ * ------------------------------------------------------------------------- */
+
+describe('renderMain — PLAN chip (hito-11: real data, never a fake LIVE badge)', () => {
+  it('renders PLAN · <level> from the live ZAI ok entry into the header', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    expect(html.indexOf('chip-plan')).toBeLessThan(html.indexOf('<section')); // header position
+    expect(stripTags(html)).toContain('PLAN · Pro');
+  });
+
+  it('renders NO chip when there is no snapshot, no ZAI entry, or the ZAI entry is an error', () => {
+    expect(renderMain(popupState())).not.toContain('chip-plan');
+    expect(renderMain(popupState({ snapshot: { results: { kimi: FULL_SNAPSHOT.results.kimi! } } }))).not.toContain('chip-plan');
+    const errored = renderMain(popupState({ snapshot: { results: { zai: { status: 'error', errorClass: 'auth' } } } }));
+    expect(errored).not.toContain('chip-plan'); // frozen data never feeds the chip
+  });
+
+  it('escapes the provider-sourced level inside the chip', () => {
+    const hostile = '<script>alert(1)</script>';
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: 'ok',
+          usage: usage('zai', { kind: 'cost', value: undefined, currency: undefined, windows: { level: hostile } }),
+        },
+      },
+    };
+    const html = renderMain(popupState({ snapshot }));
+
+    expect(html).not.toContain(`>${hostile}<`);
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+});
+
+describe('footer nav — exactly QUOTAS + KEYS (hito-11 §2-tab nav)', () => {
+  it('the main view carries two tabs: QUOTAS active, KEYS wired to open-settings', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    expect(html).toContain('<nav class="tabbar" aria-label="Views">');
+    expect((html.match(/class="tab[" ]/g) ?? []).length).toBe(2); // nothing else
+    expect(html).toContain('<button type="button" class="tab tab-active" aria-current="page">');
+    expect(stripTags(html)).toContain('QUOTAS');
+    expect(stripTags(html)).toContain('KEYS');
+    // The KEYS tab carries the open-settings action (second occurrence after the gear).
+    expect((html.match(/data-action="open-settings"/g) ?? []).length).toBe(2);
+    expect(html).not.toContain('data-action="back"');
+  });
+
+  it('the settings view flips the nav: KEYS active, QUOTAS wired to back', () => {
+    const html = renderSettings(popupState({ view: 'settings' }));
+
+    expect((html.match(/class="tab[" ]/g) ?? []).length).toBe(2);
+    expect((html.match(/data-action="back"/g) ?? []).length).toBe(2); // header + QUOTAS tab
+    expect(html).not.toContain('data-action="open-settings"');
+  });
+
+  it('no invented surfaces: neither view mentions LOGS, STATS or any third tab', () => {
+    const main = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+    const settings = renderSettings(popupState({ view: 'settings' }));
+
+    for (const html of [main, settings]) {
+      expect(html).not.toMatch(/\bLOGS\b/);
+      expect(html).not.toMatch(/\bSTATS\b/);
+    }
+  });
+});
+
+describe('renderMain — segmented bars (hito-11 ticks)', () => {
+  it('every threshold bar carries the 25/50/75/90% notch overlay', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    const bars = (html.match(/class="bar band-/g) ?? []).length;
+    expect(bars).toBeGreaterThan(0);
+    expect((html.match(/<span class="bar-ticks" aria-hidden="true"><\/span>/g) ?? []).length).toBe(bars);
+  });
+});
+
+describe('formatKnownAge — frozen-telemetry age (hito-11)', () => {
+  it('formats whole minutes, hours and days from (fetchedAt, nowMs)', () => {
+    expect(formatKnownAge(NOW_MS - 14 * 60_000, NOW_MS)).toBe('T-14M');
+    expect(formatKnownAge(NOW_MS - 59 * 60_000, NOW_MS)).toBe('T-59M');
+    expect(formatKnownAge(NOW_MS - 150 * 60_000, NOW_MS)).toBe('T-2H'); // floor(2.5h)
+    expect(formatKnownAge(NOW_MS - 4321 * 60_000, NOW_MS)).toBe('T-3D');
+  });
+
+  it('clamps a future fetchedAt (clock skew) to T-0M — never a negative age', () => {
+    expect(formatKnownAge(NOW_MS + 600_000, NOW_MS)).toBe('T-0M');
+    expect(formatKnownAge(NOW_MS, NOW_MS)).toBe('T-0M');
+  });
+});
+
+describe('renderMain — LAST KNOWN (frozen) card (hito-11)', () => {
+  const knownZai: CycleSnapshot = {
+    results: { zai: { status: 'error', errorClass: 'auth' } },
+    lastKnown: {
+      zai: {
+        status: 'ok',
+        usage: usage('zai', { kind: 'cost', value: undefined, currency: undefined, windows: MONITOR_WINDOWS, fetchedAt: NOW_MS - 14 * 60_000 }),
+      },
+    },
+  };
+
+  it('an error entry with a last-known success renders the dimmed frozen usage + age chip', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: knownZai })), 'zai');
+
+    expect(zai).toContain('Auth failed'); // the real error-class label stays leading
+    expect(zai).toContain(ZAI_WRONG_PLATFORM_GUIDANCE); // existing guidance survives
+    expect(zai).toContain('<div class="last-known">');
+    expect(stripTags(zai)).toContain('LAST KNOWN · T-14M'); // age from state.nowMs vs fetchedAt
+    // The frozen body renders the SAME structure as a live ok card would.
+    expect(zai).toContain('Level: Pro');
+    expect(zai).toContain('<p class="hero-percentage band-red">137%</p>');
+  });
+
+  it('an error entry WITHOUT a last-known success renders no frozen block — nothing synthesized', () => {
+    const zai = sectionFor(renderMain(popupState({ snapshot: { results: { zai: { status: 'error', errorClass: 'auth' } } } })), 'zai');
+
+    expect(zai).not.toContain('last-known');
+    expect(zai).not.toContain('LAST KNOWN');
+  });
+
+  it('a live ok entry never renders the frozen block even when lastKnown exists', () => {
+    const html = renderMain(popupState({ snapshot: { ...FULL_SNAPSHOT, lastKnown: knownZai.lastKnown } }));
+
+    expect(sectionFor(html, 'zai')).not.toContain('last-known');
+  });
+
+  it('the age derives from the state, never Date.now — same state renders byte-identical', () => {
+    const state = popupState({ snapshot: knownZai });
+    strictEqual(renderMain(state), renderMain(state));
+  });
+});
+
+describe('hito-11 honesty + zero-remote pins', () => {
+  it('neither view carries fake telemetry or encryption claims', () => {
+    const state = popupState({ snapshot: FULL_SNAPSHOT });
+    const rendered = [renderMain(state), renderSettings({ ...state, view: 'settings' })];
+
+    for (const html of rendered) {
+      expect(html).not.toMatch(/\bLIVE\b/);
+      expect(html).not.toMatch(/\bPING\b/i);
+      expect(html).not.toMatch(/burn rate/i);
+      expect(html).not.toMatch(/\bAES\b/);
+      expect(html).not.toMatch(/encrypt/i);
+      expect(html).not.toMatch(/cadence/i);
+      expect(html).not.toMatch(/latency/i);
+    }
+  });
+
+  it('the ONLY URL in rendered output is the branding footer link — zero remote references', () => {
+    const state = popupState({ snapshot: FULL_SNAPSHOT });
+
+    for (const html of [renderMain(state), renderSettings({ ...state, view: 'settings' })]) {
+      expect(html).not.toContain('http://');
+      expect((html.match(/https?:\/\//g) ?? []).length).toBe(1);
+      expect(html).toContain('https://www.thenorthcode.es/');
+      expect(html).not.toMatch(/https:\/\/(?!www\.thenorthcode\.es)/);
+      expect(html).not.toContain('<link');
+      expect(html).not.toContain('@import');
+      expect(html).not.toContain('Material Symbols');
+    }
+  });
+
+  it('icons are inline SVG only — no icon fonts, no img tags', () => {
+    const html = renderMain(popupState({ snapshot: FULL_SNAPSHOT }));
+
+    expect(html).toContain('<svg viewBox="0 0 24 24"');
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('material-icons');
+  });
+
+  it('the honest version footer states the real version in both views', () => {
+    const state = popupState({ snapshot: FULL_SNAPSHOT });
+
+    for (const html of [renderMain(state), renderSettings({ ...state, view: 'settings' })]) {
+      expect(html).toContain(`<span class="version">${POPUP_VERSION}</span>`);
+    }
+  });
+
+  it('POPUP_VERSION stays pinned to the manifest version (release honesty)', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const manifest = JSON.parse(readFileSync(join(here, '../../public/manifest.json'), 'utf8')) as { version: string };
+
+    expect(POPUP_VERSION).toBe(`v${manifest.version}`);
+  });
+});
+
+describe('popup.html — neo-brutalist design system (hito-11, DESIGN.md)', () => {
+  const html = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../public/popup.html'), 'utf8');
+
+  it('loads the LOCAL OFL woff2 fonts with weight ranges and system fallbacks', () => {
+    expect(html).toContain("@font-face");
+    expect(html).toContain("url('fonts/space-grotesk-latin.woff2') format('woff2')");
+    expect(html).toContain("url('fonts/jetbrains-mono-latin.woff2') format('woff2')");
+    expect(html).toContain('font-weight: 500 700');
+    expect(html).toContain("'Space Grotesk', system-ui"); // fallback stack
+    expect(html).toContain("'JetBrains Mono', ui-monospace");
+  });
+
+  it('implements the DESIGN.md tokens: paper/ink palette, 2px borders, 0 radius, hard shadows, pressed state, 360px', () => {
+    expect(html).toContain('#fdfdf7');
+    expect(html).toContain('#18181b');
+    expect(html).toContain('#fde047');
+    expect(html).toContain('2px solid var(--ink)');
+    expect(html).toContain('border-radius: 0');
+    expect(html).toContain('4px 4px 0 var(--ink)');
+    expect(html).toContain('2px 2px 0 var(--ink)');
+    expect(html).toContain('translate(4px, 4px)');
+    expect(html).toContain('width: 360px');
+  });
+
+  it('threshold bands keep the shipped semantics: green <70, amber 70-89, red >=90', () => {
+    expect(html).toContain('#16a34a');
+    expect(html).toContain('#f59e0b');
+    expect(html).toContain('#dc2626');
+  });
+
+  it('draws the segmented notch lines at 25/50/75/90 percent', () => {
+    expect(html).toContain('calc(25% - 2px)');
+    expect(html).toContain('calc(50% - 2px)');
+    expect(html).toContain('calc(75% - 2px)');
+    expect(html).toContain('calc(90% - 2px)');
+  });
+
+  it('is CSP-legal and remote-free: no http(s) reference, no <link>, no inline <script>', () => {
+    expect(html).not.toMatch(/https?:\/\//);
+    expect(html).not.toContain('<link');
+    expect(html).not.toContain('fonts.googleapis');
+    expect(html).not.toContain('fonts.gstatic');
+    expect(html).not.toContain('Material Symbols');
+    expect(html).toContain('<script src="popup.js"></script>');
+    expect(html).not.toMatch(/<script>(?!\s*<\/script>)/);
   });
 });
