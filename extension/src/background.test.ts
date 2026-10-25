@@ -369,9 +369,10 @@ describe('background — Gateway Origin Rule Install (hito-12 WU-F)', () => {
     // in through the platform seam's runtime slice as the initiator scope, and
     // the rewrite target is the PUBLIC console origin — no credential (WU-F).
     expect(h.dnr.calls[0]?.args[0]).toEqual({
+      removeRuleIds: [1], // GATEWAY_ORIGIN_RULE_ID — remove+add in ONE call (hito-12 WU-J)
       addRules: [
         {
-          id: 1, // QWEN_TOKEN_PLAN_SESSION_RULE_ID (dnr/gateway-origin-rule.ts)
+          id: 1, // GATEWAY_ORIGIN_RULE_ID (dnr/gateway-origin-rule.ts)
           action: {
             type: 'modifyHeaders',
             requestHeaders: [
@@ -394,9 +395,63 @@ describe('background — Gateway Origin Rule Install (hito-12 WU-F)', () => {
     startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
     startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
 
-    expect(h.dnr.calls).toHaveLength(2); // idempotent replace-by-id, not skip — each SW start re-installs
+    expect(h.dnr.calls).toHaveLength(2); // remove+add by id EVERY start — never skip, never duplicate (hito-12 WU-J)
     expect(h.dnr.sessionRules.size).toBe(1); // no duplicate rule accumulates under the same id
     expect(JSON.stringify(h.dnr.sessionRules.get(1))).not.toMatch(/cookie|authorization|bearer/i); // public constants only (hito-9 §Lane 1(c) ban)
+  });
+
+  it('a rule that survived from an earlier SW start reinstalls idempotently: remove+add in ONE call, no error logged (hito-12 WU-J)', () => {
+    const h = makeApi();
+    // Live E2E failure shape (WU-J): session rules outlive the worker for the
+    // browser's LIFETIME, so id 1 is still resident when the SW restarts —
+    // here carrying a stale payload. The install must remove+add by id in one
+    // updateSessionRules call; a bare addRules re-add rejects.
+    h.dnr.sessionRules.set(1, {
+      id: 1,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [{ header: 'origin', operation: 'set', value: 'https://stale.example' }],
+      },
+      condition: {
+        urlFilter: 'stale.example/stale',
+        requestDomains: ['stale.example'],
+        initiatorDomains: ['stale-extension-id'],
+        resourceTypes: ['xmlhttprequest'],
+      },
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      startWorker(h.api, { clock: new FakeClock(TICK_NOW) });
+
+      expect(errorSpy).not.toHaveBeenCalled(); // WU-J bug logged "Error: Rule with id 1 does not have a unique ID."
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(h.dnr.calls).toHaveLength(1); // ONE call carries remove AND add together — never a roundtrip
+    expect(h.dnr.calls[0]?.args[0]).toEqual({
+      removeRuleIds: [1],
+      addRules: [
+        {
+          id: 1, // GATEWAY_ORIGIN_RULE_ID (dnr/gateway-origin-rule.ts)
+          action: {
+            type: 'modifyHeaders',
+            requestHeaders: [
+              { header: 'origin', operation: 'set', value: 'https://modelstudio.console.alibabacloud.com' },
+            ],
+          },
+          condition: {
+            requestDomains: [QWEN_TOKEN_PLAN_GATEWAY_HOST],
+            resourceTypes: ['xmlhttprequest'],
+            initiatorDomains: [FAKE_RUNTIME_ID],
+            urlFilter: `${QWEN_TOKEN_PLAN_GATEWAY_HOST}/cli/api.json`,
+          },
+        },
+      ],
+    });
+    expect(h.dnr.sessionRules.size).toBe(1); // exactly one live rule afterwards
+    expect(JSON.stringify(h.dnr.sessionRules.get(1))).toContain('modelstudio.console.alibabacloud.com'); // the FRESH payload won
   });
 });
 

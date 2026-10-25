@@ -28,15 +28,17 @@
 //   constant (Alibaba's WAF 302s the SW's own Origin to err.taobao.com before
 //   app auth — see dnr/gateway-origin-rule.ts for the hito-9 §Lane 1(c)
 //   contrast: public constants only, zero credentials, the Bearer still rides
-//   exclusively through the client's session-marker seam). updateSessionRules
-//   replaces by id, so repeat installs across SW restarts stay idempotent.
+//   exclusively through the client's session-marker seam). Session rules
+//   outlive the worker for the browser's lifetime, so the install is
+//   remove+add by id in ONE updateSessionRules call (hito-12 WU-J) — never a
+//   bare addRules re-add, which rejects on the surviving rule's id.
 import { SystemClock, type Clock } from './core/clock';
 import type { ProviderId, UsageQuery } from './core/provider';
 import { SHIPPED_PROVIDER_IDS } from './core/provider-metadata';
 import type { QwenSite } from './core/qwen-sites';
 import type { ZaiPlatform } from './core/zai-platforms';
 import { badgeBackgroundColor, badgeTextColor, ERROR_BADGE_TEXT, formatBadgeText, formatPercentageBadgeText } from './core/usage';
-import { buildGatewayOriginSessionRule } from './dnr/gateway-origin-rule';
+import { buildGatewayOriginSessionRule, GATEWAY_ORIGIN_RULE_ID } from './dnr/gateway-origin-rule';
 import { AllowlistNetworkClient } from './network/client';
 import { FetchTransport } from './network/fetch-transport';
 import type { Transport } from './network/transport';
@@ -294,17 +296,20 @@ export function startWorker(browser: WorkerBrowserApi, options: WorkerOptions = 
   const planStep = createQwenPlanStep(browser, options);
   const quotaStep = createQwenQuotaStep(browser, options);
 
-  // Gateway-origin session rule install (hito-12 WU-F), once per SW start and
-  // BEFORE the alarm wiring: the quota gateway hop is dead without it (WAF 302
-  // on the chrome-extension:// Origin). updateSessionRules replaces by id, so
-  // every worker restart re-installs idempotently. The payload carries public
-  // constants plus our own runtime id as initiator scope — no secret ever
-  // enters rule data (hito-9 §Lane 1(c)). A failed install never blocks the
-  // alarms/tick wiring but surfaces on the worker console, like every other
-  // permanent diagnostic; the log line names only the fixed prefix and the
-  // chrome error itself.
+  // Gateway-origin session rule install (hito-12 WU-F/WU-J), once per SW start
+  // and BEFORE the alarm wiring: the quota gateway hop is dead without it (WAF
+  // 302 on the chrome-extension:// Origin). Session rules survive SW restarts
+  // for the browser's LIFETIME, so the idempotent install is remove+add by id
+  // in this ONE updateSessionRules call — a bare addRules re-install rejects
+  // with "Rule with id 1 does not have a unique ID." and the hop stays dead
+  // (live E2E, hito-12 WU-J). The payload carries public constants plus our
+  // own runtime id as initiator scope — no secret ever enters rule data
+  // (hito-9 §Lane 1(c)). A failed install never blocks the alarms/tick wiring
+  // but surfaces on the worker console, like every other permanent diagnostic;
+  // the log line names only the fixed prefix and the chrome error itself.
   browser.declarativeNetRequest
     .updateSessionRules({
+      removeRuleIds: [GATEWAY_ORIGIN_RULE_ID],
       addRules: [buildGatewayOriginSessionRule({ extensionId: browser.runtime.id })],
     })
     .catch((error: unknown) => {

@@ -21,8 +21,10 @@
 // plus the install's own extension id, which is public per install and used
 // solely as the INITIATOR scope. Zero credentials: the Bearer token still
 // rides exclusively through the client's session-marker seam
-// (network/client.ts), and session rules never persist across browser
-// restarts. gateway-origin-rule.test.ts pins every field, including the
+// (network/client.ts). Session rules are browser-managed memory for the
+// browser's LIFETIME — they survive SW restarts (which is exactly why a bare
+// addRules re-install throws duplicate-id; WU-J) and clear only on browser
+// restart. gateway-origin-rule.test.ts pins every field, including the
 // no-cookie/no-authorization/no-secret-substring ban.
 import type { DnrSessionRule } from '../platform/browser-api';
 import { QWEN_TOKEN_PLAN_GATEWAY_HOST } from '../providers/qwen-token-plan';
@@ -42,8 +44,13 @@ export const QWEN_GATEWAY_API_PATH = '/cli/api.json';
 /** DNR urlFilter pinning the rewrite to the quota usage request, nothing else. */
 export const QWEN_GATEWAY_URL_FILTER = `${QWEN_TOKEN_PLAN_GATEWAY_HOST}${QWEN_GATEWAY_API_PATH}`;
 
-/** Stable session-rule id: a re-install with this id REPLACES — never duplicates. */
-export const QWEN_TOKEN_PLAN_SESSION_RULE_ID = 1;
+/**
+ * Stable session-rule id, FROZEN at 1: the idempotent install removes this
+ * exact id and re-adds the rule in ONE updateSessionRules call (session rules
+ * survive SW restarts for the browser's lifetime — hito-12 WU-J). Bumping it
+ * would orphan the id-1 rule still resident in long-lived browser sessions.
+ */
+export const GATEWAY_ORIGIN_RULE_ID = 1;
 
 /**
  * Builds the one gateway-origin session rule. The caller supplies
@@ -58,7 +65,7 @@ export function buildGatewayOriginSessionRule({
   readonly extensionId: string;
 }): DnrSessionRule {
   return {
-    id: QWEN_TOKEN_PLAN_SESSION_RULE_ID,
+    id: GATEWAY_ORIGIN_RULE_ID,
     action: {
       type: 'modifyHeaders',
       requestHeaders: [

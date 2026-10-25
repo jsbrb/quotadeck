@@ -15,11 +15,11 @@ import { deepStrictEqual } from 'node:assert';
 import { describe, expect, it } from 'vitest';
 import {
   buildGatewayOriginSessionRule,
+  GATEWAY_ORIGIN_RULE_ID,
   QWEN_GATEWAY_API_PATH,
   QWEN_GATEWAY_ORIGIN_HEADER,
   QWEN_GATEWAY_TRUSTED_ORIGIN,
   QWEN_GATEWAY_URL_FILTER,
-  QWEN_TOKEN_PLAN_SESSION_RULE_ID,
 } from './gateway-origin-rule';
 import { QWEN_TOKEN_PLAN_GATEWAY_HOST } from '../providers/qwen-token-plan';
 
@@ -31,11 +31,18 @@ describe('dnr/gateway-origin-rule — session rule builder (hito-12 WU-F)', () =
     const rule = buildGatewayOriginSessionRule({ extensionId: EXTENSION_ID });
 
     expect(QWEN_GATEWAY_TRUSTED_ORIGIN).toBe('https://modelstudio.console.alibabacloud.com');
-    expect(rule.id).toBe(QWEN_TOKEN_PLAN_SESSION_RULE_ID);
+    expect(rule.id).toBe(GATEWAY_ORIGIN_RULE_ID);
     expect(rule.action.type).toBe('modifyHeaders');
     expect(rule.action.requestHeaders).toEqual([
       { header: QWEN_GATEWAY_ORIGIN_HEADER, operation: 'set', value: QWEN_GATEWAY_TRUSTED_ORIGIN },
     ]);
+  });
+
+  it('freezes the rule id at 1 — bumping it would orphan the browser-lifetime rule in long-lived sessions', () => {
+    // Session rules survive SW restarts for the browser's LIFETIME (hito-12
+    // WU-J): the idempotent install removes THIS id and re-adds in one call.
+    // A different id would leave the old id-1 rule resident forever.
+    expect(GATEWAY_ORIGIN_RULE_ID).toBe(1);
   });
 
   it('scopes the condition to the gateway host, the quota api path, xhr requests, and our own extension as initiator', () => {
@@ -60,7 +67,7 @@ describe('dnr/gateway-origin-rule — session rule builder (hito-12 WU-F)', () =
     }
   });
 
-  it('builder output is stable across re-install calls — updateSessionRules replace-by-id stays byte-identical', () => {
+  it('builder output is stable across re-install calls — the remove+add reinstall stays byte-identical', () => {
     const first = buildGatewayOriginSessionRule({ extensionId: EXTENSION_ID });
     const second = buildGatewayOriginSessionRule({ extensionId: EXTENSION_ID });
 

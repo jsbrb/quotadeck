@@ -177,6 +177,15 @@ Verification levels:
   gateway request's Origin to that public console origin, scoped to our own extension
   as initiator (`initiatorDomains: [runtime.id]`), the gateway host, and the
   `/cli/api.json` path — see `extension/src/dnr/gateway-origin-rule.ts`.
+- Session-rule persistence gotcha (hito-12 WU-J, live E2E 2026-10-25): DNR session
+  rules survive service-worker restarts for the BROWSER's lifetime, so the startup
+  install MUST be remove+add by id in ONE `updateSessionRules` call
+  (`removeRuleIds: [GATEWAY_ORIGIN_RULE_ID]` beside `addRules` — the canonical
+  idempotent pattern, never a getSessionRules roundtrip first). A bare `addRules`
+  re-install throws `Error: Rule with id 1 does not have a unique ID.` and the rule
+  is never (re)applied on that start — observed verbatim in the maintainer's SW
+  console. The rule id is frozen at 1: bumping it would orphan the id-1 rule still
+  resident in long-lived browser sessions.
 - WHY this DNR use is NOT the hito-9-rejected header injection
   (`openspec/changes/hito-9-qwen-console-session/exploration.md` §Lane 1(c), "Ruled
   out"): that proposal would persist cookie/session **VALUES** as rule data — secret

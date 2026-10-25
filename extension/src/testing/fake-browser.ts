@@ -138,9 +138,11 @@ export class FakeAction {
 
 /**
  * Records every updateSessionRules call and applies chrome's session-rule
- * semantics in memory: addRules REPLACE by id, removeRuleIds delete — so
- * `sessionRules` is the live rule state a test reads (the WU-F install-once
- * and replace-by-id pins hang off this recording).
+ * semantics in memory: removeRuleIds delete first, addRules then apply — and
+ * an add whose id is STILL live (not removed in the same call) REJECTS with
+ * chrome's duplicate-id error (hito-12 WU-J). `sessionRules` is the live rule
+ * state a test reads; the WU-F install-once and the WU-J pre-existing-rule
+ * pins hang off this recording.
  */
 export class FakeDeclarativeNetRequest {
   readonly calls: RecordedCall[] = [];
@@ -152,6 +154,13 @@ export class FakeDeclarativeNetRequest {
       this.sessionRules.delete(id);
     }
     for (const rule of update.addRules ?? []) {
+      // Chrome-faithful (hito-12 WU-J): a bare addRules re-install of a rule
+      // that survived from an earlier SW start REJECTS — live E2E observed
+      // "Error: Rule with id 1 does not have a unique ID." The lenient
+      // overwrite this fake used before WU-J is what let that bug pass review.
+      if (this.sessionRules.has(rule.id)) {
+        throw new Error(`Rule with id ${rule.id} does not have a unique ID.`);
+      }
       this.sessionRules.set(rule.id, rule);
     }
   }
