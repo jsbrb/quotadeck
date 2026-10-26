@@ -18,12 +18,19 @@ import { resolveChosenBand } from "./lib/tray-badge";
 // the tray menu.
 
 const REFRESH_PERIOD_MS = 60_000;
-// Segment geometry must match the CSS custom properties (index.html).
-const SEG_SIZE = { normal: { width: 230, height: 48 }, xl: { width: 300, height: 96 } } as const;
+// Segment geometry must match the CSS custom properties (index.html):
+// normal = taskbar height 48px tight; xl = 68px with maxed fonts (S12).
+const SEG_SIZE = { normal: { width: 180, height: 48 }, xl: { width: 230, height: 68 } } as const;
 const BAR_PAD_X = 16;
 const BAR_PAD_Y = 16;
+const REFRESH_SEGMENT_WIDTH = 44;
 const EMPTY_SEGMENTS = 1;
 const LAST_TICK_ERROR_KEY = "qd:last-tick-error";
+// Trailing refresh segment (S12): manual reload without waiting for the tick.
+const REFRESH_SEGMENT_HTML = `
+    <div class="seg seg-refresh">
+      <button id="refresh-btn" type="button" aria-label="Refresh quotas now">⟳</button>
+    </div>`;
 
 // Boot diagnostics: an uncaught module error surfaces in the window title so
 // a headless debug session can read it via the process list.
@@ -78,11 +85,11 @@ function reflowBar(): void {
   const seg = SEG_SIZE[layout.size];
   if (layout.orientation === "vertical") {
     const width = seg.width + BAR_PAD_X;
-    const height = BAR_PAD_Y + count * seg.height;
+    const height = BAR_PAD_Y + count * seg.height + seg.height;
     void invoke("reflow_flyout", { width, height });
     return;
   }
-  const width = BAR_PAD_X + count * seg.width;
+  const width = BAR_PAD_X + count * seg.width + REFRESH_SEGMENT_WIDTH;
   void invoke("reflow_flyout", { width, height: seg.height });
 }
 
@@ -90,7 +97,7 @@ function renderBar(): void {
   if (bar === null) {
     return;
   }
-  bar.innerHTML = renderSegments(lastSnapshot, clock.now(), lastStored, layout.order);
+  bar.innerHTML = renderSegments(lastSnapshot, clock.now(), lastStored, layout.order) + REFRESH_SEGMENT_HTML;
 }
 
 function showBar(): void {
@@ -154,6 +161,27 @@ async function tick(): Promise<void> {
 
 void listen("quotadeck://show-bar", () => showBar());
 void listen("quotadeck://show-keys", () => showKeys());
+
+// Delegated wiring: survives bar re-renders (innerHTML swaps the segments).
+bar?.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  const button = target.closest<HTMLButtonElement>("#refresh-btn");
+  if (button !== null && !demoMode && !button.disabled) {
+    button.disabled = true;
+    button.textContent = "…";
+    void tick().finally(() => {
+      button.disabled = false;
+      button.textContent = "⟳";
+    });
+  }
+});
+
+document.getElementById("keys-close")?.addEventListener("click", () => {
+  showBar();
+});
 
 setupKeysView({
   prefs,

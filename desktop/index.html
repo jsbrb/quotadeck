@@ -18,17 +18,17 @@
         --ink: #0f172a;
         --slate: #e2e8f0;
         --shadow-offset: 4px;
-        --seg-w: 230px;
+        --seg-w: 180px;
         --seg-h: 48px;
-        --f-name: 10px;
-        --f-pct: 12px;
-        --f-sub: 9px;
+        --f-name: 12px;
+        --f-pct: 14px;
+        --f-sub: 10px;
       }
       body[data-size="xl"] {
-        --seg-w: 300px;
-        --seg-h: 96px;
+        --seg-w: 230px;
+        --seg-h: 68px;
         --f-name: 15px;
-        --f-pct: 22px;
+        --f-pct: 18px;
         --f-sub: 13px;
       }
       * {
@@ -62,13 +62,14 @@
         display: flex;
         flex-direction: column;
         justify-content: center;
-        gap: 2px;
-        padding: 0 14px;
+        gap: 1px;
+        padding: 0 10px;
         flex: 0 0 var(--seg-w);
         width: var(--seg-w);
         height: 100%;
         border-left: 1px solid var(--bar-sep);
         overflow: hidden;
+        line-height: 1.1;
       }
       body[data-orientation="vertical"] .seg {
         flex: 0 0 var(--seg-h);
@@ -117,13 +118,72 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      .seg-refresh {
+        flex: 0 0 44px;
+        width: 44px;
+        align-items: center;
+        padding: 0 6px;
+      }
+      body[data-orientation="vertical"] .seg-refresh {
+        flex: 0 0 var(--seg-h);
+        width: var(--seg-w);
+        align-items: flex-start;
+      }
+      #refresh-btn {
+        background: none;
+        border: none;
+        color: var(--bar-muted);
+        font: inherit;
+        font-size: var(--f-pct);
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+      #refresh-btn:hover {
+        color: var(--bar-text);
+      }
+      #refresh-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
       /* KEYS mode: same dark canvas, light instrument panels. */
       #keys {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px 14px 14px;
+        height: 100%;
+        overflow-y: auto;
+      }
+      .keys-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .keys-head h2 {
+        margin: 0;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        color: var(--bar-text);
+      }
+      #keys-close {
+        border: 1px solid var(--bar-text);
+        background: none;
+        color: var(--bar-text);
+        font: inherit;
+        font-size: 11px;
+        width: 24px;
+        height: 24px;
+        cursor: pointer;
+      }
+      #keys-close:hover {
+        background: var(--bar-sep);
+      }
+      .keys-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
         gap: 14px;
         align-items: start;
-        padding: 14px;
       }
       #keys.hidden,
       #bar.hidden {
@@ -226,8 +286,13 @@
   <body>
     <div id="bar" class="hidden"></div>
     <div id="keys" class="hidden">
-      <section class="card">
-        <h2 class="provider-name">ZAI (Zhipu AI)</h2>
+      <div class="keys-head">
+        <h2>QUOTADECK — SETTINGS</h2>
+        <button id="keys-close" type="button" aria-label="Close settings and show the strip">✕</button>
+      </div>
+      <div class="keys-grid">
+        <section class="card">
+          <h2 class="provider-name">ZAI (Zhipu AI)</h2>
         <label class="field">
           <span>PLATFORM</span>
           <select id="zai-platform">
@@ -307,6 +372,7 @@
           </select>
         </label>
       </section>
+      </div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
