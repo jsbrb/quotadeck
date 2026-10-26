@@ -4,12 +4,13 @@ import { SystemClock } from "@shared/core/clock";
 import type { ProviderId } from "@shared/core/provider";
 import { SnapshotStore, type CycleSnapshot } from "@shared/storage/snapshot-store";
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
-import { createDesktopTransport } from "./lib/desktop-transport";
+import { createDesktopTransport, gatewayProbe } from "./lib/desktop-transport";
 import { setupKeysView } from "./lib/keys-view";
 import { renderSegments, renderTickNotice, shortName, visibleCount } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
-import { readStripLayout, stripGeometry, type StripLayout } from "./lib/strip-prefs";
-import { resolveChosenBand } from "./lib/tray-badge";
+import { readStripLayout, stripGeometry, writeStripOrientation, type StripLayout } from "./lib/strip-prefs";
+import { applyLayoutToBar } from "./lib/strip-view";
+import { resolveStripBadge } from "./lib/tray-badge";
 
 // Second-taskbar shell (WU-L): dark strip of EQUAL-SIZED minimalist segments,
 // one per configured provider (S8). Orientation (horizontal row / vertical
@@ -50,26 +51,9 @@ let lastHints: Partial<Record<ProviderId, string>> = {};
 
 async function refreshLayout(): Promise<void> {
   layout = await readStripLayout(prefs);
-  applyLayoutToBar();
-}
-
-/**
- * WU-N: orientation/size are applied to `#bar` directly — classList for the
- * child overrides + CSS vars, inline style for flex-direction/height. The
- * previous `body[data-orientation]` attribute selectors proved fragile at
- * runtime (vertical window sizing with horizontal rendering); inline always
- * wins the cascade and classList on a referenced element cannot silently
- * miss.
- */
-function applyLayoutToBar(): void {
-  if (bar === null) {
-    return;
+  if (bar !== null) {
+    applyLayoutToBar(bar, layout);
   }
-  const vertical = layout.orientation === "vertical";
-  bar.classList.toggle("vertical", vertical);
-  bar.classList.toggle("size-xl", layout.size === "xl");
-  bar.style.flexDirection = vertical ? "column" : "row";
-  bar.style.height = vertical ? "auto" : "100%";
 }
 
 /**
@@ -149,10 +133,10 @@ async function tick(): Promise<void> {
       renderBar();
       reflowBar();
     }
-    // The tray icon IS the desktop badge: band color from ZAI's threshold,
-    // figure in the tooltip.
-    const chosen = resolveChosenBand(outcome.snapshot.results, "zai", shortName);
-    await invoke("set_tray_badge", { band: chosen.band, tooltip: chosen.tooltip });
+    // The tray icon IS the desktop badge (WU-O): band from the most urgent
+    // provider, tooltip listing every provider's figure.
+    const badge = resolveStripBadge(outcome.snapshot.results, shortName);
+    await invoke("set_tray_badge", { band: badge.band, tooltip: badge.tooltip });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[quotadeck-desktop] tick failed:", error);
@@ -209,6 +193,135 @@ setupKeysView({
   stripProviders: () => lastStored,
 });
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * WU-O autotest (QUOTADECK_AUTOTEST=1): self-reproduces the user-reported
+ * scenarios — live orientation flips through the REAL Keys controls (bar
+ * mode and the Keys→✕ path), a refresh click, tray-icon churn counting, and
+ * the Qwen gateway probe — then writes a `qd:autotest` report with boolean
+ * verdicts for scripts/autotest-desktop.ps1. No human repetition required.
+ */
+async function runAutotest(): Promise<void> {
+  const report: Record<string, unknown> = {};
+  /**
+   * Window size AFTER the OS settles: reflow_flyout is fire-and-forget, so
+   * poll for a STABLE size (two equal reads 150ms apart) after an initial
+   * settle. Each snapshot also carries the logical `expected` geometry and
+   * the device pixel ratio so a failure distinguishes "windowing bug" from
+   * "measurement artifact" (expected_physical = expected * dpr).
+   */
+  const stableWindow = async (): Promise<[number, number] | null> => {
+    await sleep(1200);
+    let prev = await invoke<null | [number, number]>("flyout_size").catch(() => null);
+    for (let attempt = 0; attempt < 14; attempt += 1) {
+      await sleep(150);
+      const next = await invoke<null | [number, number]>("flyout_size").catch(() => null);
+      if (prev !== null && next !== null && prev[0] === next[0] && prev[1] === next[1]) {
+        return next;
+      }
+      prev = next;
+    }
+    return prev;
+  };
+  const snap = async (name: string): Promise<void> => {
+    report[name] = {
+      pref: layout.orientation,
+      barClass: bar?.className ?? null,
+      barInline: bar?.style.flexDirection ?? null,
+      computed: bar !== null ? getComputedStyle(bar).flexDirection : null,
+      expected: stripGeometry(layout, lastVisibleCount),
+      dpr: window.devicePixelRatio,
+      window: await stableWindow(),
+    };
+  };
+  const computedOf = (name: string): string | null => {
+    const s = report[name] as { computed?: unknown } | undefined;
+    return typeof s?.computed === "string" ? s.computed : null;
+  };
+  /** OS window size must equal the expected logical geometry * dpr (±4px). */
+  const sizeMatches = (name: string): boolean => {
+    const s = report[name] as
+      | { window?: [number, number] | null; expected?: { width: number; height: number }; dpr?: number }
+      | undefined;
+    if (!s || s.window === null || s.window === undefined || !s.expected || !s.dpr) {
+      return false;
+    }
+    const tolerance = 4 * s.dpr;
+    return (
+      Math.abs(s.window[0] - s.expected.width * s.dpr) <= tolerance &&
+      Math.abs(s.window[1] - s.expected.height * s.dpr) <= tolerance
+    );
+  };
+
+  await writeStripOrientation(prefs, "horizontal");
+  await refreshLayout();
+  renderBar();
+  showBar();
+  await tick();
+  await snap("boot");
+
+  const sel = document.getElementById("strip-orientation") as HTMLSelectElement | null;
+  if (sel !== null) {
+    sel.value = "vertical";
+    sel.dispatchEvent(new Event("change"));
+  }
+  await sleep(700);
+  await snap("flipVerticalInBar");
+  if (sel !== null) {
+    sel.value = "horizontal";
+    sel.dispatchEvent(new Event("change"));
+  }
+  await sleep(700);
+  await snap("flipBackHorizontal");
+
+  // The user path: open Keys via ✕-able flow, flip there, close with ✕.
+  showKeys();
+  if (sel !== null) {
+    sel.value = "vertical";
+    sel.dispatchEvent(new Event("change"));
+  }
+  await sleep(500);
+  document.getElementById("keys-close")?.click();
+  await sleep(700);
+  await snap("keysFlipThenClose");
+
+  // Tray-icon churn: two consecutive badge writes with the same band must
+  // swap the icon at most once (the suspected cause of the vanished icon).
+  const statsBefore = await invoke<[number, number]>("tray_stats").catch(() => null);
+  (document.getElementById("refresh-btn") as HTMLButtonElement | null)?.click();
+  await sleep(2500);
+  const statsAfter = await invoke<[number, number]>("tray_stats").catch(() => null);
+  report.refresh = { before: statsBefore, after: statsAfter };
+
+  if (lastStored.includes("qwen")) {
+    report.qwen = {
+      cookieCounts: await invoke<[number, number]>("qwen_cookie_counts").catch(() => null),
+      gatewayProbe: gatewayProbe.last,
+      entry: lastSnapshot.results.qwen ?? null,
+    };
+  }
+
+  report.verdicts = {
+    flipVerticalDOM: computedOf("flipVerticalInBar") === "column",
+    flipVerticalWindowMatches: sizeMatches("flipVerticalInBar"),
+    flipBackDOM: computedOf("flipBackHorizontal") === "row",
+    flipBackWindowMatches: sizeMatches("flipBackHorizontal"),
+    keysFlipDOM: computedOf("keysFlipThenClose") === "column",
+    keysFlipWindowMatches: sizeMatches("keysFlipThenClose"),
+    refreshReported: statsBefore !== null && statsAfter !== null,
+    noIconChurn: statsBefore !== null && statsAfter !== null && statsBefore[1] === statsAfter[1],
+  };
+
+  await writeStripOrientation(prefs, "horizontal");
+  await refreshLayout();
+  renderBar();
+  reflowBar();
+  await prefs.set({ "qd:autotest": { ...report, finishedAt: clock.now() } });
+}
+
 // Demo mode (QUOTADECK_DEMO=1): render the seeded snapshot and freeze — no
 // ticks, no key-save refresh. A normal launch runs the live loop.
 void (async () => {
@@ -222,6 +335,10 @@ void (async () => {
     }
     renderBar();
     showBar();
+    return;
+  }
+  if (await invoke<boolean>("is_autotest")) {
+    await runAutotest();
     return;
   }
   showBar();

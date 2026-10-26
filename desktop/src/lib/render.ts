@@ -21,18 +21,6 @@ const ERROR_LABELS: Record<string, string> = {
   unknown: "ERROR",
 };
 
-/** Structural view of the DeepSeek wallet field (hito-13; absent pre-merge). */
-interface WalletShape {
-  readonly currency?: string;
-  readonly total?: number;
-  readonly consumed?: number;
-  readonly percentage?: number;
-}
-
-function walletOf(usage: NormalizedUsage): WalletShape | undefined {
-  return (usage as { wallet?: WalletShape }).wallet;
-}
-
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -73,9 +61,8 @@ function segmentPercentage(usage: NormalizedUsage): number | undefined {
   if (usage.providerId === "qwen") {
     return usage.quota?.percentage ?? usage.windows?.fiveHour?.percentage;
   }
-  const wallet = walletOf(usage);
-  if (wallet?.percentage !== undefined) {
-    return wallet.percentage;
+  if (usage.wallet?.percentage !== undefined) {
+    return usage.wallet.percentage;
   }
   return usage.windows?.fiveHour?.percentage;
 }
@@ -105,10 +92,9 @@ export function formatCountdown(now: number, resetAt: number | undefined): strin
 
 /** Bottom line: money-left/total for wallet usage, else the reset countdown. */
 function segmentBottom(usage: NormalizedUsage, now: number): string {
-  const wallet = walletOf(usage);
-  if (wallet?.total !== undefined && usage.value !== undefined) {
-    const symbol = currencySymbol(wallet.currency ?? usage.currency ?? "");
-    return `${symbol}${usage.value.toFixed(2)} / ${symbol}${wallet.total.toFixed(2)} LEFT`;
+  if (usage.wallet?.total !== undefined && usage.value !== undefined) {
+    const symbol = currencySymbol(usage.wallet.currency ?? usage.currency ?? "");
+    return `${symbol}${usage.value.toFixed(2)} / ${symbol}${usage.wallet.total.toFixed(2)} LEFT`;
   }
   const resetAt = usage.quota?.resetAt ?? usage.windows?.fiveHour?.resetAt;
   const countdown = formatCountdown(now, resetAt);

@@ -8,7 +8,7 @@
 //!   Always on top (pin), Quit.
 //! - The strip's bottom-right dock uses the monitor's REAL work area.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use tauri::{
@@ -32,11 +32,20 @@ const KEYS_WIDTH: f64 = 680.0;
 const KEYS_HEIGHT: f64 = 560.0;
 
 /// Managed tray handles: the icon (re-badged per tick via `set_tray_badge`)
-/// and the pin check item (its checked state mirrors PINNED).
+/// and the pin check item (its checked state mirrors PINNED). `band` remembers
+/// the last applied band so `set_icon` runs ONLY on an actual change —
+/// re-setting the icon every tick made Windows Explorer drop the icon from
+/// the tray (reported by the user: refresh clicked, icon vanished).
 struct TrayState {
     tray: Mutex<TrayIcon>,
     pin: CheckMenuItem<Wry>,
+    band: Mutex<String>,
 }
+
+/// Instrumentation counters for the autotest harness: every `set_tray_badge`
+/// call vs the subset that actually swapped the icon.
+static BADGE_CALLS: AtomicUsize = AtomicUsize::new(0);
+static ICON_SETS: AtomicUsize = AtomicUsize::new(0);
 
 fn band_icon(band: &str) -> Image<'static> {
     match band {
@@ -49,9 +58,18 @@ fn band_icon(band: &str) -> Image<'static> {
 
 #[tauri::command]
 fn set_tray_badge(app: tauri::AppHandle, band: String, tooltip: String) {
+    BADGE_CALLS.fetch_add(1, Ordering::SeqCst);
     let state = app.state::<TrayState>();
+    {
+        let mut current = state.band.lock().unwrap();
+        if *current != band {
+            let tray = state.tray.lock().unwrap();
+            let _ = tray.set_icon(Some(band_icon(&band)));
+            ICON_SETS.fetch_add(1, Ordering::SeqCst);
+            *current = band.clone();
+        }
+    }
     let tray = state.tray.lock().unwrap();
-    let _ = tray.set_icon(Some(band_icon(&band)));
     let _ = tray.set_tooltip(Some(tooltip.as_str()));
 }
 
@@ -60,6 +78,52 @@ fn set_tray_badge(app: tauri::AppHandle, band: String, tooltip: String) {
 #[tauri::command]
 fn is_demo() -> bool {
     std::env::var("QUOTADECK_DEMO").as_deref() == Ok("1")
+}
+
+/// Autotest flag: `QUOTADECK_AUTOTEST=1` drives the strip through the
+/// user-reported scenarios (orientation flips, refresh, Qwen probe) and
+/// writes a self-check report to prefs — see scripts/autotest-desktop.ps1.
+#[tauri::command]
+fn is_autotest() -> bool {
+    std::env::var("QUOTADECK_AUTOTEST").as_deref() == Ok("1")
+}
+
+/// Live INNER size (physical px) of the flyout — the autotest asserts the
+/// content area matches the layout geometry (outer_size would carry the DWM
+/// invisible borders).
+#[tauri::command]
+fn flyout_size(app: tauri::AppHandle) -> Option<(u32, u32)> {
+    let window = app.get_webview_window("flyout")?;
+    let size = window.inner_size().ok()?;
+    Some((size.width, size.height))
+}
+
+/// (badge calls, actual icon sets) — proves the only-on-change policy.
+#[tauri::command]
+fn tray_stats() -> (usize, usize) {
+    (
+        BADGE_CALLS.load(Ordering::SeqCst),
+        ICON_SETS.load(Ordering::SeqCst),
+    )
+}
+
+/// Cookie COUNTS (never values) visible to the gateway/console domains from
+/// the Qwen sign-in window — autotest measurement for the cross-domain
+/// suspicion behind the silent Qwen failure.
+#[tauri::command]
+fn qwen_cookie_counts(app: tauri::AppHandle) -> (usize, usize) {
+    let Some(webview) = app.get_webview_window("qwen-login") else {
+        return (0, 0);
+    };
+    let console = tauri::Url::parse(QWEN_CONSOLE_URL)
+        .ok()
+        .and_then(|url| webview.cookies_for_url(url).ok())
+        .map_or(0, |cookies| cookies.len());
+    let gateway = tauri::Url::parse(QWEN_GATEWAY_ORIGIN)
+        .ok()
+        .and_then(|url| webview.cookies_for_url(url).ok())
+        .map_or(0, |cookies| cookies.len());
+    (console, gateway)
 }
 
 /// Qwen embedded sign-in (WU-K): the token-plan gateway WAF blocks non-browser
@@ -223,6 +287,7 @@ fn main() {
             app.manage(TrayState {
                 tray: Mutex::new(tray),
                 pin: pin_item,
+                band: Mutex::new(String::from("__bundle")),
             });
 
             Ok(())
@@ -248,6 +313,10 @@ fn main() {
             set_tray_badge,
             reflow_flyout,
             is_demo,
+            is_autotest,
+            flyout_size,
+            tray_stats,
+            qwen_cookie_counts,
             open_qwen_login,
             qwen_gateway_cookies,
             prefs::prefs_read_all,

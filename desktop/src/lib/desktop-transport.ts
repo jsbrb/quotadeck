@@ -26,6 +26,15 @@ import type { Transport } from "@shared/network/transport";
 
 const GATEWAY_URL_SUFFIX = `${QWEN_TOKEN_PLAN_GATEWAY_HOST}${QWEN_GATEWAY_API_PATH}`;
 
+/**
+ * Gateway response probe (autotest measurement): the last gateway hop's
+ * STATUS and CONTENT-TYPE only — never bodies, never headers with session
+ * material. The Qwen diagnosis needs just one fact: JSON vs the WAF's HTML.
+ */
+export const gatewayProbe: { last: { status: number; contentType: string } | null } = {
+  last: null,
+};
+
 function isGatewayUrl(url: string): boolean {
   return url.includes(GATEWAY_URL_SUFFIX);
 }
@@ -55,11 +64,18 @@ export function createDesktopFetchImpl(getGatewayCookies: () => Promise<string |
         ...(cookies !== null ? { Cookie: cookies } : {}),
       };
     }
-    return pluginFetch(url, {
+    const response = await pluginFetch(url, {
       method: init.method as "GET" | "POST",
       headers,
       ...(init.body !== undefined ? { body: init.body } : {}),
-    }) as unknown as Promise<FetchResponseLike>;
+    });
+    if (isGatewayUrl(url)) {
+      gatewayProbe.last = {
+        status: response.status,
+        contentType: response.headers.get("content-type") ?? "?",
+      };
+    }
+    return response as unknown as FetchResponseLike;
   };
 }
 

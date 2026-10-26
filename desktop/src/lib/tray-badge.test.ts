@@ -3,64 +3,66 @@ import { describe, expect, it } from "vitest";
 import type { ProviderId } from "@shared/core/provider";
 import type { ProviderSnapshotEntry } from "@shared/storage/snapshot-store";
 
-import { resolveChosenBand } from "./tray-badge";
+import { resolveStripBadge } from "./tray-badge";
 
-function okUsage(usage: Record<string, unknown>): ProviderSnapshotEntry {
-  return {
-    status: "ok",
-    usage: { providerId: "zai", kind: "balance", fetchedAt: 0, ...usage },
-  } as ProviderSnapshotEntry;
+const displayName = (id: ProviderId) => id.toUpperCase();
+
+function ok(usage: Record<string, unknown>): ProviderSnapshotEntry {
+  return { status: "ok", usage } as unknown as ProviderSnapshotEntry;
 }
 
-const NAMES: Partial<Record<ProviderId, string>> = {
-  zai: "ZAI (Zhipu AI)",
-  qwen: "Qwen (Alibaba Cloud BSS)",
-};
-const displayName = (id: ProviderId) => NAMES[id] ?? id;
-
-describe("resolveChosenBand", () => {
-  it("maps the zai 5h percentage onto the threshold bands", () => {
-    const results = { zai: okUsage({ windows: { fiveHour: { percentage: 137 } } }) };
-    expect(resolveChosenBand(results, "zai", displayName)).toEqual({
-      band: "red",
-      tooltip: "QuotaDeck — ZAI (Zhipu AI) 137%",
-    });
-    const calm = { zai: okUsage({ windows: { fiveHour: { percentage: 30 } } }) };
-    expect(resolveChosenBand(calm, "zai", displayName).band).toBe("neutral");
-    const warm = { zai: okUsage({ windows: { fiveHour: { percentage: 62 } } }) };
-    expect(resolveChosenBand(warm, "zai", displayName).band).toBe("orange");
-    const hot = { zai: okUsage({ windows: { fiveHour: { percentage: 85 } } }) };
-    expect(resolveChosenBand(hot, "zai", displayName).band).toBe("deep");
+describe("resolveStripBadge (WU-O: urgent band + full tooltip)", () => {
+  it("bands off the MOST urgent provider and lists all figures", () => {
+    const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {
+      zai: ok({
+        providerId: "zai",
+        kind: "balance",
+        windows: { fiveHour: { percentage: 2 } },
+      }),
+      deepseek: ok({
+        providerId: "deepseek",
+        kind: "balance",
+        wallet: { percentage: 61 },
+      }),
+    };
+    const badge = resolveStripBadge(results, displayName);
+    expect(badge.band).toBe("orange");
+    expect(badge.tooltip).toBe("QuotaDeck — ZAI 2 % · DEEPSEEK 61 %");
   });
 
-  it("uses the qwen quota percentage when present", () => {
-    const results = {
-      zai: okUsage({ windows: { fiveHour: { percentage: 10 } } }),
-      qwen: {
-        status: "ok",
-        usage: { providerId: "qwen", kind: "balance", fetchedAt: 0, quota: { percentage: 62, fetchedAt: 0 } },
-      },
-    } as Partial<Record<ProviderId, ProviderSnapshotEntry>>;
-    const chosen = resolveChosenBand(results, "qwen", displayName);
-    expect(chosen).toEqual({
-      band: "orange",
-      tooltip: "QuotaDeck — Qwen (Alibaba Cloud BSS) 62%",
-    });
+  it("a ≥90 provider turns the band red regardless of order", () => {
+    const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {
+      zai: ok({ providerId: "zai", kind: "balance", windows: { fiveHour: { percentage: 95 } } }),
+      qwen: ok({ providerId: "qwen", kind: "balance", quota: { percentage: 10 } }),
+    };
+    expect(resolveStripBadge(results, displayName).band).toBe("red");
   });
 
-  it("renders neutral with an ERR tooltip for the chosen provider's error", () => {
-    const results = { zai: { status: "error", errorClass: "auth" } } as Partial<Record<ProviderId, ProviderSnapshotEntry>>;
-    expect(resolveChosenBand(results, "zai", displayName)).toEqual({
-      band: "neutral",
-      tooltip: "QuotaDeck — ERR",
-    });
+  it("qwen uses its token-plan quota (not the balance windows) for the band", () => {
+    const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {
+      qwen: ok({
+        providerId: "qwen",
+        kind: "balance",
+        windows: { fiveHour: { percentage: 99 } },
+        quota: { percentage: 3 },
+      }),
+    };
+    const badge = resolveStripBadge(results, displayName);
+    expect(badge.band).toBe("neutral");
+    expect(badge.tooltip).toContain("QWEN 3 %");
   });
 
-  it("renders plain neutral for an absent entry or an unshipped choice", () => {
-    expect(resolveChosenBand({}, "zai", displayName)).toEqual({ band: "neutral", tooltip: "QuotaDeck" });
-    expect(resolveChosenBand({ zai: okUsage({ windows: { fiveHour: { percentage: 95 } } }) }, "kimi", displayName)).toEqual({
-      band: "neutral",
-      tooltip: "QuotaDeck",
-    });
+  it("error entries ride the tooltip as ERR without banding", () => {
+    const results: Partial<Record<ProviderId, ProviderSnapshotEntry>> = {
+      zai: { status: "error", errorClass: "auth" },
+      deepseek: ok({ providerId: "deepseek", kind: "balance", wallet: { percentage: 82 } }),
+    };
+    const badge = resolveStripBadge(results, displayName);
+    expect(badge.band).toBe("deep");
+    expect(badge.tooltip).toContain("ZAI ERR");
+  });
+
+  it("an empty cycle renders the plain prefix on the neutral band", () => {
+    expect(resolveStripBadge({}, displayName)).toEqual({ band: "neutral", tooltip: "QuotaDeck" });
   });
 });
