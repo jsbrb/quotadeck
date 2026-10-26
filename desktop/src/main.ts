@@ -33,12 +33,18 @@ const keysView = document.getElementById("keys");
 
 const prefs = createPrefsArea();
 const secrets = createSecretsArea();
-// WU-K: gateway requests carry the session cookies of the embedded Qwen
-// console sign-in window (Rust reads them from that webview's jar — memory
-// only, never persisted, never logged).
-const transport = createDesktopTransport(async () =>
-  invoke<null | string>("qwen_gateway_cookies").catch(() => null),
-);
+// WU-P: the gateway hop runs INSIDE the hidden Qwen console webview (real
+// Chromium TLS + the console Origin — the shape the WAF accepts). Falls back
+// to the plain plugin-http hop while the agent warms up.
+const transport = createDesktopTransport(async ({ url, method, authorization, body }) => {
+  const result = await invoke<null | { s: number; b: string }>("qwen_gateway_fetch", {
+    url,
+    method,
+    authorization,
+    body: body ?? null,
+  }).catch(() => null);
+  return result === null ? null : { status: result.s, text: result.b };
+});
 const clock = new SystemClock();
 
 let mode: "bar" | "keys" = "bar";
@@ -78,6 +84,7 @@ function showBar(): void {
   mode = "bar";
   bar?.classList.remove("hidden");
   keysView?.classList.add("hidden");
+  renderBar();
   reflowBar();
 }
 
@@ -85,7 +92,20 @@ function showKeys(): void {
   mode = "keys";
   bar?.classList.add("hidden");
   keysView?.classList.remove("hidden");
-  // The KEYS window size is owned by the Rust tray-menu handler.
+  // The KEYS window GROWS with its content (S12: no scroll can hide the ✕):
+  // measure the laid-out grid and reflow, capped by the monitor work area.
+  void (async () => {
+    await sleep(30); // let the hidden->visible layout pass settle
+    const head = document.querySelector<HTMLElement>(".keys-head");
+    const grid = document.querySelector<HTMLElement>(".keys-grid");
+    const measured =
+      (head?.offsetHeight ?? 0) + (grid?.scrollHeight ?? 0) + 38;
+    const work = await invoke<[number, number]>("work_area_size").catch(() => null);
+    const cap = work === null ? 900 : work[1] - 80;
+    const width = work === null ? 680 : Math.min(680, work[0] - 40);
+    const height = Math.max(360, Math.min(measured, cap));
+    await invoke("reflow_flyout", { width, height }).catch(() => {});
+  })();
 }
 
 /**
@@ -105,16 +125,19 @@ async function storedProviders(): Promise<ProviderId[]> {
 }
 
 /**
- * Muted-segment hints (WU-K): a stored qwen without an entry AND without a
- * live sign-in window means the session was never started — tell the user
- * exactly that instead of the generic NO DATA.
+ * Muted-segment hints (WU-P): a stored qwen without an entry reports the
+ * gateway probe's verdict — WAF block, agent warm-up, or plain no-data.
  */
 async function buildHints(): Promise<Partial<Record<ProviderId, string>>> {
   const hints: Partial<Record<ProviderId, string>> = {};
   if (lastStored.includes("qwen") && lastSnapshot.results.qwen === undefined) {
-    const cookies = await invoke<null | string>("qwen_gateway_cookies").catch(() => null);
-    if (cookies === null) {
-      hints.qwen = "SIGN IN VIA TRAY MENU";
+    const probe = gatewayProbe.last;
+    if (probe === null) {
+      hints.qwen = "CONNECTING TO GATEWAY…";
+    } else if (probe.contentType.startsWith("text/html")) {
+      hints.qwen = "GATEWAY WAF BLOCK — RETRYING";
+    } else {
+      hints.qwen = "NO DATA THIS TICK";
     }
   }
   return hints;
@@ -129,8 +152,11 @@ async function tick(): Promise<void> {
     lastVisibleCount = visibleCount(lastSnapshot, lastStored);
     lastHints = await buildHints();
     await prefs.remove(LAST_TICK_ERROR_KEY).catch(() => {});
+    // Render ALWAYS (even while Keys is open): a key saved inside Keys must
+    // be on the strip the moment the user returns — the reported ghost-card
+    // bug was a stale innerHTML from a keys-mode tick.
+    renderBar();
     if (mode === "bar") {
-      renderBar();
       reflowBar();
     }
     // The tray icon IS the desktop badge (WU-O): band from the most urgent
@@ -288,6 +314,26 @@ async function runAutotest(): Promise<void> {
   await sleep(700);
   await snap("keysFlipThenClose");
 
+  // Ghost-card regression (user report): a key saved while Keys is open must
+  // be on the strip the moment it returns — no reorder nudge required.
+  showKeys();
+  await tick();
+  document.getElementById("keys-close")?.click();
+  await sleep(600);
+  const renderedSegments = bar?.querySelectorAll(".seg:not(.seg-refresh)").length ?? -1;
+  report.ghostCard = { stored: lastStored.length, rendered: renderedSegments };
+
+  // Keys growth (user report): with every settings section the window grows
+  // so the head — and its ✕ — can never scroll away.
+  showKeys();
+  await sleep(600);
+  report.keysScroll = {
+    scroll: keysView?.scrollHeight ?? null,
+    client: keysView?.clientHeight ?? null,
+  };
+  showBar();
+  await sleep(400);
+
   // Tray-icon churn: two consecutive badge writes with the same band must
   // swap the icon at most once (the suspected cause of the vanished icon).
   const statsBefore = await invoke<[number, number]>("tray_stats").catch(() => null);
@@ -298,7 +344,6 @@ async function runAutotest(): Promise<void> {
 
   if (lastStored.includes("qwen")) {
     report.qwen = {
-      cookieCounts: await invoke<[number, number]>("qwen_cookie_counts").catch(() => null),
       gatewayProbe: gatewayProbe.last,
       entry: lastSnapshot.results.qwen ?? null,
     };
@@ -311,6 +356,14 @@ async function runAutotest(): Promise<void> {
     flipBackWindowMatches: sizeMatches("flipBackHorizontal"),
     keysFlipDOM: computedOf("keysFlipThenClose") === "column",
     keysFlipWindowMatches: sizeMatches("keysFlipThenClose"),
+    ghostCardFixed:
+      (report.ghostCard as { stored: number; rendered: number }).stored > 0 &&
+      (report.ghostCard as { stored: number; rendered: number }).rendered ===
+        (report.ghostCard as { stored: number; rendered: number }).stored,
+    keysNoScroll:
+      (report.keysScroll as { scroll: number; client: number } | undefined) !== undefined &&
+      (report.keysScroll as { scroll: number; client: number }).scroll <=
+        (report.keysScroll as { scroll: number; client: number }).client + 2,
     refreshReported: statsBefore !== null && statsAfter !== null,
     noIconChurn: statsBefore !== null && statsAfter !== null && statsBefore[1] === statsAfter[1],
   };

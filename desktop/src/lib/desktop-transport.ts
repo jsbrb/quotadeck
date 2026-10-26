@@ -16,10 +16,7 @@
 // Bearer still rides exclusively through the client's session-marker seam.
 
 import { fetch as pluginFetch } from "@tauri-apps/plugin-http";
-import {
-  QWEN_GATEWAY_API_PATH,
-  QWEN_GATEWAY_TRUSTED_ORIGIN,
-} from "@shared/dnr/gateway-origin-rule";
+import { QWEN_GATEWAY_API_PATH } from "@shared/dnr/gateway-origin-rule";
 import { QWEN_TOKEN_PLAN_GATEWAY_HOST } from "@shared/providers/qwen-token-plan";
 import { FetchTransport, type FetchResponseLike } from "@shared/network/fetch-transport";
 import type { Transport } from "@shared/network/transport";
@@ -39,34 +36,68 @@ function isGatewayUrl(url: string): boolean {
   return url.includes(GATEWAY_URL_SUFFIX);
 }
 
+/** Minimal response shape both hop implementations produce. */
+interface HopResponse {
+  readonly status: number;
+  readonly text: string;
+}
+
+function responseLike(hop: HopResponse): FetchResponseLike {
+  const text = hop.text;
+  return {
+    status: hop.status,
+    ok: hop.status >= 200 && hop.status < 300,
+    json: async () => JSON.parse(text),
+    text: async () => text,
+  };
+}
+
 /**
- * FetchImpl over plugin-http with the gateway browser-shape rewrite:
- * public console Origin (desktop twin of the DNR rule), webview UA/Accept
- * headers, and — WU-K — the session cookies read from the embedded Qwen
- * console sign-in window. The gateway host's WAF block page disappears only
- * with the real session cookies; the cookie string never leaves this hop
- * (no persistence, no logging).
+ * WU-P browser-hop: the gateway request executes INSIDE the hidden Qwen
+ * console webview (real Chromium TLS/h2 + the console page Origin — the exact
+ * shape the extension's DNR rule produced and the WAF accepts). The Bearer
+ * rides only as a fetch argument. Returns null when the agent is warming or
+ * unavailable — the caller falls back to the plain plugin-http hop.
  */
-export function createDesktopFetchImpl(getGatewayCookies: () => Promise<string | null>) {
+export interface GatewayViaBrowser {
+  (request: {
+    url: string;
+    method: string;
+    authorization: string;
+    body?: string;
+  }): Promise<HopResponse | null>;
+}
+
+export function createDesktopFetchImpl(
+  gatewayViaBrowser: GatewayViaBrowser,
+) {
   return async (
     url: string,
     init: { method: string; headers: Readonly<Record<string, string>>; body?: string },
   ): Promise<FetchResponseLike> => {
-    let headers = init.headers as Record<string, string>;
     if (isGatewayUrl(url)) {
-      const cookies = await getGatewayCookies();
-      headers = {
-        ...headers,
-        Origin: QWEN_GATEWAY_TRUSTED_ORIGIN,
-        "User-Agent": navigator.userAgent,
-        Accept: "*/*",
-        "Accept-Language": navigator.language || "en-US,en",
-        ...(cookies !== null ? { Cookie: cookies } : {}),
-      };
+      try {
+        const hop = await gatewayViaBrowser({
+          url,
+          method: init.method,
+          authorization: init.headers.Authorization ?? "",
+          body: init.body,
+        });
+        if (hop !== null) {
+          const response = responseLike(hop);
+          gatewayProbe.last = {
+            status: response.status,
+            contentType: "application/json (browser-hop)",
+          };
+          return response;
+        }
+      } catch {
+        // fall through to the plain hop
+      }
     }
     const response = await pluginFetch(url, {
       method: init.method as "GET" | "POST",
-      headers,
+      headers: init.headers,
       ...(init.body !== undefined ? { body: init.body } : {}),
     });
     if (isGatewayUrl(url)) {
@@ -81,7 +112,7 @@ export function createDesktopFetchImpl(getGatewayCookies: () => Promise<string |
 
 /** The production desktop Transport: FetchTransport over plugin-http. */
 export function createDesktopTransport(
-  getGatewayCookies: () => Promise<string | null>,
+  gatewayViaBrowser: GatewayViaBrowser,
 ): Transport {
-  return new FetchTransport(createDesktopFetchImpl(getGatewayCookies));
+  return new FetchTransport(createDesktopFetchImpl(gatewayViaBrowser));
 }

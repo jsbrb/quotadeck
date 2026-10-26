@@ -126,57 +126,143 @@ fn qwen_cookie_counts(app: tauri::AppHandle) -> (usize, usize) {
     (console, gateway)
 }
 
-/// Qwen embedded sign-in (WU-K): the token-plan gateway WAF blocks non-browser
-/// clients, while the Chrome extension rides the real browser stack WITH the
-/// user's console session cookies. The desktop counterpart: open the real
-/// Alibaba console in a normal webview window, let the user sign in there,
-/// and read that window's cookie jar (HTTP-only included) for the gateway
-/// domain on every request. Cookies live ONLY in the webview's store — never
-/// persisted to prefs, never returned to the strip, never logged.
+/// Qwen browser-hop (WU-P): the token-plan gateway WAF fingerprints the
+/// client and blocks reqwest with a 200 HTML block page, while the Chrome
+/// extension works because its requests ARE browser requests. The desktop
+/// parity fix: a HIDDEN webview loaded on the console origin; the gateway
+/// hop is executed INSIDE that real Chromium (fetch with the page's own
+/// Origin — the same shape the extension's DNR rule produced) and the JSON
+/// response travels back through the page title (evaluate_script has no
+/// return channel to Rust). `--disable-web-security` lets the page read the
+/// cross-origin gateway response; this webview only ever loads the
+/// ALIBABA console URL, and the Bearer rides only as a fetch argument.
 const QWEN_CONSOLE_URL: &str = "https://modelstudio.console.alibabacloud.com";
 const QWEN_GATEWAY_ORIGIN: &str = "https://token-plan.ap-southeast-1.maas.aliyuncs.com";
+const QWEN_AGENT_LABEL: &str = "qwen-agent";
 
-fn spawn_qwen_login(app: &tauri::AppHandle) {
-    if let Some(existing) = app.get_webview_window("qwen-login") {
-        let _ = existing.show();
-        let _ = existing.set_focus();
-        return;
+fn ensure_qwen_agent(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
+    if let Some(existing) = app.get_webview_window(QWEN_AGENT_LABEL) {
+        return Some(existing);
     }
-    let Ok(url) = QWEN_CONSOLE_URL.parse() else {
-        return;
-    };
-    let _window = tauri::WebviewWindowBuilder::new(
-        app,
-        "qwen-login",
-        tauri::WebviewUrl::External(url),
-    )
-    .title("Qwen Console — sign in")
-    .inner_size(980.0, 760.0)
-    .build();
+    let url: tauri::Url = QWEN_CONSOLE_URL.parse().ok()?;
+    tauri::WebviewWindowBuilder::new(app, QWEN_AGENT_LABEL, tauri::WebviewUrl::External(url))
+        .title("QuotaDeck Qwen agent")
+        .inner_size(900.0, 700.0)
+        .visible(false)
+        // Replaces wry's defaults, so keep its disable-features plus the
+        // cross-origin read permission for THIS console-only webview.
+        .additional_browser_args(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-web-security",
+        )
+        .build()
+        .ok()
 }
 
+/// Shows the agent window (tray "Qwen console…" — manual inspection/login).
 #[tauri::command]
 fn open_qwen_login(app: tauri::AppHandle) {
-    spawn_qwen_login(&app);
+    match ensure_qwen_agent(&app) {
+        Some(window) => {
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        None => {}
+    }
 }
 
-/// The gateway Cookie header assembled from the login window's jar, or None
-/// when no sign-in window exists (user must sign in via the tray menu).
-#[tauri::command]
-fn qwen_gateway_cookies(app: tauri::AppHandle) -> Option<String> {
-    let webview = app.get_webview_window("qwen-login")?;
-    let url = tauri::Url::parse(QWEN_GATEWAY_ORIGIN).ok()?;
-    let cookies = webview.cookies_for_url(url).ok()?;
-    let header = cookies
-        .iter()
-        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
-        .collect::<Vec<_>>()
-        .join("; ");
-    if header.is_empty() {
-        None
-    } else {
-        Some(header)
+fn qwen_agent_eval(app: &tauri::AppHandle, script: &str) -> Option<String> {
+    let webview = ensure_qwen_agent(app)?;
+    webview.eval(script).ok()?;
+    // The script answers through document.title ("QDR:" prefix); poll for it.
+    for _ in 0..48 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Ok(title) = webview.title() {
+            if let Some(rest) = title.strip_prefix("QDR:") {
+                let _ = webview.eval("document.title='QuotaDeck Qwen agent';");
+                return Some(rest.to_string());
+            }
+        }
     }
+    None
+}
+
+fn qwen_agent_origin(app: &tauri::AppHandle) -> Option<String> {
+    let webview = ensure_qwen_agent(app)?;
+    let _ = webview.eval("document.title='QDR:'+JSON.stringify(String(location.origin));");
+    for _ in 0..48 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        if let Ok(title) = webview.title() {
+            if let Some(rest) = title.strip_prefix("QDR:") {
+                let _ = webview.eval("document.title='QuotaDeck Qwen agent';");
+                return Some(rest.trim_matches('"').to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Runs the gateway fetch INSIDE the agent webview (real Chromium TLS + the
+/// console Origin). Returns (status, body-text). Warm-up: while the console
+/// page has not reached the console origin yet, answers None and the caller
+/// falls back to the plain transport for this tick.
+#[tauri::command]
+fn qwen_gateway_fetch(
+    app: tauri::AppHandle,
+    url: String,
+    method: String,
+    authorization: Option<String>,
+    body: Option<String>,
+) -> Option<(u16, String)> {
+    if !url.starts_with(QWEN_GATEWAY_ORIGIN) {
+        return None; // hard allowlist: this hop only ever talks to the gateway
+    }
+    // Wait for the agent page to sit on the console origin (first load can
+    // take a while; the caller falls back to the plain hop meanwhile).
+    for _ in 0..4 {
+        if let Some(origin) = qwen_agent_origin(&app) {
+            if origin == QWEN_CONSOLE_URL {
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    let auth_json = serde_json::to_string(&authorization).ok()?;
+    let body_json = serde_json::to_string(&body).ok()?;
+    let script = format!(
+        r#"(async () => {{
+            try {{
+                const r = await fetch({url}, {{
+                    method: {method},
+                    headers: {{ "Authorization": {auth}, "Content-Type": "application/json" }},
+                    body: {body}
+                }});
+                const t = await r.text();
+                document.title = "QDR:" + JSON.stringify({{ s: r.status, b: t.slice(0, 60000) }});
+            }} catch (e) {{
+                document.title = "QDR:" + JSON.stringify({{ s: 0, b: String(e) }});
+            }}
+        }})();"#,
+        url = serde_json::to_string(&url).ok()?,
+        method = serde_json::to_string(&method).ok()?,
+        auth = auth_json,
+        body = body_json,
+    );
+    let answer = qwen_agent_eval(&app, &script)?;
+    let value: serde_json::Value = serde_json::from_str(&answer).ok()?;
+    Some((
+        value.get("s")?.as_u64()? as u16,
+        value.get("b")?.as_str()?.to_string(),
+    ))
+}
+
+/// Monitor work area (physical px) — the KEYS window grows to its content
+/// capped by this.
+#[tauri::command]
+fn work_area_size(app: tauri::AppHandle) -> Option<(u32, u32)> {
+    let window = app.get_webview_window("flyout")?;
+    let monitor = window.current_monitor().ok()??;
+    let area = monitor.work_area();
+    Some((area.size.width, area.size.height))
 }
 
 /// Resizes the flyout (logical px from the frontend's deterministic strip
@@ -226,7 +312,7 @@ fn main() {
 
             let keys_item = MenuItem::with_id(app, "keys", "Keys…", true, None::<&str>)?;
             let qwen_login_item =
-                MenuItem::with_id(app, "qwen_login", "Qwen sign-in…", true, None::<&str>)?;
+                MenuItem::with_id(app, "qwen_login", "Qwen console…", true, None::<&str>)?;
             let pin_item =
                 CheckMenuItem::with_id(app, "pin", "Always on top", true, false, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit QuotaDeck", true, None::<&str>)?;
@@ -248,7 +334,7 @@ fn main() {
                             let _ = app.emit_to("flyout", "quotadeck://show-keys", ());
                         }
                     }
-                    "qwen_login" => spawn_qwen_login(app),
+                    "qwen_login" => open_qwen_login(app.clone()),
                     "pin" => {
                         let pinned = !PINNED.load(Ordering::SeqCst);
                         PINNED.store(pinned, Ordering::SeqCst);
@@ -293,10 +379,9 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // The sign-in window keeps its cookie jar alive: closing it only
-            // hides it — destroyed windows lose the session cookies and the
-            // gateway falls back to the WAF block page.
-            if window.label() == "qwen-login" {
+            // The Qwen agent keeps its browser context alive: closing it only
+            // hides it — a destroyed webview loses the console session.
+            if window.label() == QWEN_AGENT_LABEL {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
@@ -317,8 +402,9 @@ fn main() {
             flyout_size,
             tray_stats,
             qwen_cookie_counts,
+            qwen_gateway_fetch,
+            work_area_size,
             open_qwen_login,
-            qwen_gateway_cookies,
             prefs::prefs_read_all,
             prefs::prefs_write_all,
             secrets::secrets_read_all,
