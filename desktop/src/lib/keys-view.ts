@@ -72,6 +72,11 @@ export function setupKeysView(deps: KeysViewDeps): void {
   const qwenPlanSave = requireEl("qwen-plan-save");
   const qwenPlanRevoke = requireEl("qwen-plan-revoke");
 
+  const deepseekKey = requireEl<HTMLInputElement>("deepseek-key");
+  const deepseekMasked = requireEl("deepseek-masked");
+  const deepseekSave = requireEl("deepseek-save");
+  const deepseekRevoke = requireEl("deepseek-revoke");
+
   async function refreshMasks(): Promise<void> {
     const zai = await keys.readMaskedCredential("zai", "raw");
     zaiMasked.textContent =
@@ -86,6 +91,10 @@ export function setupKeysView(deps: KeysViewDeps): void {
     const plan = await keys.readMaskedCredential("qwen-plan", "qwen-plan");
     qwenPlanMasked.textContent =
       plan === undefined || plan.type === "ak-sk" ? "NO KEY" : plan.maskedToken;
+
+    const deepseek = await keys.readMaskedCredential("deepseek", "bearer");
+    deepseekMasked.textContent =
+      deepseek === undefined || deepseek.type === "ak-sk" ? "NO KEY" : deepseek.maskedToken;
   }
 
   zaiSave.addEventListener("click", () => {
@@ -159,6 +168,30 @@ export function setupKeysView(deps: KeysViewDeps): void {
       .then(afterKeyChange)
       .catch((error: unknown) => {
         setStatus(qwenPlanMasked, error instanceof Error ? error.message : String(error), true);
+      });
+  });
+
+  deepseekSave.addEventListener("click", () => {
+    const token = deepseekKey.value;
+    void keys
+      .saveCredential("deepseek", { type: "bearer", token })
+      .then(() => {
+        deepseekKey.value = "";
+        setStatus(deepseekMasked, "", false);
+        return refreshMasks().then(afterKeyChange);
+      })
+      .catch((error: unknown) => {
+        setStatus(deepseekMasked, error instanceof Error ? error.message : String(error), true);
+      });
+  });
+
+  deepseekRevoke.addEventListener("click", () => {
+    void keys
+      .revokeCredential("deepseek")
+      .then(refreshMasks)
+      .then(afterKeyChange)
+      .catch((error: unknown) => {
+        setStatus(deepseekMasked, error instanceof Error ? error.message : String(error), true);
       });
   });
 

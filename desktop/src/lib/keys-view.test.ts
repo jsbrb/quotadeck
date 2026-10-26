@@ -25,6 +25,10 @@ const FIXTURE = `
     <p id="qwen-plan-masked"></p>
     <button id="qwen-plan-save"></button>
     <button id="qwen-plan-revoke"></button>
+    <input id="deepseek-key" />
+    <p id="deepseek-masked"></p>
+    <button id="deepseek-save"></button>
+    <button id="deepseek-revoke"></button>
     <div id="strip-order"></div>
     <select id="strip-orientation"><option value="horizontal"></option><option value="vertical"></option></select>
     <select id="strip-size"><option value="normal"></option><option value="xl"></option></select>
@@ -108,6 +112,19 @@ describe("keys view", () => {
     const stored = await prefs.get("qd:pref:zai-platform");
     expect(stored).toEqual({ "qd:pref:zai-platform": "zhipu" });
     expect(onKeyChange).toHaveBeenCalled();
+  });
+
+  it("saves the DeepSeek bearer key with masked display and DOM sweep", async () => {
+    const input = document.getElementById("deepseek-key") as HTMLInputElement;
+    input.value = "sk-deepseek-secret-9999";
+    (document.getElementById("deepseek-save") as HTMLButtonElement).click();
+    await tickMacros();
+
+    const stored = await secrets.get("qd:key:deepseek");
+    expect(stored).toEqual({ "qd:key:deepseek": "sk-deepseek-secret-9999" });
+    expect(input.value).toBe("");
+    expect(document.getElementById("deepseek-masked")?.textContent).toBe("••••9999");
+    expect(document.body.innerHTML).not.toContain("sk-deepseek-secret-9999");
   });
 
   it("renders the strip order list and persists a move", async () => {

@@ -17,7 +17,8 @@
         { "url": "https://business.ap-southeast-1.aliyuncs.com/*" },
         { "url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/*" },
         { "url": "https://bailian-singapore-cs.alibabacloud.com/*" },
-        { "url": "https://modelstudio.ap-southeast-1.aliyuncs.com/*" }
+        { "url": "https://modelstudio.ap-southeast-1.aliyuncs.com/*" },
+        { "url": "https://api.deepseek.com/*" }
       ]
     }
   ]
