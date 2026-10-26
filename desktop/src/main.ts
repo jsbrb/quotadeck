@@ -54,6 +54,15 @@ let lastSnapshot: CycleSnapshot = { results: {} };
 let lastStored: ProviderId[] = [];
 let lastVisibleCount = 0;
 let lastHints: Partial<Record<ProviderId, string>> = {};
+// Post-incident quarantine: qwen hops back off exponentially after gateway
+// blocks so the desktop can NEVER degrade the Chrome extension through
+// shared-account server-side rate control (the reported outage).
+let qwenBackoffUntil = 0;
+let qwenFailures = 0;
+const QWEN_BACKOFF_BASE_MS = 15 * 60_000;
+const QWEN_BACKOFF_MAX_MS = 60 * 60_000;
+let qwenQuarantine = false; // AUTOTEST only: zero qwen dispatches
+let lastRefreshAt = 0;
 
 async function refreshLayout(): Promise<void> {
   layout = await readStripLayout(prefs);
@@ -131,13 +140,20 @@ async function storedProviders(): Promise<ProviderId[]> {
 async function buildHints(): Promise<Partial<Record<ProviderId, string>>> {
   const hints: Partial<Record<ProviderId, string>> = {};
   if (lastStored.includes("qwen") && lastSnapshot.results.qwen === undefined) {
-    const probe = gatewayProbe.last;
-    if (probe === null) {
-      hints.qwen = "CONNECTING TO GATEWAY…";
-    } else if (probe.contentType.startsWith("text/html")) {
-      hints.qwen = "GATEWAY WAF BLOCK — RETRYING";
+    if (qwenQuarantine) {
+      hints.qwen = "QWEN PAUSED (AUTOTEST)";
+    } else if (clock.now() < qwenBackoffUntil) {
+      const minutes = Math.ceil((qwenBackoffUntil - clock.now()) / 60_000);
+      hints.qwen = `QUOTA PAUSED — RETRY IN ${minutes}m`;
     } else {
-      hints.qwen = "NO DATA THIS TICK";
+      const probe = gatewayProbe.last;
+      if (probe === null) {
+        hints.qwen = "CONNECTING TO GATEWAY…";
+      } else if (probe.contentType.startsWith("text/html")) {
+        hints.qwen = "GATEWAY WAF BLOCK — RETRYING";
+      } else {
+        hints.qwen = "NO DATA THIS TICK";
+      }
     }
   }
   return hints;
@@ -145,13 +161,35 @@ async function buildHints(): Promise<Partial<Record<ProviderId, string>>> {
 
 async function tick(): Promise<void> {
   try {
-    const outcome = await runDesktopRefreshTick({ prefs, secrets, transport, clock });
+    const outcome = await runDesktopRefreshTick({
+      prefs,
+      secrets,
+      transport,
+      clock,
+      qwenDisabled: qwenQuarantine || clock.now() < qwenBackoffUntil,
+    });
     await refreshLayout();
     lastSnapshot = outcome.snapshot;
     lastStored = await storedProviders();
     lastVisibleCount = visibleCount(lastSnapshot, lastStored);
     lastHints = await buildHints();
     await prefs.remove(LAST_TICK_ERROR_KEY).catch(() => {});
+    // Post-incident backoff (WU-P): qwen gateway WAF blocks or auth/server
+    // errors escalate the pause 15 -> 30 -> 60 min (cap); a successful qwen
+    // cycle resets it. The Chrome extension shares this account — the
+    // desktop never burst-probes it again.
+    const qwenStoredNow = lastStored.includes("qwen");
+    const qwenEntry = outcome.snapshot.results.qwen;
+    const probeSaysBlocked = gatewayProbe.last?.contentType.startsWith("text/html") === true;
+    if (qwenEntry?.status === "ok") {
+      qwenFailures = 0;
+      qwenBackoffUntil = 0;
+    } else if (qwenEntry?.status === "error" || (qwenStoredNow && probeSaysBlocked)) {
+      qwenFailures += 1;
+      const pause = Math.min(QWEN_BACKOFF_BASE_MS * 2 ** (qwenFailures - 1), QWEN_BACKOFF_MAX_MS);
+      qwenBackoffUntil = clock.now() + pause;
+      console.error(`[quotadeck-desktop] qwen paused for ${pause / 60_000} min (failure ${qwenFailures})`);
+    }
     // Render ALWAYS (even while Keys is open): a key saved inside Keys must
     // be on the strip the moment the user returns — the reported ghost-card
     // bug was a stale innerHTML from a keys-mode tick.
@@ -184,6 +222,12 @@ bar?.addEventListener("click", (event) => {
   }
   const button = target.closest<HTMLButtonElement>("#refresh-btn");
   if (button !== null && !demoMode && !button.disabled) {
+    // Server-friendly cooldown (post-incident rule): no manual bursts —
+    // refresh clicks stay at least 10s apart, matching the extension cadence.
+    if (Date.now() - lastRefreshAt < 10_000) {
+      return;
+    }
+    lastRefreshAt = Date.now();
     button.disabled = true;
     button.textContent = "…";
     void tick().finally(() => {
@@ -231,6 +275,9 @@ function sleep(ms: number): Promise<void> {
  * verdicts for scripts/autotest-desktop.ps1. No human repetition required.
  */
 async function runAutotest(): Promise<void> {
+  // Post-incident quarantine: the autotest NEVER dispatches qwen hops with
+  // production credentials — the Chrome extension shares this account.
+  qwenQuarantine = true;
   const report: Record<string, unknown> = {};
   /**
    * Window size AFTER the OS settles: reflow_flyout is fire-and-forget, so

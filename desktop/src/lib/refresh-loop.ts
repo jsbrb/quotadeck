@@ -74,6 +74,13 @@ export interface DesktopTickDeps {
   /** Override for tests; production builds the steps over the same client. */
   readonly planStep?: QwenPlanStep;
   readonly quotaStep?: QwenQuotaStep;
+  /**
+   * Quarantine/backoff (post-incident rule): when true, the qwen plan probe
+   * and token-plan quota steps are SKIPPED entirely — zero dispatches to
+   * qwen hosts. The desktop must never again risk degrading the Chrome
+   * extension through shared-account server-side rate control.
+   */
+  readonly qwenDisabled?: boolean;
 }
 
 export interface DesktopTickOutcome {
@@ -128,6 +135,19 @@ export async function runDesktopRefreshTick(deps: DesktopTickDeps): Promise<Desk
       results[providerId] = { status: "error", errorClass: classifyRefreshError(error) };
     },
   });
+
+  // Quarantine (post-incident rule): with qwenDisabled, NEITHER qwen step
+  // dispatches anything — the zai/deepseek registry legs already ran; the
+  // cycle is persisted and returned so the strip stays honest.
+  if (deps.qwenDisabled === true) {
+    const store = new SnapshotStore(prefs);
+    await store.write({ results });
+    const snapshot = await store.read();
+    return {
+      snapshot: snapshot ?? { results },
+      badgeProvider: badgeProvider,
+    };
+  }
 
   // Step failures degrade to a qwen error entry (absent arm only — a success
   // already recorded by refreshAll keeps winning), NEVER a whole-tick failure.

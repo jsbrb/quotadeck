@@ -135,4 +135,26 @@ describe("runDesktopRefreshTick", () => {
       expect(entry.errorClass.length).toBeGreaterThan(0);
     }
   });
+
+  it("quarantine (qwenDisabled) skips both qwen steps entirely", async () => {
+    // Post-incident rule: with qwenDisabled, no qwen dispatch happens at all
+    // (plan probe + token-plan quota are the only qwen paths on this base).
+    const prefs = fakeArea();
+    const secrets = fakeArea();
+    const transport = fakeTransport();
+
+    const outcome = await runDesktopRefreshTick({
+      prefs,
+      secrets,
+      transport,
+      clock: fakeClock,
+      registry: registryOf([zaiProvider]),
+      qwenDisabled: true,
+    });
+
+    expect(transport.calls).toHaveLength(0);
+    expect(outcome.snapshot.results.qwen).toBeUndefined();
+    const persisted = await snapshotOf(prefs);
+    expect(persisted?.results.qwen).toBeUndefined();
+  });
 });
