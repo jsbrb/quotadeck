@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QuotaDeck</title>
+    <style>
+      /* Second-taskbar strip (WU-L): dark, no window chrome, EQUAL fixed-size
+         segments (T16) driven by CSS vars — JS reflow math mirrors SEG_SIZE.
+         Orientation and size are user settings (T19/T20). */
+      :root {
+        --bar-bg: #1f1f1f;
+        --bar-sep: #383838;
+        --bar-text: #eaeaea;
+        --bar-muted: #9aa0a6;
+        --warn: #ef4444;
+        --paper: #f5f1e8;
+        --ink: #0f172a;
+        --slate: #e2e8f0;
+        --shadow-offset: 4px;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: var(--bar-bg);
+        color: var(--bar-text);
+        font-family: "JetBrains Mono", ui-monospace, monospace;
+        user-select: none;
+        overflow: hidden;
+      }
+      #bar {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        align-items: stretch;
+        height: 100%;
+        --seg-w: 160px;
+        --seg-h: 48px;
+        --f-name: 12px;
+        --f-pct: 14px;
+        --f-sub: 10px;
+      }
+      #bar.size-xl {
+        --seg-w: 210px;
+        --seg-h: 68px;
+        --f-name: 15px;
+        --f-pct: 18px;
+        --f-sub: 13px;
+      }
+      #bar.vertical {
+        flex-direction: column;
+        align-items: flex-start;
+        height: auto;
+        --seg-w: 140px;
+      }
+      #bar.vertical.size-xl {
+        --seg-w: 190px;
+      }
+      .seg {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1px;
+        padding: 0 10px;
+        flex: 0 0 var(--seg-w);
+        width: var(--seg-w);
+        height: 100%;
+        border-left: 1px solid var(--bar-sep);
+        overflow: hidden;
+        line-height: 1.1;
+      }
+      #bar.vertical .seg {
+        flex: 0 0 var(--seg-h);
+        width: var(--seg-w);
+        height: var(--seg-h);
+        border-left: none;
+        border-top: 1px solid var(--bar-sep);
+      }
+      .seg:first-child {
+        border: none;
+      }
+      .seg-top {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        min-width: 0;
+      }
+      .seg-name {
+        font-size: var(--f-name);
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .seg-pct {
+        font-size: var(--f-pct);
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .seg-reset {
+        font-size: var(--f-sub);
+        color: var(--bar-muted);
+        letter-spacing: 0.06em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .seg-err {
+        font-size: var(--f-sub);
+        color: var(--warn);
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .seg-refresh {
+        flex: 0 0 44px;
+        width: 44px;
+        align-items: center;
+        padding: 0 6px;
+      }
+      #bar.vertical .seg-refresh {
+        flex: 0 0 30px;
+        width: var(--seg-w);
+        height: 30px;
+        align-items: flex-start;
+      }
+      #bar.vertical .seg-refresh #refresh-btn {
+        font-size: var(--f-sub);
+      }
+      #refresh-btn {
+        background: none;
+        border: none;
+        color: var(--bar-muted);
+        font: inherit;
+        font-size: var(--f-pct);
+        cursor: pointer;
+        padding: 0;
+        line-height: 1;
+      }
+      #refresh-btn:hover {
+        color: var(--bar-text);
+      }
+      #refresh-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      /* KEYS mode: same dark canvas, light instrument panels. */
+      #keys {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px 14px 14px;
+        height: 100%;
+        overflow-y: auto;
+      }
+      .keys-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: var(--bar-bg);
+        padding-bottom: 4px;
+      }
+      .keys-head h2 {
+        margin: 0;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        color: var(--bar-text);
+      }
+      #keys-close {
+        border: 1px solid var(--bar-text);
+        background: none;
+        color: var(--bar-text);
+        font: inherit;
+        font-size: 11px;
+        width: 24px;
+        height: 24px;
+        cursor: pointer;
+      }
+      #keys-close:hover {
+        background: var(--bar-sep);
+      }
+      .keys-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 14px;
+        align-items: start;
+      }
+      #keys.hidden,
+      #bar.hidden {
+        display: none;
+      }
+      .order-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 10px;
+      }
+      .order-row {
+        display: flex;
+        align-items: center;
+        border: 2px solid var(--ink);
+        background: #ffffff;
+        padding: 2px 6px;
+      }
+      .order-name {
+        flex: 1;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .order-row button {
+        border: 1px solid var(--ink);
+        background: var(--slate);
+        color: var(--ink);
+        font: inherit;
+        font-size: 9px;
+        width: 22px;
+        cursor: pointer;
+      }
+      .card {
+        border: 2px solid var(--ink);
+        background: var(--paper);
+        color: var(--ink);
+        box-shadow: var(--shadow-offset) var(--shadow-offset) 0 #000000;
+        padding: 10px 12px;
+      }
+      .provider-name {
+        margin: 0 0 8px;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .field {
+        display: block;
+        margin-bottom: 8px;
+      }
+      .field span {
+        display: block;
+        font-size: 9px;
+        letter-spacing: 0.08em;
+        margin-bottom: 2px;
+      }
+      .field input,
+      .field select {
+        width: 100%;
+        border: 2px solid var(--ink);
+        background: #ffffff;
+        color: var(--ink);
+        font: inherit;
+        font-size: 11px;
+        padding: 4px 6px;
+      }
+      .actions {
+        display: flex;
+        gap: 8px;
+        margin: 8px 0;
+      }
+      .actions button {
+        flex: 1;
+        border: 2px solid var(--ink);
+        background: var(--slate);
+        color: var(--ink);
+        font: inherit;
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        padding: 4px 0;
+        cursor: pointer;
+        box-shadow: 2px 2px 0 var(--ink);
+      }
+      .actions button:active {
+        transform: translate(2px, 2px);
+        box-shadow: none;
+      }
+      .row {
+        font-size: 10px;
+        letter-spacing: 0.06em;
+        min-height: 12px;
+        margin: 4px 0 0;
+      }
+      .row.error {
+        color: #dc2626;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar" class="hidden"></div>
+    <div id="keys" class="hidden">
+      <div class="keys-head">
+        <h2>QUOTADECK — SETTINGS</h2>
+        <button id="keys-close" type="button" aria-label="Close settings and show the strip">✕</button>
+      </div>
+      <div class="keys-grid">
+        <section class="card">
+          <h2 class="provider-name">ZAI (Zhipu AI)</h2>
+        <label class="field">
+          <span>PLATFORM</span>
+          <select id="zai-platform">
+            <option value="zai">Z.AI (api.z.ai)</option>
+            <option value="zhipu">ZHIPU (open.bigmodel.cn)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>API TOKEN</span>
+          <input id="zai-key" type="password" autocomplete="off" placeholder="Paste the monitor token" />
+        </label>
+        <p id="zai-masked" class="row"></p>
+        <div class="actions">
+          <button id="zai-save" type="button">SAVE</button>
+          <button id="zai-revoke" type="button">REVOKE</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="provider-name">QWEN (Alibaba Cloud)</h2>
+        <label class="field">
+          <span>BSS SITE</span>
+          <select id="qwen-site">
+            <option value="international">International</option>
+            <option value="china">China</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>ACCESS KEY ID</span>
+          <input id="qwen-akid" type="password" autocomplete="off" placeholder="AccessKeyId" />
+        </label>
+        <label class="field">
+          <span>ACCESS KEY SECRET</span>
+          <input id="qwen-aksecret" type="password" autocomplete="off" placeholder="AccessKeySecret" />
+        </label>
+        <p id="qwen-masked" class="row"></p>
+        <div class="actions">
+          <button id="qwen-save" type="button">SAVE</button>
+          <button id="qwen-revoke" type="button">REVOKE</button>
+        </div>
+        <label class="field">
+          <span>PLAN KEY (OPTIONAL sk-sp-)</span>
+          <input id="qwen-plan-key" type="password" autocomplete="off" placeholder="sk-sp-…" />
+        </label>
+        <p id="qwen-plan-masked" class="row"></p>
+        <div class="actions">
+          <button id="qwen-plan-save" type="button">SAVE</button>
+          <button id="qwen-plan-revoke" type="button">REVOKE</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="provider-name">DeepSeek (Wallet)</h2>
+        <label class="field">
+          <span>API KEY (Bearer)</span>
+          <input id="deepseek-key" type="password" autocomplete="off" placeholder="sk-…" />
+        </label>
+        <p id="deepseek-masked" class="row"></p>
+        <div class="actions">
+          <button id="deepseek-save" type="button">SAVE</button>
+          <button id="deepseek-revoke" type="button">REVOKE</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2 class="provider-name">TRAY STRIP</h2>
+        <div id="strip-order" class="order-list"></div>
+        <label class="field">
+          <span>ORIENTATION</span>
+          <select id="strip-orientation">
+            <option value="horizontal">Horizontal — above taskbar</option>
+            <option value="vertical">Vertical — right edge, up from taskbar</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>SIZE</span>
+          <select id="strip-size">
+            <option value="normal">Normal — taskbar height</option>
+            <option value="xl">Extra large</option>
+          </select>
+        </label>
+      </section>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,25 @@
+{
+  "identifier": "default",
+  "description": "Capabilities for the QuotaDeck flyout window",
+  "windows": ["flyout"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-always-on-top",
+    "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://api.z.ai/*" },
+        { "url": "https://open.bigmodel.cn/*" },
+        { "url": "https://business.aliyuncs.com/*" },
+        { "url": "https://business.ap-southeast-1.aliyuncs.com/*" },
+        { "url": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/*" },
+        { "url": "https://bailian-singapore-cs.alibabacloud.com/*" },
+        { "url": "https://modelstudio.ap-southeast-1.aliyuncs.com/*" },
+        { "url": "https://api.deepseek.com/*" }
+      ]
+    }
+  ]
+}

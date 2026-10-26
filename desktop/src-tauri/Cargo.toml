@@ -1,0 +1,33 @@
+[package]
+name = "quotadeck-desktop"
+version = "0.1.0"
+description = "QuotaDeck desktop tray app - AI provider quota monitor without the browser"
+edition = "2021"
+
+[features]
+# Embeds frontendDist assets so plain `cargo build` binaries load the bundled
+# frontend instead of the tauri dev server (http://localhost:5173).
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# v3 ships a MOCK keystore unless a platform backend is explicitly enabled:
+# without windows-native, saves go to an in-memory mock and reads are
+# always NoEntry (the silent TICK FAILED / lost-credentials root cause).
+keyring = { version = "3", features = ["windows-native"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+# http2 + gzip: the qwen gateway WAF discriminates non-browser clients —
+# h2 (ALPN) + Accept-Encoding: gzip reproduce the browser transport shape.
+# cookies: jar for any WAF-issued cookies across ticks.
+tauri-plugin-http = { version = "2", features = ["http2", "gzip", "cookies"] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
