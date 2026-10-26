@@ -45,6 +45,25 @@ interface HopResponse {
   readonly text: string;
 }
 
+/** Network requests never hang forever: 15s hard ceiling per dispatch. */
+const FETCH_TIMEOUT_MS = 15_000;
+
+function withTimeout<T>(promise: Promise<T>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} timed out after ${FETCH_TIMEOUT_MS / 1000}s`)), FETCH_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 function responseLike(hop: { status: number; text: string }): FetchResponseLike {
   const text = hop.text;
   return {
@@ -80,12 +99,15 @@ export function createDesktopFetchImpl(
   ): Promise<FetchResponseLike> => {
     if (isGatewayUrl(url)) {
       try {
-        const hop = await gatewayViaBrowser({
-          url,
-          method: init.method,
-          authorization: init.headers.Authorization ?? "",
-          body: init.body,
-        });
+        const hop = await withTimeout(
+          gatewayViaBrowser({
+            url,
+            method: init.method,
+            authorization: init.headers.Authorization ?? "",
+            body: init.body,
+          }),
+          "gateway browser-hop",
+        );
         if (hop !== null) {
           gatewayProbe.last = {
             status: hop.status,
@@ -98,19 +120,24 @@ export function createDesktopFetchImpl(
         // fall through to the plain hop
       }
     }
-    const response = await pluginFetch(url, {
-      method: init.method as "GET" | "POST",
-      headers: init.headers,
-      ...(init.body !== undefined ? { body: init.body } : {}),
-    });
+    const raw = await withTimeout(
+      pluginFetch(url, {
+        method: init.method as "GET" | "POST",
+        headers: init.headers,
+        ...(init.body !== undefined ? { body: init.body } : {}),
+      }),
+      "provider request",
+    );
+    const response = raw as unknown as FetchResponseLike;
     if (isGatewayUrl(url)) {
+      const headers = (raw as { headers?: { get?: (name: string) => string | null } }).headers;
       gatewayProbe.last = {
         status: response.status,
-        contentType: response.headers.get("content-type") ?? "?",
+        contentType: headers?.get?.("content-type") ?? "?",
         via: "plain",
       };
     }
-    return response as unknown as FetchResponseLike;
+    return response;
   };
 }
 

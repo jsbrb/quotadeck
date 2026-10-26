@@ -407,12 +407,17 @@ async function runAutotest(): Promise<void> {
   report.refresh = { before: statsBefore, after: statsAfter };
 
   if (lastStored.includes("qwen")) {
+    const agent = await invoke<[boolean, string | null]>("qwen_agent_state").catch(() => null);
     report.qwen = {
+      agent: agent === null ? "invoke failed" : { exists: agent[0], error: agent[1] },
       gatewayProbe: gatewayProbe.last,
       entry: lastSnapshot.results.qwen ?? null,
     };
   }
 
+  const qwenReport = report.qwen as
+    | { agent?: { exists: boolean; error: string | null } }
+    | undefined;
   report.verdicts = {
     flipVerticalDOM: computedOf("flipVerticalInBar") === "column",
     flipVerticalWindowMatches: sizeMatches("flipVerticalInBar"),
@@ -430,6 +435,7 @@ async function runAutotest(): Promise<void> {
         (report.keysScroll as { scroll: number; client: number }).client + 2,
     refreshReported: statsBefore !== null && statsAfter !== null,
     noIconChurn: statsBefore !== null && statsAfter !== null && statsBefore[1] === statsAfter[1],
+    agentWindowCreated: qwenReport?.agent?.exists === true,
   };
 
   await writeStripOrientation(prefs, "horizontal");

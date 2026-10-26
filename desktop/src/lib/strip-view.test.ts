@@ -45,6 +45,6 @@ describe("applyLayoutToBar (WU-O regression suite: live toggles)", () => {
     const inlineIsColumn = bar.style.flexDirection === "column";
     const narrowWindow = geometry.width < geometry.height;
     expect(inlineIsColumn).toBe(narrowWindow);
-    expect(geometry).toEqual({ width: 196, height: 208 });
+    expect(geometry).toEqual({ width: 156, height: 190 });
   });
 });

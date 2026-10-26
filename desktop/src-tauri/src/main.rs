@@ -3,9 +3,9 @@
 //! Flyout behavior (S2/S9 in odd/tasks/desktop-tray-app.md):
 //! - Left click on the tray icon toggles the strip; it hides on blur so it
 //!   behaves like a taskbar-attached popover. The strip has ZERO window
-//!   chrome — every control lives in the tray menu.
-//! - Right click opens the tray menu: Keys… (taller transient window),
-//!   Always on top (pin), Quit.
+//!   chrome - every control lives in the tray menu.
+//! - Right click opens the tray menu: Keys..., Qwen console..., Always on
+//!   top (pin), Quit.
 //! - The strip's bottom-right dock uses the monitor's REAL work area.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -27,15 +27,29 @@ static PINNED: AtomicBool = AtomicBool::new(false);
 /// visible against the screen border.
 const FLYOUT_MARGIN: i32 = 8;
 
-/// KEYS window size — pinned twin of the KEYS constants in main.ts.
+/// KEYS window size - pinned twin of the KEYS constants in main.ts.
 const KEYS_WIDTH: f64 = 680.0;
 const KEYS_HEIGHT: f64 = 560.0;
 
+/// Qwen browser-hop (WU-P/WU-Q): the token-plan gateway WAF fingerprints the
+/// client and blocks reqwest with a 200 HTML block page, while the Chrome
+/// extension works because its requests ARE browser requests. The desktop
+/// parity fix: a HIDDEN webview loaded on the console origin; the gateway
+/// hop is executed INSIDE that real Chromium (fetch with the page's own
+/// Origin - the same shape the extension's DNR rule produced) and the JSON
+/// response travels back through the page title (evaluate_script has no
+/// return channel to Rust). `--disable-web-security` lets the page read the
+/// cross-origin gateway response; this webview only ever loads the
+/// ALIBABA console URL, and the Bearer rides only as a fetch argument.
+const QWEN_CONSOLE_URL: &str = "https://modelstudio.console.alibabacloud.com";
+const QWEN_GATEWAY_ORIGIN: &str = "https://token-plan.ap-southeast-1.maas.aliyuncs.com";
+const QWEN_AGENT_LABEL: &str = "qwen-agent";
+
 /// Managed tray handles: the icon (re-badged per tick via `set_tray_badge`)
-/// and the pin check item (its checked state mirrors PINNED). `band` remembers
-/// the last applied band so `set_icon` runs ONLY on an actual change —
-/// re-setting the icon every tick made Windows Explorer drop the icon from
-/// the tray (reported by the user: refresh clicked, icon vanished).
+/// and the pin check item (its checked state mirrors PINNED). `band`
+/// remembers the last applied band so `set_icon` runs ONLY on an actual
+/// change - re-setting the icon every tick made Windows Explorer drop the
+/// icon from the tray (reported by the user: refresh clicked, icon vanished).
 struct TrayState {
     tray: Mutex<TrayIcon>,
     pin: CheckMenuItem<Wry>,
@@ -46,6 +60,12 @@ struct TrayState {
 /// call vs the subset that actually swapped the icon.
 static BADGE_CALLS: AtomicUsize = AtomicUsize::new(0);
 static ICON_SETS: AtomicUsize = AtomicUsize::new(0);
+
+/// Last agent-creation failure (WU-R): surfaced through `qwen_agent_state`
+/// so a silent creation failure can never hide again.
+static AGENT_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
+/// One startup-time creation attempt only - runtime re-creation deadlocks.
+static AGENT_CREATION_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
 fn band_icon(band: &str) -> Image<'static> {
     match band {
@@ -81,14 +101,15 @@ fn is_demo() -> bool {
 }
 
 /// Autotest flag: `QUOTADECK_AUTOTEST=1` drives the strip through the
-/// user-reported scenarios (orientation flips, refresh, Qwen probe) and
-/// writes a self-check report to prefs — see scripts/autotest-desktop.ps1.
+/// user-reported scenarios and writes a self-check report to prefs - see
+/// scripts/autotest-desktop.ps1. Quarantine: the autotest NEVER dispatches
+/// qwen hops with production credentials.
 #[tauri::command]
 fn is_autotest() -> bool {
     std::env::var("QUOTADECK_AUTOTEST").as_deref() == Ok("1")
 }
 
-/// Live INNER size (physical px) of the flyout — the autotest asserts the
+/// Live INNER size (physical px) of the flyout - the autotest asserts the
 /// content area matches the layout geometry (outer_size would carry the DWM
 /// invisible borders).
 #[tauri::command]
@@ -98,7 +119,7 @@ fn flyout_size(app: tauri::AppHandle) -> Option<(u32, u32)> {
     Some((size.width, size.height))
 }
 
-/// (badge calls, actual icon sets) — proves the only-on-change policy.
+/// (badge calls, actual icon sets) - proves the only-on-change policy.
 #[tauri::command]
 fn tray_stats() -> (usize, usize) {
     (
@@ -107,74 +128,87 @@ fn tray_stats() -> (usize, usize) {
     )
 }
 
-/// Cookie COUNTS (never values) visible to the gateway/console domains from
-/// the Qwen sign-in window — autotest measurement for the cross-domain
-/// suspicion behind the silent Qwen failure.
+/// (exists, last creation error) - autotest verdict source for the agent.
 #[tauri::command]
-fn qwen_cookie_counts(app: tauri::AppHandle) -> (usize, usize) {
-    let Some(webview) = app.get_webview_window("qwen-login") else {
-        return (0, 0);
-    };
-    let console = tauri::Url::parse(QWEN_CONSOLE_URL)
-        .ok()
-        .and_then(|url| webview.cookies_for_url(url).ok())
-        .map_or(0, |cookies| cookies.len());
-    let gateway = tauri::Url::parse(QWEN_GATEWAY_ORIGIN)
-        .ok()
-        .and_then(|url| webview.cookies_for_url(url).ok())
-        .map_or(0, |cookies| cookies.len());
-    (console, gateway)
-}
-
-/// Qwen browser-hop (WU-P): the token-plan gateway WAF fingerprints the
-/// client and blocks reqwest with a 200 HTML block page, while the Chrome
-/// extension works because its requests ARE browser requests. The desktop
-/// parity fix: a HIDDEN webview loaded on the console origin; the gateway
-/// hop is executed INSIDE that real Chromium (fetch with the page's own
-/// Origin — the same shape the extension's DNR rule produced) and the JSON
-/// response travels back through the page title (evaluate_script has no
-/// return channel to Rust). `--disable-web-security` lets the page read the
-/// cross-origin gateway response; this webview only ever loads the
-/// ALIBABA console URL, and the Bearer rides only as a fetch argument.
-const QWEN_CONSOLE_URL: &str = "https://modelstudio.console.alibabacloud.com";
-const QWEN_GATEWAY_ORIGIN: &str = "https://token-plan.ap-southeast-1.maas.aliyuncs.com";
-const QWEN_AGENT_LABEL: &str = "qwen-agent";
-
-fn ensure_qwen_agent(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
-    if let Some(existing) = app.get_webview_window(QWEN_AGENT_LABEL) {
-        return Some(existing);
+fn qwen_agent_state(app: tauri::AppHandle) -> (bool, Option<String>) {
+    if app.get_webview_window(QWEN_AGENT_LABEL).is_some() {
+        return (true, None);
     }
-    let url: tauri::Url = QWEN_CONSOLE_URL.parse().ok()?;
-    tauri::WebviewWindowBuilder::new(app, QWEN_AGENT_LABEL, tauri::WebviewUrl::External(url))
-        .title("QuotaDeck Qwen agent")
-        .inner_size(900.0, 700.0)
-        .visible(false)
-        // Replaces wry's defaults, so keep its disable-features plus the
-        // cross-origin read permission for THIS console-only webview.
-        .additional_browser_args(
-            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-web-security",
-        )
-        .build()
-        .ok()
+    // Not alive right now: attempt a lazy creation so the state is fresh.
+    match ensure_qwen_agent(&app) {
+        Ok(_) => (true, None),
+        Err(e) => (false, Some(e)),
+    }
 }
 
-/// Shows the agent window (tray "Qwen console…" — manual inspection/login).
+fn ensure_qwen_agent(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, String> {
+    if let Some(existing) = app.get_webview_window(QWEN_AGENT_LABEL) {
+        *AGENT_LAST_ERROR.lock().unwrap() = None;
+        return Ok(existing);
+    }
+    if AGENT_CREATION_ATTEMPTED.load(Ordering::SeqCst) {
+        let cached = AGENT_LAST_ERROR
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| "agent not initialized at startup".to_string());
+        return Err(cached);
+    }
+    AGENT_CREATION_ATTEMPTED.store(true, Ordering::SeqCst);
+    let url: tauri::Url = match QWEN_CONSOLE_URL.parse() {
+        Ok(url) => url,
+        Err(e) => {
+            *AGENT_LAST_ERROR.lock().unwrap() = Some(format!("bad console url: {e}"));
+            return Err(format!("bad console url: {e}"));
+        }
+    };
+    let built = tauri::WebviewWindowBuilder::new(
+        app,
+        QWEN_AGENT_LABEL,
+        tauri::WebviewUrl::External(url),
+    )
+    .title("QuotaDeck Qwen agent")
+    .inner_size(900.0, 700.0)
+    .visible(false)
+    // NOTE (WU-R): `additional_browser_args` (even without DWS flags) on a
+    // second webview CRASHES WebView2 environment creation on Windows - the
+    // agent boots with the DEFAULT environment. Consequence: cross-origin
+    // gateway reads from this page are CORS-blocked and the browser-hop is
+    // dormant until a dedicated spike solves the WAF path (backoff + honest
+    // hint cover the interim). Created at STARTUP on the main thread:
+    // runtime creation of a second webview deadlocks the event loop (WU-Q
+    // hang).
+    .build();
+    match built {
+        Ok(window) => {
+            *AGENT_LAST_ERROR.lock().unwrap() = None;
+            Ok(window)
+        }
+        Err(e) => {
+            let message = format!("agent window build failed: {e}");
+            *AGENT_LAST_ERROR.lock().unwrap() = Some(message.clone());
+            Err(message)
+        }
+    }
+}
+
+/// Shows the agent window (tray "Qwen console..." - manual inspection/login).
 /// Opening it also lifts the qwen backoff via an event: a fresh console with
 /// a signed-in session deserves an immediate retry.
 #[tauri::command]
 fn open_qwen_login(app: tauri::AppHandle) {
     match ensure_qwen_agent(&app) {
-        Some(window) => {
+        Ok(window) => {
             let _ = window.show();
             let _ = window.set_focus();
             let _ = app.emit_to("flyout", "quotadeck://qwen-session", ());
         }
-        None => {}
+        Err(_) => {}
     }
 }
 
 fn qwen_agent_eval(app: &tauri::AppHandle, script: &str) -> Option<String> {
-    let webview = ensure_qwen_agent(app)?;
+    let webview = ensure_qwen_agent(app).ok()?;
     webview.eval(script).ok()?;
     // The script answers through document.title ("QDR:" prefix); poll for it.
     for _ in 0..48 {
@@ -190,7 +224,7 @@ fn qwen_agent_eval(app: &tauri::AppHandle, script: &str) -> Option<String> {
 }
 
 fn qwen_agent_origin(app: &tauri::AppHandle) -> Option<String> {
-    let webview = ensure_qwen_agent(app)?;
+    let webview = ensure_qwen_agent(app).ok()?;
     let _ = webview.eval("document.title='QDR:'+JSON.stringify(String(location.origin));");
     for _ in 0..48 {
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -205,9 +239,9 @@ fn qwen_agent_origin(app: &tauri::AppHandle) -> Option<String> {
 }
 
 /// Runs the gateway fetch INSIDE the agent webview (real Chromium TLS + the
-/// console Origin). Returns (status, body-text). Warm-up: while the console
-/// page has not reached the console origin yet, answers None and the caller
-/// falls back to the plain transport for this tick.
+/// console Origin). Returns (status, content-type, body-text). Warm-up: while
+/// the console page has not reached the console origin yet, answers None and
+/// the caller falls back to the plain transport for this tick.
 #[tauri::command]
 fn qwen_gateway_fetch(
     app: tauri::AppHandle,
@@ -215,7 +249,7 @@ fn qwen_gateway_fetch(
     method: String,
     authorization: Option<String>,
     body: Option<String>,
-) -> Option<(u16, String)> {
+) -> Option<(u16, String, String)> {
     if !url.starts_with(QWEN_GATEWAY_ORIGIN) {
         return None; // hard allowlist: this hop only ever talks to the gateway
     }
@@ -251,23 +285,13 @@ fn qwen_gateway_fetch(
         auth = auth_json,
         body = body_json,
     );
-    let answer = qwen_agent_eval(app, &script)?;
+    let answer = qwen_agent_eval(&app, &script)?;
     let value: serde_json::Value = serde_json::from_str(&answer).ok()?;
     Some((
         value.get("s")?.as_u64()? as u16,
         value.get("c")?.as_str()?.to_string(),
         value.get("b")?.as_str()?.to_string(),
     ))
-}
-
-/// Monitor work area (physical px) — the KEYS window grows to its content
-/// capped by this.
-#[tauri::command]
-fn work_area_size(app: tauri::AppHandle) -> Option<(u32, u32)> {
-    let window = app.get_webview_window("flyout")?;
-    let monitor = window.current_monitor().ok()??;
-    let area = monitor.work_area();
-    Some((area.size.width, area.size.height))
 }
 
 /// Resizes the flyout (logical px from the frontend's deterministic strip
@@ -282,7 +306,7 @@ fn reflow_flyout(app: tauri::AppHandle, width: f64, height: f64) {
 }
 
 /// Docks the flyout bottom-right: right edge against the screen side, bottom
-/// edge against the taskbar — via the monitor's REAL work area (S9), never a
+/// edge against the taskbar - via the monitor's REAL work area (S9), never a
 /// taskbar estimate.
 fn anchor_flyout(window: &tauri::WebviewWindow) {
     let Ok(Some(monitor)) = window.current_monitor() else {
@@ -295,6 +319,16 @@ fn anchor_flyout(window: &tauri::WebviewWindow) {
     let x = (right - FLYOUT_MARGIN - win.width as i32).max(area.position.x);
     let y = (bottom - win.height as i32).max(area.position.y);
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
+/// Monitor work area (physical px) - the KEYS window grows to its content
+/// capped by this.
+#[tauri::command]
+fn work_area_size(app: tauri::AppHandle) -> Option<(u32, u32)> {
+    let window = app.get_webview_window("flyout")?;
+    let monitor = window.current_monitor().ok()??;
+    let area = monitor.work_area();
+    Some((area.size.width, area.size.height))
 }
 
 fn main() {
@@ -315,9 +349,9 @@ fn main() {
                 .expect("flyout window must exist in tauri.conf.json");
             anchor_flyout(&window);
 
-            let keys_item = MenuItem::with_id(app, "keys", "Keys…", true, None::<&str>)?;
+            let keys_item = MenuItem::with_id(app, "keys", "Keys...", true, None::<&str>)?;
             let qwen_login_item =
-                MenuItem::with_id(app, "qwen_login", "Qwen console…", true, None::<&str>)?;
+                MenuItem::with_id(app, "qwen_login", "Qwen console...", true, None::<&str>)?;
             let pin_item =
                 CheckMenuItem::with_id(app, "pin", "Always on top", true, false, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit QuotaDeck", true, None::<&str>)?;
@@ -381,11 +415,16 @@ fn main() {
                 band: Mutex::new(String::from("__bundle")),
             });
 
+            // Qwen agent (WU-P/WU-Q): created HERE on the main thread at
+            // startup - runtime creation of a second webview with different
+            // browser args deadlocks the event loop (WU-Q hang).
+            ensure_qwen_agent(app.handle())?;
+
             Ok(())
         })
         .on_window_event(|window, event| {
             // The Qwen agent keeps its browser context alive: closing it only
-            // hides it — a destroyed webview loses the console session.
+            // hides it - a destroyed webview loses the console session.
             if window.label() == QWEN_AGENT_LABEL {
                 if let WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -406,7 +445,7 @@ fn main() {
             is_autotest,
             flyout_size,
             tray_stats,
-            qwen_cookie_counts,
+            qwen_agent_state,
             qwen_gateway_fetch,
             work_area_size,
             open_qwen_login,
