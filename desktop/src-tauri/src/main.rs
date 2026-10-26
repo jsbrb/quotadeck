@@ -170,14 +170,11 @@ fn ensure_qwen_agent(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, Str
     .title("QuotaDeck Qwen agent")
     .inner_size(900.0, 700.0)
     .visible(false)
-    // NOTE (WU-R): `additional_browser_args` (even without DWS flags) on a
-    // second webview CRASHES WebView2 environment creation on Windows - the
-    // agent boots with the DEFAULT environment. Consequence: cross-origin
-    // gateway reads from this page are CORS-blocked and the browser-hop is
-    // dormant until a dedicated spike solves the WAF path (backoff + honest
-    // hint cover the interim). Created at STARTUP on the main thread:
-    // runtime creation of a second webview deadlocks the event loop (WU-Q
-    // hang).
+    // WU-S RESULT: `--disable-web-security` CRASHES WebView2 environment
+    // creation even on the FIRST webview - the platform wall stands. The
+    // agent boots with the DEFAULT environment (CORS-blocked for gateway
+    // reads), so the browser-hop stays dormant and the qwen % remains a
+    // Chrome-extension-only surface until a different mechanism is found.
     .build();
     match built {
         Ok(window) => {
@@ -344,10 +341,30 @@ fn main() {
             }
         }))
         .setup(|app| {
-            let window = app
-                .get_webview_window("flyout")
-                .expect("flyout window must exist in tauri.conf.json");
-            anchor_flyout(&window);
+            // WU-S spike: the Qwen agent is the FIRST webview so the WebView2
+            // environment forms ONCE with --disable-web-security (creating a
+            // second webview with different args crashed; creating any webview
+            // at runtime deadlocked). The flyout inherits the same environment.
+            match ensure_qwen_agent(app.handle()) {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("[quotadeck-desktop] qwen agent unavailable: {e}");
+                }
+            }
+
+            let flyout = tauri::WebviewWindowBuilder::new(
+                app,
+                "flyout",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .title("QuotaDeck")
+            .inner_size(700.0, 48.0)
+            .resizable(false)
+            .decorations(false)
+            .skip_taskbar(true)
+            .visible(false)
+            .build()?;
+            anchor_flyout(&flyout);
 
             let keys_item = MenuItem::with_id(app, "keys", "Keys...", true, None::<&str>)?;
             let qwen_login_item =

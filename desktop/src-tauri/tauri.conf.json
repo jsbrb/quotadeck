@@ -10,19 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [
-      {
-        "label": "flyout",
-        "title": "QuotaDeck",
-        "width": 700,
-        "height": 48,
-        "resizable": false,
-        "decorations": false,
-        "skipTaskbar": true,
-        "visible": false,
-        "alwaysOnTop": false
-      }
-    ],
+      "windows": [],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'"
     }

@@ -43,7 +43,7 @@ describe("renderSegments (S8 keyed-only taskbar strip)", () => {
     expect(html.indexOf("ZAI")).toBeLessThan(html.indexOf("Qwen"));
   });
 
-  it("renders wallet usage as percentage on top and money-left below", () => {
+  it("renders wallet usage as consumed percentage and USED/total below", () => {
     const snapshot: CycleSnapshot = {
       results: {
         zai: {
@@ -61,7 +61,28 @@ describe("renderSegments (S8 keyed-only taskbar strip)", () => {
     };
     const html = renderSegments(snapshot, NOW);
     expect(html).toContain("65 %");
-    expect(html).toContain("¥3.50 / ¥10.00 LEFT");
+    expect(html).toContain("USED ¥6.50 / ¥10.00");
+  });
+
+  it("shows the zero-consumption wallet clearly (user case: 0% of $2)", () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        deepseek: {
+          status: "ok",
+          usage: {
+            providerId: "deepseek",
+            kind: "balance",
+            value: 2,
+            currency: "USD",
+            fetchedAt: NOW,
+            wallet: { currency: "USD", total: 2, consumed: 0, percentage: 0 },
+          } as never,
+        },
+      },
+    };
+    const html = renderSegments(snapshot, NOW);
+    expect(html).toContain("0 %");
+    expect(html).toContain("USED $0.00 / $2.00");
   });
 
   it("uses the qwen quota percentage and reset over the windows", () => {

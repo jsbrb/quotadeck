@@ -90,11 +90,13 @@ export function formatCountdown(now: number, resetAt: number | undefined): strin
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-/** Bottom line: money-left/total for wallet usage, else the reset countdown. */
+/** Bottom line: money-USED/total for wallet usage (same consumed semantics
+ * as the percentage above — the user's mental model), else the reset
+ * countdown. */
 function segmentBottom(usage: NormalizedUsage, now: number): string {
-  if (usage.wallet?.total !== undefined && usage.value !== undefined) {
+  if (usage.wallet?.total !== undefined && usage.wallet?.consumed !== undefined) {
     const symbol = currencySymbol(usage.wallet.currency ?? usage.currency ?? "");
-    return `${symbol}${usage.value.toFixed(2)} / ${symbol}${usage.wallet.total.toFixed(2)} LEFT`;
+    return `USED ${symbol}${usage.wallet.consumed.toFixed(2)} / ${symbol}${usage.wallet.total.toFixed(2)}`;
   }
   const resetAt = usage.quota?.resetAt ?? usage.windows?.fiveHour?.resetAt;
   const countdown = formatCountdown(now, resetAt);
