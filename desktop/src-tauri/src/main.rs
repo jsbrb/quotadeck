@@ -17,6 +17,7 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, WindowEvent, Wry,
 };
+use tauri_plugin_autostart::{ManagerExt as AutostartManagerExt, MacosLauncher};
 
 mod prefs;
 mod secrets;
@@ -53,6 +54,7 @@ const QWEN_AGENT_LABEL: &str = "qwen-agent";
 struct TrayState {
     tray: Mutex<TrayIcon>,
     pin: CheckMenuItem<Wry>,
+    autostart_item: CheckMenuItem<Wry>,
     band: Mutex<String>,
 }
 
@@ -331,6 +333,10 @@ fn work_area_size(app: tauri::AppHandle) -> Option<(u32, u32)> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // A second launch surfaces the existing strip instead of forking
             // a duplicate tray app.
@@ -369,13 +375,29 @@ fn main() {
             let keys_item = MenuItem::with_id(app, "keys", "Keys...", true, None::<&str>)?;
             let qwen_login_item =
                 MenuItem::with_id(app, "qwen_login", "Qwen console...", true, None::<&str>)?;
+            let autostart_manager = app.autolaunch();
+            let autostart_enabled = autostart_manager.is_enabled().unwrap_or(false);
+            let autostart_item = CheckMenuItem::with_id(
+                app,
+                "autostart",
+                "Start with Windows",
+                true,
+                autostart_enabled,
+                None::<&str>,
+            )?;
             let pin_item =
                 CheckMenuItem::with_id(app, "pin", "Always on top", true, false, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit QuotaDeck", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&keys_item, &qwen_login_item, &pin_item, &quit])?;
+            let menu = Menu::with_items(
+                app,
+                &[&keys_item, &qwen_login_item, &autostart_item, &pin_item, &quit],
+            )?;
 
             let tray = TrayIconBuilder::with_id("quotadeck-tray")
-                .icon(app.default_window_icon().expect("bundle icon").clone())
+                // Blue Q from the start (the bundle logo is paper-colored and
+                // reads as a white blob on the dark tray); the first tick
+                // re-badges it with the threshold band.
+                .icon(tauri::include_image!("icons/tray/neutral.png"))
                 .tooltip("QuotaDeck")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
@@ -391,6 +413,17 @@ fn main() {
                         }
                     }
                     "qwen_login" => open_qwen_login(app.clone()),
+                    "autostart" => {
+                        let manager = app.autolaunch();
+                        let enabled = manager.is_enabled().unwrap_or(false);
+                        let _ = if enabled {
+                            manager.disable()
+                        } else {
+                            manager.enable()
+                        };
+                        let state = app.state::<TrayState>();
+                        let _ = state.autostart_item.set_checked(!enabled);
+                    }
                     "pin" => {
                         let pinned = !PINNED.load(Ordering::SeqCst);
                         PINNED.store(pinned, Ordering::SeqCst);
@@ -429,6 +462,7 @@ fn main() {
             app.manage(TrayState {
                 tray: Mutex::new(tray),
                 pin: pin_item,
+                autostart_item: autostart_item,
                 band: Mutex::new(String::from("__bundle")),
             });
 

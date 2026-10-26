@@ -21,6 +21,7 @@ serde_json = "1"
 # always NoEntry (the silent TICK FAILED / lost-credentials root cause).
 keyring = { version = "3", features = ["windows-native"] }
 tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 # http2 + gzip: the qwen gateway WAF discriminates non-browser clients —
 # h2 (ALPN) + Accept-Encoding: gzip reproduce the browser transport shape.
 # cookies: jar for any WAF-issued cookies across ticks.
