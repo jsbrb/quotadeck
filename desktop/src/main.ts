@@ -37,13 +37,13 @@ const secrets = createSecretsArea();
 // Chromium TLS + the console Origin — the shape the WAF accepts). Falls back
 // to the plain plugin-http hop while the agent warms up.
 const transport = createDesktopTransport(async ({ url, method, authorization, body }) => {
-  const result = await invoke<null | { s: number; b: string }>("qwen_gateway_fetch", {
+  const result = await invoke<null | { s: number; c: string; b: string }>("qwen_gateway_fetch", {
     url,
     method,
     authorization,
     body: body ?? null,
   }).catch(() => null);
-  return result === null ? null : { status: result.s, text: result.b };
+  return result === null ? null : { status: result.s, contentType: result.c, text: result.b };
 });
 const clock = new SystemClock();
 
@@ -62,6 +62,7 @@ let qwenFailures = 0;
 const QWEN_BACKOFF_BASE_MS = 15 * 60_000;
 const QWEN_BACKOFF_MAX_MS = 60 * 60_000;
 let qwenQuarantine = false; // AUTOTEST only: zero qwen dispatches
+let browserHopBlocked = false; // WU-Q: a REAL browser-hop got WAF-blocked
 let lastRefreshAt = 0;
 
 async function refreshLayout(): Promise<void> {
@@ -142,15 +143,15 @@ async function buildHints(): Promise<Partial<Record<ProviderId, string>>> {
   if (lastStored.includes("qwen") && lastSnapshot.results.qwen === undefined) {
     if (qwenQuarantine) {
       hints.qwen = "QWEN PAUSED (AUTOTEST)";
+    } else if (browserHopBlocked) {
+      hints.qwen = "SIGN IN TO QWEN CONSOLE (TRAY)";
     } else if (clock.now() < qwenBackoffUntil) {
       const minutes = Math.ceil((qwenBackoffUntil - clock.now()) / 60_000);
       hints.qwen = `QUOTA PAUSED — RETRY IN ${minutes}m`;
     } else {
       const probe = gatewayProbe.last;
-      if (probe === null) {
+      if (probe === null || probe.via !== "browser") {
         hints.qwen = "CONNECTING TO GATEWAY…";
-      } else if (probe.contentType.startsWith("text/html")) {
-        hints.qwen = "GATEWAY WAF BLOCK — RETRYING";
       } else {
         hints.qwen = "NO DATA THIS TICK";
       }
@@ -161,12 +162,17 @@ async function buildHints(): Promise<Partial<Record<ProviderId, string>>> {
 
 async function tick(): Promise<void> {
   try {
+    // Backoff skip rule (WU-Q): pause dispatches ONLY once the browser-hop
+    // itself was blocked — warm-up fallback failures never count, so the
+    // real Chromium hop always gets its fair attempt once the agent loads.
+    const qwenPaused =
+      qwenQuarantine || (clock.now() < qwenBackoffUntil && browserHopBlocked);
     const outcome = await runDesktopRefreshTick({
       prefs,
       secrets,
       transport,
       clock,
-      qwenDisabled: qwenQuarantine || clock.now() < qwenBackoffUntil,
+      qwenDisabled: qwenPaused,
     });
     await refreshLayout();
     lastSnapshot = outcome.snapshot;
@@ -174,21 +180,24 @@ async function tick(): Promise<void> {
     lastVisibleCount = visibleCount(lastSnapshot, lastStored);
     lastHints = await buildHints();
     await prefs.remove(LAST_TICK_ERROR_KEY).catch(() => {});
-    // Post-incident backoff (WU-P): qwen gateway WAF blocks or auth/server
-    // errors escalate the pause 15 -> 30 -> 60 min (cap); a successful qwen
-    // cycle resets it. The Chrome extension shares this account — the
-    // desktop never burst-probes it again.
+    // Post-incident backoff (WU-Q attribution fix): ONLY a browser-hop block
+    // escalates the pause — plain-hop failures are expected while the agent
+    // webview warms up. A browser-verified WAF block means the gateway wants
+    // a console session: pause long and point the user at the console.
     const qwenStoredNow = lastStored.includes("qwen");
     const qwenEntry = outcome.snapshot.results.qwen;
-    const probeSaysBlocked = gatewayProbe.last?.contentType.startsWith("text/html") === true;
+    const probe = gatewayProbe.last;
+    const probeSaysBlocked = probe?.contentType.startsWith("text/html") === true;
     if (qwenEntry?.status === "ok") {
       qwenFailures = 0;
       qwenBackoffUntil = 0;
-    } else if (qwenEntry?.status === "error" || (qwenStoredNow && probeSaysBlocked)) {
+      browserHopBlocked = false;
+    } else if (probeSaysBlocked && probe?.via === "browser") {
+      browserHopBlocked = true;
       qwenFailures += 1;
       const pause = Math.min(QWEN_BACKOFF_BASE_MS * 2 ** (qwenFailures - 1), QWEN_BACKOFF_MAX_MS);
       qwenBackoffUntil = clock.now() + pause;
-      console.error(`[quotadeck-desktop] qwen paused for ${pause / 60_000} min (failure ${qwenFailures})`);
+      console.error(`[quotadeck-desktop] qwen browser-hop blocked; paused ${pause / 60_000} min`);
     }
     // Render ALWAYS (even while Keys is open): a key saved inside Keys must
     // be on the strip the moment the user returns — the reported ghost-card
@@ -213,6 +222,14 @@ async function tick(): Promise<void> {
 
 void listen("quotadeck://show-bar", () => showBar());
 void listen("quotadeck://show-keys", () => showKeys());
+// WU-Q: opening the Qwen console lifts the backoff — a fresh session earns
+// an immediate retry.
+void listen("quotadeck://qwen-session", () => {
+  qwenBackoffUntil = 0;
+  browserHopBlocked = false;
+  qwenFailures = 0;
+  void tick();
+});
 
 // Delegated wiring: survives bar re-renders (innerHTML swaps the segments).
 bar?.addEventListener("click", (event) => {

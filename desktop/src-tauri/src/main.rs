@@ -159,12 +159,15 @@ fn ensure_qwen_agent(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
 }
 
 /// Shows the agent window (tray "Qwen console…" — manual inspection/login).
+/// Opening it also lifts the qwen backoff via an event: a fresh console with
+/// a signed-in session deserves an immediate retry.
 #[tauri::command]
 fn open_qwen_login(app: tauri::AppHandle) {
     match ensure_qwen_agent(&app) {
         Some(window) => {
             let _ = window.show();
             let _ = window.set_focus();
+            let _ = app.emit_to("flyout", "quotadeck://qwen-session", ());
         }
         None => {}
     }
@@ -237,9 +240,10 @@ fn qwen_gateway_fetch(
                     body: {body}
                 }});
                 const t = await r.text();
-                document.title = "QDR:" + JSON.stringify({{ s: r.status, b: t.slice(0, 60000) }});
+                const ct = r.headers.get("content-type") || "?";
+                document.title = "QDR:" + JSON.stringify({{ s: r.status, c: ct, b: t.slice(0, 60000) }});
             }} catch (e) {{
-                document.title = "QDR:" + JSON.stringify({{ s: 0, b: String(e) }});
+                document.title = "QDR:" + JSON.stringify({{ s: 0, c: "error", b: String(e) }});
             }}
         }})();"#,
         url = serde_json::to_string(&url).ok()?,
@@ -247,10 +251,11 @@ fn qwen_gateway_fetch(
         auth = auth_json,
         body = body_json,
     );
-    let answer = qwen_agent_eval(&app, &script)?;
+    let answer = qwen_agent_eval(app, &script)?;
     let value: serde_json::Value = serde_json::from_str(&answer).ok()?;
     Some((
         value.get("s")?.as_u64()? as u16,
+        value.get("c")?.as_str()?.to_string(),
         value.get("b")?.as_str()?.to_string(),
     ))
 }

@@ -55,17 +55,21 @@ export async function writeStripSize(prefs: StorageArea, size: StripSize): Promi
   await prefs.set({ [STRIP_SIZE_KEY]: size });
 }
 
-// --- Geometry (WU-N) -------------------------------------------------------
+// --- Geometry (WU-N/WU-Q) --------------------------------------------------
 // SEG_SIZE + paddings are the SINGLE source of the strip window size and
 // mirror the CSS custom properties on #bar (index.html). Kept as a pure
 // function so the horizontal/vertical x normal/xl matrix is unit-tested.
+// Narrow widths per user feedback: 160px fits the longest line
+// ("¥3.50 / ¥10.00 LEFT") at the SAME font sizes — only air was removed.
 export const SEG_SIZE: Record<StripSize, { readonly width: number; readonly height: number }> = {
-  normal: { width: 180, height: 48 },
-  xl: { width: 230, height: 68 },
+  normal: { width: 160, height: 48 },
+  xl: { width: 210, height: 68 },
 };
 export const STRIP_PAD_X = 16;
 export const STRIP_PAD_Y = 16;
 export const REFRESH_SEGMENT_WIDTH = 44;
+// Vertical refresh strip: a thin 30px band, not a full segment (S12 feedback).
+export const REFRESH_STRIP_HEIGHT = 30;
 
 export interface StripGeometry {
   readonly width: number;
@@ -74,9 +78,9 @@ export interface StripGeometry {
 
 /**
  * Window size for `segmentCount` provider segments + the trailing refresh
- * segment. Horizontal: one row (refresh rides the width). Vertical: one
- * column (refresh rides below, as a full-width row of segment height).
- * An empty strip still renders one hint segment.
+ * strip. Horizontal: one row (refresh rides the width, 44px). Vertical: one
+ * narrow column (refresh rides below as a thin 30px band). An empty strip
+ * still renders one hint segment.
  */
 export function stripGeometry(layout: StripLayout, segmentCount: number): StripGeometry {
   const count = Math.max(segmentCount, 1);
@@ -84,7 +88,7 @@ export function stripGeometry(layout: StripLayout, segmentCount: number): StripG
   if (layout.orientation === "vertical") {
     return {
       width: STRIP_PAD_X + seg.width,
-      height: STRIP_PAD_Y + (count + 1) * seg.height,
+      height: STRIP_PAD_Y + count * seg.height + REFRESH_STRIP_HEIGHT,
     };
   }
   return {

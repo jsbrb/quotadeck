@@ -40,14 +40,14 @@
         flex-wrap: nowrap;
         align-items: stretch;
         height: 100%;
-        --seg-w: 180px;
+        --seg-w: 160px;
         --seg-h: 48px;
         --f-name: 12px;
         --f-pct: 14px;
         --f-sub: 10px;
       }
       #bar.size-xl {
-        --seg-w: 230px;
+        --seg-w: 210px;
         --seg-h: 68px;
         --f-name: 15px;
         --f-pct: 18px;
@@ -125,9 +125,13 @@
         padding: 0 6px;
       }
       #bar.vertical .seg-refresh {
-        flex: 0 0 var(--seg-h);
+        flex: 0 0 30px;
         width: var(--seg-w);
+        height: 30px;
         align-items: flex-start;
+      }
+      #bar.vertical .seg-refresh #refresh-btn {
+        font-size: var(--f-sub);
       }
       #refresh-btn {
         background: none;

@@ -25,10 +25,13 @@ const GATEWAY_URL_SUFFIX = `${QWEN_TOKEN_PLAN_GATEWAY_HOST}${QWEN_GATEWAY_API_PA
 
 /**
  * Gateway response probe (autotest measurement): the last gateway hop's
- * STATUS and CONTENT-TYPE only — never bodies, never headers with session
- * material. The Qwen diagnosis needs just one fact: JSON vs the WAF's HTML.
+ * STATUS and CONTENT-TYPE and WHICH transport ran it. WU-Q attribution: only
+ * browser-hop blocks escalate the backoff — plain-hop failures are expected
+ * while the agent webview warms up.
  */
-export const gatewayProbe: { last: { status: number; contentType: string } | null } = {
+export const gatewayProbe: {
+  last: { status: number; contentType: string; via: "browser" | "plain" } | null;
+} = {
   last: null,
 };
 
@@ -42,7 +45,7 @@ interface HopResponse {
   readonly text: string;
 }
 
-function responseLike(hop: HopResponse): FetchResponseLike {
+function responseLike(hop: { status: number; text: string }): FetchResponseLike {
   const text = hop.text;
   return {
     status: hop.status,
@@ -65,7 +68,7 @@ export interface GatewayViaBrowser {
     method: string;
     authorization: string;
     body?: string;
-  }): Promise<HopResponse | null>;
+  }): Promise<{ status: number; contentType: string; text: string } | null>;
 }
 
 export function createDesktopFetchImpl(
@@ -84,12 +87,12 @@ export function createDesktopFetchImpl(
           body: init.body,
         });
         if (hop !== null) {
-          const response = responseLike(hop);
           gatewayProbe.last = {
-            status: response.status,
-            contentType: "application/json (browser-hop)",
+            status: hop.status,
+            contentType: hop.contentType,
+            via: "browser",
           };
-          return response;
+          return responseLike(hop);
         }
       } catch {
         // fall through to the plain hop
@@ -104,6 +107,7 @@ export function createDesktopFetchImpl(
       gatewayProbe.last = {
         status: response.status,
         contentType: response.headers.get("content-type") ?? "?",
+        via: "plain",
       };
     }
     return response as unknown as FetchResponseLike;
