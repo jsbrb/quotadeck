@@ -54,3 +54,41 @@ export async function writeStripOrientation(
 export async function writeStripSize(prefs: StorageArea, size: StripSize): Promise<void> {
   await prefs.set({ [STRIP_SIZE_KEY]: size });
 }
+
+// --- Geometry (WU-N) -------------------------------------------------------
+// SEG_SIZE + paddings are the SINGLE source of the strip window size and
+// mirror the CSS custom properties on #bar (index.html). Kept as a pure
+// function so the horizontal/vertical x normal/xl matrix is unit-tested.
+export const SEG_SIZE: Record<StripSize, { readonly width: number; readonly height: number }> = {
+  normal: { width: 180, height: 48 },
+  xl: { width: 230, height: 68 },
+};
+export const STRIP_PAD_X = 16;
+export const STRIP_PAD_Y = 16;
+export const REFRESH_SEGMENT_WIDTH = 44;
+
+export interface StripGeometry {
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Window size for `segmentCount` provider segments + the trailing refresh
+ * segment. Horizontal: one row (refresh rides the width). Vertical: one
+ * column (refresh rides below, as a full-width row of segment height).
+ * An empty strip still renders one hint segment.
+ */
+export function stripGeometry(layout: StripLayout, segmentCount: number): StripGeometry {
+  const count = Math.max(segmentCount, 1);
+  const seg = SEG_SIZE[layout.size];
+  if (layout.orientation === "vertical") {
+    return {
+      width: STRIP_PAD_X + seg.width,
+      height: STRIP_PAD_Y + (count + 1) * seg.height,
+    };
+  }
+  return {
+    width: STRIP_PAD_X + count * seg.width + REFRESH_SEGMENT_WIDTH,
+    height: seg.height,
+  };
+}

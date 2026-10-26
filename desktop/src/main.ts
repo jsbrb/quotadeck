@@ -8,7 +8,7 @@ import { createDesktopTransport } from "./lib/desktop-transport";
 import { setupKeysView } from "./lib/keys-view";
 import { renderSegments, renderTickNotice, shortName, visibleCount } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
-import { readStripLayout, type StripLayout } from "./lib/strip-prefs";
+import { readStripLayout, stripGeometry, type StripLayout } from "./lib/strip-prefs";
 import { resolveChosenBand } from "./lib/tray-badge";
 
 // Second-taskbar shell (WU-L): dark strip of EQUAL-SIZED minimalist segments,
@@ -18,13 +18,8 @@ import { resolveChosenBand } from "./lib/tray-badge";
 // the tray menu.
 
 const REFRESH_PERIOD_MS = 60_000;
-// Segment geometry must match the CSS custom properties (index.html):
-// normal = taskbar height 48px tight; xl = 68px with maxed fonts (S12).
-const SEG_SIZE = { normal: { width: 180, height: 48 }, xl: { width: 230, height: 68 } } as const;
-const BAR_PAD_X = 16;
-const BAR_PAD_Y = 16;
-const REFRESH_SEGMENT_WIDTH = 44;
-const EMPTY_SEGMENTS = 1;
+// Geometry lives in strip-prefs.ts (stripGeometry + SEG_SIZE), mirrored by
+// the CSS custom properties on #bar (index.html) — WU-N.
 const LAST_TICK_ERROR_KEY = "qd:last-tick-error";
 // Trailing refresh segment (S12): manual reload without waiting for the tick.
 const REFRESH_SEGMENT_HTML = `
@@ -55,26 +50,35 @@ let lastHints: Partial<Record<ProviderId, string>> = {};
 
 async function refreshLayout(): Promise<void> {
   layout = await readStripLayout(prefs);
-  document.body.dataset.size = layout.size;
-  document.body.dataset.orientation = layout.orientation;
+  applyLayoutToBar();
 }
 
 /**
- * Deterministic window size from segment count + layout (S9/S10/S11): the
- * horizontal strip grows leftward from the bottom-right dock; the vertical
- * column grows upward from the same dock. SEG_SIZE mirrors the CSS vars.
+ * WU-N: orientation/size are applied to `#bar` directly — classList for the
+ * child overrides + CSS vars, inline style for flex-direction/height. The
+ * previous `body[data-orientation]` attribute selectors proved fragile at
+ * runtime (vertical window sizing with horizontal rendering); inline always
+ * wins the cascade and classList on a referenced element cannot silently
+ * miss.
  */
-function reflowBar(): void {
-  const count = Math.max(lastVisibleCount, EMPTY_SEGMENTS);
-  const seg = SEG_SIZE[layout.size];
-  if (layout.orientation === "vertical") {
-    const width = seg.width + BAR_PAD_X;
-    const height = BAR_PAD_Y + count * seg.height + seg.height;
-    void invoke("reflow_flyout", { width, height });
+function applyLayoutToBar(): void {
+  if (bar === null) {
     return;
   }
-  const width = BAR_PAD_X + count * seg.width + REFRESH_SEGMENT_WIDTH;
-  void invoke("reflow_flyout", { width, height: seg.height });
+  const vertical = layout.orientation === "vertical";
+  bar.classList.toggle("vertical", vertical);
+  bar.classList.toggle("size-xl", layout.size === "xl");
+  bar.style.flexDirection = vertical ? "column" : "row";
+  bar.style.height = vertical ? "auto" : "100%";
+}
+
+/**
+ * Deterministic window size from segment count + layout (S9/S10/S11) —
+ * stripGeometry() is the pure, unit-tested source of the matrix.
+ */
+function reflowBar(): void {
+  const geometry = stripGeometry(layout, lastVisibleCount);
+  void invoke("reflow_flyout", { width: geometry.width, height: geometry.height });
 }
 
 function renderBar(): void {
