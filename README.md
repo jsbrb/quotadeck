@@ -1,15 +1,16 @@
 # quotadeck
 
 A browser extension badge that tracks AI provider usage and balances. This
-v0.4.0 public build ships the Qwen (Alibaba Cloud Model Studio) provider
-alongside ZAI (Zhipu AI, the GLM Coding Plan): the Chrome Web Store public
-line is no longer GLM-only — this release covers the Z.ai GLM monitors and
-the Qwen Token Plan quota window. The OpenAI and Kimi (Moonshot AI)
-implementations are retained in source but stay unshipped: they never
-register in the worker, never render in the popup, and are granted no host
-permissions.
+v0.5.0 public build ships the DeepSeek (pay-as-you-go wallet) provider
+alongside ZAI (Zhipu AI, the GLM Coding Plan) and Qwen (Alibaba Cloud
+Model Studio): the DeepSeek card derives the consumed percentage of the
+pre-paid wallet (topped-up + granted credits) from the official balance
+endpoint — no reset windows, just wallet burn. The OpenAI and Kimi
+(Moonshot AI) implementations are retained in source but stay unshipped:
+they never register in the worker, never render in the popup, and are
+granted no host permissions.
 
-**Status: v0.4.0 — Qwen Token Plan quota, twin cards, one-touch badge.** The extension is a
+**Status: v0.5.0 — DeepSeek wallet burn, twin cards, one-touch badge.** The extension is a
 working Manifest V3 service worker plus action popup that fetches real usage
 data every minute through an allowlist-constrained network client. ZAI usage
 comes from the official monitor endpoint (`GET /api/monitor/usage/quota/limit`):
@@ -44,9 +45,10 @@ encryption claims.
    ```
 2. Open `chrome://extensions`, enable **Developer mode**, click **Load
     unpacked**, and select the `extension/dist` directory. The shipped
-    `host_permissions` cover exactly the seven hosts of the two shipped
-    providers — the ZAI monitor hosts (`api.z.ai` and `open.bigmodel.cn`)
-    plus the five Qwen BSS/token-plan hosts (see Security posture below);
+    `host_permissions` cover exactly the eight hosts of the three shipped
+    providers — the ZAI monitor hosts (`api.z.ai` and `open.bigmodel.cn`),
+    the five Qwen BSS/token-plan hosts, and the DeepSeek wallet host
+    `api.deepseek.com` (see Security posture below);
     if you previously loaded the GLM-only build, reload the extension so
     Chrome re-prompts for the widened host permissions.
 3. The worker registers a `usage-refresh` alarm (1-minute period) on install
@@ -57,11 +59,13 @@ encryption claims.
    non-secret preference `qd:pref:badge-provider`, default ZAI): ZAI shows the
    5h percentage (uncapped above 100) with the plan level as fallback, Qwen
    shows the token-plan quota percentage when present (rendered like the 5h
-   figure) and clears otherwise. A chosen provider that did not
+   figure) and clears otherwise, and DeepSeek shows the consumed-percentage
+   of its pre-paid wallet. A chosen provider that did not
    run — or is not shipped in this build — clears the badge rather than
    showing a stale figure.
 4. The badge background is threshold-colored from the chosen figure — the ZAI
-   5h percentage, or the Qwen quota percentage — so the state reads at a
+   5h percentage, the Qwen quota percentage, or the DeepSeek wallet
+   percentage — so the state reads at a
    glance: light slate `#E2E8F0` below 50% with near-black text `#0F172A`,
    orange `#F97316` from 50%, deep orange `#EA580C` from 80%, and red
    `#DC2626` from 90% (uncapped — 137% is still red), with white text from 50%
@@ -132,7 +136,7 @@ Run from the repository root:
 | `npm --prefix extension run build` | esbuild: bundle `extension/src/background.ts` → `extension/dist/background.js` and `extension/src/popup/main.ts` → `extension/dist/popup.js`, copy the MV3 manifest + `popup.html` + `icons/` + local `fonts/` |
 | `npm --prefix extension run test` | vitest: hermetic unit suite (no Chrome runtime, no network) |
 | `npm --prefix extension run typecheck` | `tsc --noEmit` (strict) |
-| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.4.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
+| `npm --prefix extension run zip` | package the *contents* of `extension/dist` into `extension/quotadeck-v0.5.0.zip` for Chrome Web Store upload (`manifest.json` at the zip root). Windows PowerShell only: it uses the .NET `System.IO.Compression` API and writes every entry with a forward-slash path (`icons/icon16.png`), avoiding the backslash-separator hazard of `Compress-Archive`. The zip is gitignored — never commit it. |
 
 Beyond these, `scripts/live-contract.ps1` is the opt-in **live contract publish gate**: it runs the real builder → signer → allowlist client → transport → parser pipeline against the live Qwen endpoints (credentials extracted in memory, never printed). Its test skips silently in the hermetic suite and only runs when the script opts it in via `QUOTADECK_LIVE=1` — run it green before any publish decision on the qwen token-plan feature.
 
@@ -141,13 +145,14 @@ Beyond these, `scripts/live-contract.ps1` is the opt-in **live contract publish 
 - **Zero runtime npm dependencies** — the toolchain (TypeScript, esbuild,
   vitest, happy-dom for the DOM test environment) is dev-only and nothing is
   bundled but first-party code.
-- **`host_permissions` = exactly the seven shipped hosts** — the ZAI (GLM)
-  monitor entries (`api.z.ai`, `open.bigmodel.cn`) plus the five Qwen
+- **`host_permissions` = exactly the eight shipped hosts** — the ZAI (GLM)
+  monitor entries (`api.z.ai`, `open.bigmodel.cn`), the five Qwen
   BSS/token-plan entries (`business.aliyuncs.com`,
   `business.ap-southeast-1.aliyuncs.com`,
   `token-plan.ap-southeast-1.maas.aliyuncs.com`,
   `bailian-singapore-cs.alibabacloud.com`,
-  `modelstudio.ap-southeast-1.aliyuncs.com`). Live usage
+  `modelstudio.ap-southeast-1.aliyuncs.com`), and the DeepSeek wallet entry
+  (`api.deepseek.com`). Live usage
   requires cross-origin fetch from the worker, so the manifest grants the
   per-provider allowlist **filtered to the shipped providers**
   (`SHIPPED_PROVIDER_IDS`) and nothing more: a sync test derives the expected

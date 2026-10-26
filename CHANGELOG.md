@@ -3,6 +3,30 @@
 All notable changes to quotadeck are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-10-25
+
+### Added
+
+- DeepSeek provider (pay-as-you-go wallet): the balance endpoint is the
+  only account surface, so consumption is derived — wallet total =
+  topped-up + granted credits, consumed = total − remaining, percentage
+  uncapped and honestly omitted at a zero total.
+- DeepSeek twin card: the consumed percentage renders as the card hero
+  and inside its threshold bar, with a `Wallet: $X of $Y used` line —
+  no reset countdowns exist on a pre-paid wallet.
+- DeepSeek badge: the chosen-provider badge renders the wallet
+  percentage through the same threshold bands as ZAI/Qwen.
+- Live contract publish-gate DeepSeek leg: the real bearer → allowlist
+  client → fetch → parse pipeline runs against the live balance
+  endpoint under `QUOTADECK_LIVE=1` + `DEEPSEEK_LIVE_KEY`.
+
+### Changed
+
+- Shipped surface grows to three providers and eight hosts
+  (`api.deepseek.com` joins the allowlist, manifest and endpoints
+  evidence). Badge description and store copy now name all three
+  providers.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

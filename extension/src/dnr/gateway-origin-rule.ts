@@ -13,7 +13,7 @@
 // as initiator, to the gateway host, and to the quota api path.
 //
 // This is deliberately NOT the DNR header-injection hito-9 rejected
-// (openspec/changes/hito-9-qwen-console-session/exploration.md §Lane 1(c)).
+// (hito-9 exploration §Lane 1(c)).
 // That proposal persisted cookie/session VALUES as rule data — secret
 // material in browser-managed storage, bypassing the credential seam. The
 // rule built here carries only PUBLIC constants (a well-known console

@@ -37,11 +37,12 @@ describe('manifest host_permissions sync (AD-16, hito-10 shipped filter)', () =>
     deepStrictEqual(manifest.host_permissions, expectedHostPatterns());
   });
 
-  it('pins the exact shipped host patterns (zai + qwen: the two shipped providers)', () => {
+  it('pins the exact shipped host patterns (zai + qwen + deepseek: the three shipped providers)', () => {
     const manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as {
       host_permissions?: string[];
     };
     deepStrictEqual(manifest.host_permissions, [
+      'https://api.deepseek.com/*',
       'https://api.z.ai/*',
       'https://bailian-singapore-cs.alibabacloud.com/*',
       'https://business.aliyuncs.com/*',

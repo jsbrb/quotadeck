@@ -200,6 +200,26 @@ Verification levels:
   is implied**: a session-rule header rewrite is not a new network destination — the
   console origin is never a fetch target and `host_permissions` stay as pinned.
 
+## DeepSeek — `api.deepseek.com` — verified-official
+
+- Endpoint: `GET https://api.deepseek.com/user/balance`.
+- Auth: Bearer API key (`sk-...`) in the `Authorization` header.
+- Live capture (maintainer, fresh international account, 2026-10-25):
+  `{ "is_available": true, "balance_infos": [{ "currency": "USD", "total_balance": "2.00", "granted_balance": "0.00", "topped_up_balance": "2.00" }] }`.
+- ALL monetary figures are decimal STRINGS on the wire — parsing is
+  string→number.
+- DeepSeek exposes NO usage-history endpoint: the balance is the only account
+  surface, so consumption is DERIVED mathematically — wallet
+  `total = topped_up + granted`, `consumed = total − total_balance`,
+  `pct = consumed / total × 100` passing through UNCAPPED and OMITTED at a
+  zero total (honest absence: no hero, no bar, no wallet line). Only the
+  FIRST `balance_infos` entry is parsed; `is_available: false` is a STATE,
+  not an error — the figures still render.
+- Caveat: `granted_balance` counts only NOT-EXPIRED grants, so an expired
+  grant silently counts as consumed.
+- Source: official DeepSeek API documentation plus the maintainer live
+  capture (2026-10-25). NOTE: no API key material ever enters this file.
+
 ## OpenAI — `api.openai.com` — verified-official
 
 - Endpoint: `GET https://api.openai.com/v1/organization/costs`.
@@ -250,6 +270,10 @@ AD-5), scoped per provider. This block must stay structurally identical to
   },
   "kimi": {
     "hosts": ["api.moonshot.cn"],
+    "verification": "official"
+  },
+  "deepseek": {
+    "hosts": ["api.deepseek.com"],
     "verification": "official"
   }
 }

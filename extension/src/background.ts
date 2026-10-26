@@ -116,6 +116,10 @@ export interface ChosenBadge {
  *   formatted through the SAME helper the zai 5h path uses (no rounding
  *   games) — falls back to the balance rendering, and with neither figure
  *   the honest badge is the empty clear;
+ * - a chosen deepseek entry carries the wallet percentage when present —
+ *   formatted through the SAME helper as zai/qwen — and falls back to the
+ *   balance rendering when the wallet total is 0 (percentage honestly
+ *   omitted);
  * - anything else renders `formatBadgeText` with the zai 5h percentage
  *   coloring the threshold band when present.
  */
@@ -133,6 +137,9 @@ export function resolveChosenBadge(
   const usage = entry.usage;
   if (usage.providerId === 'qwen' && usage.quota?.percentage !== undefined) {
     return { text: formatPercentageBadgeText(usage.quota.percentage), percentage: usage.quota.percentage };
+  }
+  if (usage.providerId === 'deepseek' && usage.wallet?.percentage !== undefined) {
+    return { text: formatPercentageBadgeText(usage.wallet.percentage), percentage: usage.wallet.percentage };
   }
   return { text: formatBadgeText(usage), percentage: usage.windows?.fiveHour?.percentage };
 }

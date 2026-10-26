@@ -35,10 +35,12 @@ describe('badge provider preference store (hito-12 WU-D2)', () => {
   });
 
   it('defaults to zai when the stored value is invalid (no write-on-read)', async () => {
-    await browser.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'deepseek' });
+    // 'deepseek' was the sentinel until hito-13 made it a real id — 'claude'
+    // stays outside PROVIDER_METADATA, which is the property under test.
+    await browser.local.set({ [BADGE_PROVIDER_STORAGE_KEY]: 'claude' });
 
     expect(await readBadgeProvider(browser.local)).toBe('zai');
-    expect(browser.local.snapshot()).toEqual({ [BADGE_PROVIDER_STORAGE_KEY]: 'deepseek' }); // not rewritten
+    expect(browser.local.snapshot()).toEqual({ [BADGE_PROVIDER_STORAGE_KEY]: 'claude' }); // not rewritten
   });
 
   it('rejects an invalid provider id on write and stores nothing', async () => {

@@ -13,9 +13,9 @@ const read = (relative: string): string => readFileSync(join(here, relative), 'u
 describe('milestone copy (AD-24)', () => {
   it('the manifest description announces live provider usage', () => {
     const manifest = JSON.parse(read('../public/manifest.json')) as { description: string };
-    // Store listing copy (v0.4.0): GLM + Qwen plan usage, verbatim from the manifest.
+    // Store listing copy (v0.5.0): GLM + Qwen plan usage + DeepSeek wallet burn, verbatim from the manifest.
     expect(manifest.description).toBe(
-      'Track your GLM and Qwen plan usage live — 5-hour, weekly and monthly quota windows in one toolbar badge.',
+      'Track your GLM, Qwen and DeepSeek usage live — plan quotas and wallet burn in one toolbar badge.',
     );
   });
 
@@ -51,13 +51,13 @@ describe('milestone copy (AD-24)', () => {
     expect(readme).toContain('ZHIPU'); // the platform selector
     expect(readme).toContain('api.z.ai'); // monitor hosts named
     expect(readme).toContain('open.bigmodel.cn');
-    expect(readme).toContain('seven shipped hosts'); // hito-12 re-ship: host_permissions is the allowlist filtered to SHIPPED_PROVIDER_IDS
+    expect(readme).toContain('eight shipped hosts'); // hito-13: host_permissions is the allowlist filtered to SHIPPED_PROVIDER_IDS
     expect(readme).toMatch(/raw key|verbatim/i); // raw-auth note: no Bearer on monitor hosts
   });
 
   it('the README documents the 0.3.0 restyle: design system, local fonts, last-known card', () => {
     const readme = read('../../README.md');
-    expect(readme).toContain('v0.4.0'); // status line tracks the manifest version
+    expect(readme).toContain('v0.5.0'); // status line tracks the manifest version
     expect(readme).toMatch(/neo-brutalist/i); // the imported design system is named
     expect(readme).toMatch(/local (OFL )?woff2 fonts|fonts are local/i); // no remote fonts
     expect(readme).toContain('LAST KNOWN'); // the frozen-telemetry cherry-pick
