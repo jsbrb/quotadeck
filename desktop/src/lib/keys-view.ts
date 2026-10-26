@@ -11,12 +11,25 @@ import type { ProviderId } from "@shared/core/provider";
 import { KeyStore, type StorageArea } from "@shared/storage/key-store";
 import { readQwenSite, writeQwenSite } from "@shared/storage/qwen-site-store";
 import { readZaiPlatform, writeZaiPlatform } from "@shared/storage/zai-platform-store";
+import { shortName } from "./render";
+import {
+  readStripLayout,
+  writeStripOrientation,
+  writeStripOrder,
+  writeStripSize,
+  type StripOrientation,
+  type StripSize,
+} from "./strip-prefs";
 
 export interface KeysViewDeps {
   readonly prefs: StorageArea;
   readonly secrets: StorageArea;
   /** Called after any change that should trigger a fresh tick. */
   readonly onKeyChange: () => void;
+  /** Called after a strip layout change (no network tick needed). */
+  readonly onLayoutChange: () => void;
+  /** Providers with stored keys — the strip order list source (S8). */
+  readonly stripProviders: () => ProviderId[];
 }
 
 function requireEl<T extends HTMLElement>(id: string): T {
@@ -35,6 +48,11 @@ function setStatus(el: HTMLElement, message: string, isError: boolean): void {
 export function setupKeysView(deps: KeysViewDeps): void {
   const keys = new KeyStore(deps.secrets);
   const prefs = deps.prefs;
+
+  function afterKeyChange(): void {
+    void renderOrderList();
+    deps.onKeyChange();
+  }
 
   const zaiKey = requireEl<HTMLInputElement>("zai-key");
   const zaiMasked = requireEl("zai-masked");
@@ -77,7 +95,7 @@ export function setupKeysView(deps: KeysViewDeps): void {
       .then(() => {
         zaiKey.value = "";
         setStatus(zaiMasked, "", false);
-        return refreshMasks().then(deps.onKeyChange);
+        return refreshMasks().then(afterKeyChange);
       })
       .catch((error: unknown) => {
         setStatus(zaiMasked, error instanceof Error ? error.message : String(error), true);
@@ -88,7 +106,7 @@ export function setupKeysView(deps: KeysViewDeps): void {
     void keys
       .revokeCredential("zai")
       .then(refreshMasks)
-      .then(deps.onKeyChange)
+      .then(afterKeyChange)
       .catch((error: unknown) => {
         setStatus(zaiMasked, error instanceof Error ? error.message : String(error), true);
       });
@@ -103,7 +121,7 @@ export function setupKeysView(deps: KeysViewDeps): void {
         qwenAkId.value = "";
         qwenAkSecret.value = "";
         setStatus(qwenMasked, "", false);
-        return refreshMasks().then(deps.onKeyChange);
+        return refreshMasks().then(afterKeyChange);
       })
       .catch((error: unknown) => {
         setStatus(qwenMasked, error instanceof Error ? error.message : String(error), true);
@@ -114,7 +132,7 @@ export function setupKeysView(deps: KeysViewDeps): void {
     void keys
       .revokeCredential("qwen")
       .then(refreshMasks)
-      .then(deps.onKeyChange)
+      .then(afterKeyChange)
       .catch((error: unknown) => {
         setStatus(qwenMasked, error instanceof Error ? error.message : String(error), true);
       });
@@ -127,7 +145,7 @@ export function setupKeysView(deps: KeysViewDeps): void {
       .then(() => {
         qwenPlanKey.value = "";
         setStatus(qwenPlanMasked, "", false);
-        return refreshMasks().then(deps.onKeyChange);
+        return refreshMasks().then(afterKeyChange);
       })
       .catch((error: unknown) => {
         setStatus(qwenPlanMasked, error instanceof Error ? error.message : String(error), true);
@@ -138,7 +156,7 @@ export function setupKeysView(deps: KeysViewDeps): void {
     void keys
       .revokeCredential("qwen-plan")
       .then(refreshMasks)
-      .then(deps.onKeyChange)
+      .then(afterKeyChange)
       .catch((error: unknown) => {
         setStatus(qwenPlanMasked, error instanceof Error ? error.message : String(error), true);
       });
@@ -147,10 +165,82 @@ export function setupKeysView(deps: KeysViewDeps): void {
   // Selectors persist immediately and re-tick: the platform/site choice is
   // the base URL of the very next dispatch (AD-28 parity).
   zaiPlatform.addEventListener("change", () => {
-    void writeZaiPlatform(prefs, zaiPlatform.value as "zai" | "zhipu").then(deps.onKeyChange);
+    void writeZaiPlatform(prefs, zaiPlatform.value as "zai" | "zhipu").then(afterKeyChange);
   });
   qwenSite.addEventListener("change", () => {
-    void writeQwenSite(prefs, qwenSite.value as "international" | "china").then(deps.onKeyChange);
+    void writeQwenSite(prefs, qwenSite.value as "international" | "china").then(afterKeyChange);
+  });
+
+  // --- TRAY STRIP settings (WU-L): order, orientation, size. ---
+  const orderList = requireEl("strip-order");
+  const orientationSel = requireEl<HTMLSelectElement>("strip-orientation");
+  const sizeSel = requireEl<HTMLSelectElement>("strip-size");
+
+  function currentOrder(): ProviderId[] {
+    const visible = deps.stripProviders();
+    const listed = orderList.querySelectorAll<HTMLElement>(".order-row");
+    const out: ProviderId[] = [];
+    for (const row of listed) {
+      const id = row.dataset.id;
+      if (id !== undefined && visible.includes(id as ProviderId)) {
+        out.push(id as ProviderId);
+      }
+    }
+    return [...out, ...visible.filter((id) => !out.includes(id))];
+  }
+
+  async function renderOrderList(): Promise<void> {
+    const { order } = await readStripLayout(prefs);
+    const visible = deps.stripProviders();
+    const listed = order.filter((id) => visible.includes(id));
+    const full: ProviderId[] = [...listed, ...visible.filter((id) => !listed.includes(id))];
+    if (full.length === 0) {
+      orderList.innerHTML = '<p class="row">NO PROVIDERS CONFIGURED YET</p>';
+      return;
+    }
+    orderList.innerHTML = full
+      .map(
+        (id, index) =>
+          `<div class="order-row" data-id="${id}">` +
+          `<span class="order-name">${index + 1}. ${shortName(id)}</span>` +
+          `<button type="button" data-act="up" aria-label="Move ${shortName(id)} up">▲</button>` +
+          `<button type="button" data-act="down" aria-label="Move ${shortName(id)} down">▼</button>` +
+          `</div>`,
+      )
+      .join("");
+    for (const button of orderList.querySelectorAll<HTMLButtonElement>(".order-row button")) {
+      button.addEventListener("click", () => {
+        const row = button.closest<HTMLElement>(".order-row");
+        const id = row?.dataset.id as ProviderId | undefined;
+        if (id === undefined) {
+          return;
+        }
+        const ids = currentOrder();
+        const from = ids.indexOf(id);
+        const to = button.dataset.act === "up" ? from - 1 : from + 1;
+        if (from < 0 || to < 0 || to >= ids.length) {
+          return;
+        }
+        const swapped = [...ids];
+        const tmp = swapped[from];
+        if (tmp !== undefined && swapped[to] !== undefined) {
+          swapped[from] = swapped[to];
+          swapped[to] = tmp;
+        }
+        void writeStripOrder(prefs, swapped)
+          .then(renderOrderList)
+          .then(deps.onLayoutChange);
+      });
+    }
+  }
+
+  orientationSel.addEventListener("change", () => {
+    void writeStripOrientation(prefs, orientationSel.value as StripOrientation).then(
+      deps.onLayoutChange,
+    );
+  });
+  sizeSel.addEventListener("change", () => {
+    void writeStripSize(prefs, sizeSel.value as StripSize).then(deps.onLayoutChange);
   });
 
   // Initial paint: stored selections + masked states. The tray badge has no
@@ -161,5 +251,10 @@ export function setupKeysView(deps: KeysViewDeps): void {
   void readQwenSite(prefs).then((site) => {
     qwenSite.value = site;
   });
+  void readStripLayout(prefs).then(({ orientation, size }) => {
+    orientationSel.value = orientation;
+    sizeSel.value = size;
+  });
+  void renderOrderList();
   void refreshMasks();
 }

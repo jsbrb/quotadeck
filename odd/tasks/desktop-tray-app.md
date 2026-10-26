@@ -48,6 +48,20 @@ base `origin/develop` @ 2066ec8). Delivery: ask-on-risk. Test runner: vitest
   resetea. información mínima. y por supuesto no puede haber toolbars, es
   decir, el tamaño tiene que ser establecido». Crecer según claves
   (confirmado: opción «Crecer según claves»).
+- S11: Uniformidad y settings del strip (2026-10-26, verbatim): «cuando le dé
+  al icono... y lo deje pineado, queden pequeñas cards del tamaño de la barra
+  de tareas en la cual se pueda leer perfectamente el proveedor y el tanto
+  por ciento... una recomendación es que sea el número, espacio y el tanto
+  por ciento para que no se solape. Y debajo... cuánto queda para la ventana
+  o cuánto dinero queda del dinero total en el caso de DeepSeek... el tamaño
+  de la de Keywen Cloud es como tres veces la de ZAI... tienen que ser del
+  mismo tamaño... las tarjetas deben aparecer una vez que se configure el
+  proveedor. Si no se configura el proveedor no aparecen... cambiar el orden
+  de las cards... que salga como columna a la derecha del todo pegado a la
+  barra de tareas y al borde de la pantalla en la derecha... opciones de
+  ajustar el tamaño... normal o extra grande». Ajustes acordados: Normal =
+  48px exactos de taskbar, XL = 2x; hoy primero el strip, WU-K (login)
+  después.
 
 ## Tasks
 
@@ -67,7 +81,12 @@ base `origin/develop` @ 2066ec8). Delivery: ask-on-risk. Test runner: vitest
 | T12 | S4 | Diagnóstico qwen gateway: captura de console.error + body crudo del gateway en prefs. HALLAZGO: mint OK (acs3 + RAM policy bien); el gateway responde 200 **text/html** — página de bloqueo detail-exception de Taobao (securitySDK, Tengine/Swift). UA/Accept/Accept-Language/HTTP2/gzip/cookies NO lo evitan | inline | ✅ diagnóstico hecho — commit WIP |
 | T13 | S4 | Qwen gateway: **login embebido** (decisión del usuario sobre cookie-paste y degradación honesta) — webview con el console real, cookies de sesión leídas nativamente y adjuntas al gateway; expiración → segmento `SESSION EXPIRED — SIGN IN`. Riesgo spike: verificar API `cookies_for_url` en Tauri 2.12 PRIMERO; plan B = desafío acw en webview | inline | pendiente (próxima sesión) |
 | T14 | S4 | Sync develop: hito-13 (DeepSeek) **aún no aterrizó** en origin/develop — y develop fue REESCRITO (hashes nuevos, mismos mensajes). Re-check del fetch al retomar; merge origin/develop → nuestra rama cuando aterrice; luego host de DeepSeek a la allowlist desktop | inline | pendiente (bloqueado por el merge externo) |
-| T15 | S10 | Uniformidad de segmentos: con dato real, qwen/deepseek usan la plantilla exacta de ZAI; revisar CSS restante | inline | pendiente |
+| T15 | S10 | Uniformidad de segmentos: con dato real, qwen/deepseek usan la plantilla exacta de ZAI; revisar CSS restante | inline | ✅ absorbido por T16-WU-L |
+| T16 | S11 | Cards uniformes: segmentos de ancho fijo (`flex: 0 0 var(--seg-w)` + ellipsis) con la misma constante en el reflow JS — fix del bug "3x" (antes `flex 0 0 auto` = ancho por contenido desbordando). Formato `N %` (número espacio signo) | inline | ✅ hecho — commit WU-L |
+| T17 | S11 | Línea inferior por tipo de dato: RESETS countdown (zai/qwen) o `simboloX / simboloY LEFT` (wallet DeepSeek — forma tomada por `git show` read-only de la rama hito-13: value=restante, wallet.total, wallet.percentage) | inline | ✅ hecho — commit WU-L |
+| T18 | S11 | Orden de cards: lista con ▲▼ en Keys, persistido `qd:pref:strip-order` (orden parcial + resto en orden de metadata) | inline | ✅ hecho — commit WU-L |
+| T19 | S11 | Orientación: `qd:pref:strip-orientation` horizontal|vertical; columna pegada al borde derecho creciendo hacia arriba desde la taskbar (mismo dock work_area, sin cambios Rust) | inline | ✅ hecho — commit WU-L |
+| T20 | S11 | Tamaño: `qd:pref:strip-size` normal (230×48, taskbar exacta) \| xl (300×96, fuentes ×1.5); CSS vars + SEG_SIZE espejo en main.ts | inline | ✅ hecho — commit WU-L (vitest 30/30 ✅) |
 
 ## Log
 
@@ -165,7 +184,20 @@ base `origin/develop` @ 2066ec8). Delivery: ask-on-risk. Test runner: vitest
   Decisión del usuario: **login embebido** (spike WU-K, próxima sesión).
   Instrumentación temporal todavía en el árbol (capturedErrors/
   capturedResponses/qd:console-log) — remover al cerrar WU-K.
-- ESTADO AL CORTAR: app corriendo con build diagnóstico (ZAI datos reales
-  20%, qwen NO DATA — WAF). Prefs del usuario en
+- ESTADO AL CORTAR (2026-10-25): app corriendo con build diagnóstico (ZAI
+  datos reales 20%, qwen NO DATA — WAF). Prefs del usuario en
   %APPDATA%\es.thenorthcode.quotadeck.desktop\. 9 commits en la rama
   (WU-A..I + docs); desarrolla en worktree, extension/ intocada.
+- 2026-10-26 — WU-L (S11, T16-T20): causa del "3x" = `.seg { flex: 0 0 auto }`
+  (ancho por contenido) contra ventana de ancho fijo por segmento → texto
+  largo desbordaba al vecino. Fix: ancho fijo real por CSS var (--seg-w) +
+  ellipsis + SEG_SIZE espejo en JS (main.ts). Formato `N %` (S11). Wallet de
+  DeepSeek obtenido por `git show feature/hito-13-deepseek-wallet:extension/
+  src/providers/deepseek.ts` (READ-ONLY, rama ajena intacta): value=restante,
+  wallet{currency,total,consumed,percentage} → segmento arriba %consumido,
+  abajo `¥3.50 / ¥10.00 LEFT`. Settings nuevos (prefs desktop-only):
+  strip-order (▲▼ en Keys), strip-orientation (horizontal|vertical — columna
+  con el MISMO dock bottom-right creciendo arriba, reflow H=pad+n×segH),
+  strip-size (normal 230×48 | xl 300×96, fuentes ×1.5). Verificado: tsc ✅,
+  vitest 30/30 ✅, build ✅, cargo build ✅. Smoke visual pendiente del
+  usuario.

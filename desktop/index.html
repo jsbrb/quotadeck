@@ -5,9 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>QuotaDeck</title>
     <style>
-      /* Second-taskbar strip (WU-G): dark, fixed height, no window chrome.
-         The window is ONLY the bar in quotas mode; KEYS opens as a taller
-         docked window with the same dark canvas. */
+      /* Second-taskbar strip (WU-L): dark, no window chrome, EQUAL fixed-size
+         segments (T16) driven by CSS vars — JS reflow math mirrors SEG_SIZE.
+         Orientation and size are user settings (T19/T20). */
       :root {
         --bar-bg: #1f1f1f;
         --bar-sep: #383838;
@@ -18,16 +18,31 @@
         --ink: #0f172a;
         --slate: #e2e8f0;
         --shadow-offset: 4px;
+        --seg-w: 230px;
+        --seg-h: 48px;
+        --f-name: 10px;
+        --f-pct: 12px;
+        --f-sub: 9px;
+      }
+      body[data-size="xl"] {
+        --seg-w: 300px;
+        --seg-h: 96px;
+        --f-name: 15px;
+        --f-pct: 22px;
+        --f-sub: 13px;
       }
       * {
         box-sizing: border-box;
       }
+      html,
       body {
         margin: 0;
+        height: 100%;
+      }
+      body {
         background: var(--bar-bg);
         color: var(--bar-text);
         font-family: "JetBrains Mono", ui-monospace, monospace;
-        min-height: 100vh;
         user-select: none;
         overflow: hidden;
       }
@@ -36,46 +51,71 @@
         flex-direction: row;
         flex-wrap: nowrap;
         align-items: stretch;
-        height: 68px;
+        height: 100%;
+      }
+      body[data-orientation="vertical"] #bar {
+        flex-direction: column;
+        align-items: flex-start;
+        height: auto;
       }
       .seg {
         display: flex;
         flex-direction: column;
         justify-content: center;
-        gap: 3px;
-        padding: 0 16px;
+        gap: 2px;
+        padding: 0 14px;
+        flex: 0 0 var(--seg-w);
+        width: var(--seg-w);
+        height: 100%;
         border-left: 1px solid var(--bar-sep);
-        flex: 0 0 auto;
-        white-space: nowrap;
+        overflow: hidden;
+      }
+      body[data-orientation="vertical"] .seg {
+        flex: 0 0 var(--seg-h);
+        width: var(--seg-w);
+        height: var(--seg-h);
+        border-left: none;
+        border-top: 1px solid var(--bar-sep);
       }
       .seg:first-child {
-        border-left: none;
+        border: none;
       }
       .seg-top {
         display: flex;
         align-items: baseline;
         gap: 10px;
+        min-width: 0;
       }
       .seg-name {
-        font-size: 12px;
+        font-size: var(--f-name);
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .seg-pct {
-        font-size: 14px;
+        font-size: var(--f-pct);
         font-weight: 700;
+        white-space: nowrap;
       }
       .seg-reset {
-        font-size: 10px;
+        font-size: var(--f-sub);
         color: var(--bar-muted);
         letter-spacing: 0.06em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .seg-err {
-        font-size: 11px;
+        font-size: var(--f-sub);
         color: var(--warn);
         font-weight: 700;
         letter-spacing: 0.06em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       /* KEYS mode: same dark canvas, light instrument panels. */
       #keys {
@@ -88,6 +128,34 @@
       #keys.hidden,
       #bar.hidden {
         display: none;
+      }
+      .order-list {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 10px;
+      }
+      .order-row {
+        display: flex;
+        align-items: center;
+        border: 2px solid var(--ink);
+        background: #ffffff;
+        padding: 2px 6px;
+      }
+      .order-name {
+        flex: 1;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .order-row button {
+        border: 1px solid var(--ink);
+        background: var(--slate);
+        color: var(--ink);
+        font: inherit;
+        font-size: 9px;
+        width: 22px;
+        cursor: pointer;
       }
       .card {
         border: 2px solid var(--ink);
@@ -208,6 +276,24 @@
           <button id="qwen-plan-save" type="button">SAVE</button>
           <button id="qwen-plan-revoke" type="button">REVOKE</button>
         </div>
+      </section>
+      <section class="card">
+        <h2 class="provider-name">TRAY STRIP</h2>
+        <div id="strip-order" class="order-list"></div>
+        <label class="field">
+          <span>ORIENTATION</span>
+          <select id="strip-orientation">
+            <option value="horizontal">Horizontal — above taskbar</option>
+            <option value="vertical">Vertical — right edge, up from taskbar</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>SIZE</span>
+          <select id="strip-size">
+            <option value="normal">Normal — taskbar height</option>
+            <option value="xl">Extra large</option>
+          </select>
+        </label>
       </section>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -1,12 +1,16 @@
-// Taskbar segment rendering (WU-G): the flyout IS a second taskbar strip.
-// One minimalist segment per keyed provider — name, threshold-colored
-// percentage, reset countdown. No cards, no chrome. The threshold colors
+// Taskbar segment rendering (WU-G/WU-L): the flyout IS a second taskbar strip.
+// One equal-sized minimalist segment per configured provider — name +
+// threshold-colored percentage on top, context below (ZAI/Qwen: reset
+// countdown; DeepSeek wallet: money left of total). The threshold colors
 // reuse the extension's own band palette so desktop and extension never
 // drift; band text colors are adapted for the dark strip.
 
 import type { ProviderId } from "@shared/core/provider";
 import { PROVIDER_METADATA } from "@shared/core/provider-metadata";
-import type { NormalizedUsage } from "@shared/core/usage";
+import {
+  currencySymbol,
+  type NormalizedUsage,
+} from "@shared/core/usage";
 import type { CycleSnapshot, ProviderSnapshotEntry } from "@shared/storage/snapshot-store";
 
 const ERROR_LABELS: Record<string, string> = {
@@ -16,6 +20,18 @@ const ERROR_LABELS: Record<string, string> = {
   network: "NETWORK ERROR",
   unknown: "ERROR",
 };
+
+/** Structural view of the DeepSeek wallet field (hito-13; absent pre-merge). */
+interface WalletShape {
+  readonly currency?: string;
+  readonly total?: number;
+  readonly consumed?: number;
+  readonly percentage?: number;
+}
+
+function walletOf(usage: NormalizedUsage): WalletShape | undefined {
+  return (usage as { wallet?: WalletShape }).wallet;
+}
 
 function escapeHtml(value: string): string {
   return value
@@ -34,7 +50,7 @@ export function shortName(id: ProviderId): string {
 /**
  * Threshold band text color on the dark strip — the SAME band comparisons as
  * the extension's badgeBackgroundColor (hito-10), mapped to legible hues on
- * #1f1f1f: light slate <50, orange >=50, deep orange >=80, bright red >=90.
+ * #1f1f1f.
  */
 function pctColor(percentage: number | undefined): string {
   if (percentage !== undefined && percentage >= 90) {
@@ -49,15 +65,22 @@ function pctColor(percentage: number | undefined): string {
   return "#e2e8f0";
 }
 
-/** The segment percentage: zai 5h window, or the qwen token-plan quota. */
+/**
+ * The segment percentage: qwen prefers its token-plan quota; wallet providers
+ * (DeepSeek) use the consumed-share percentage; otherwise the zai 5h window.
+ */
 function segmentPercentage(usage: NormalizedUsage): number | undefined {
   if (usage.providerId === "qwen") {
     return usage.quota?.percentage ?? usage.windows?.fiveHour?.percentage;
   }
+  const wallet = walletOf(usage);
+  if (wallet?.percentage !== undefined) {
+    return wallet.percentage;
+  }
   return usage.windows?.fiveHour?.percentage;
 }
 
-/** Minimal countdown from `now` to an epoch-ms reset instant. */
+/** `5m`/`2h 8m`/`1d 2h` countdown from `now` to an epoch-ms reset instant. */
 export function formatCountdown(now: number, resetAt: number | undefined): string {
   if (resetAt === undefined) {
     return "";
@@ -80,24 +103,35 @@ export function formatCountdown(now: number, resetAt: number | undefined): strin
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-function segmentReset(usage: NormalizedUsage, now: number): string {
+/** Bottom line: money-left/total for wallet usage, else the reset countdown. */
+function segmentBottom(usage: NormalizedUsage, now: number): string {
+  const wallet = walletOf(usage);
+  if (wallet?.total !== undefined && usage.value !== undefined) {
+    const symbol = currencySymbol(wallet.currency ?? usage.currency ?? "");
+    return `${symbol}${usage.value.toFixed(2)} / ${symbol}${wallet.total.toFixed(2)} LEFT`;
+  }
   const resetAt = usage.quota?.resetAt ?? usage.windows?.fiveHour?.resetAt;
   const countdown = formatCountdown(now, resetAt);
   return countdown === "" ? "" : `RESETS ${countdown}`;
 }
 
+/** Percentage display text: number, space, sign — never overlapping. */
+export function formatSegmentPercentage(percentage: number): string {
+  return `${Math.round(percentage)} %`;
+}
+
 function okSegment(id: ProviderId, usage: NormalizedUsage, now: number): string {
   const percentage = segmentPercentage(usage);
-  const text = percentage !== undefined ? `${Math.round(percentage)}%` : "";
+  const text = percentage !== undefined ? formatSegmentPercentage(percentage) : "";
   const color = pctColor(percentage);
-  const reset = segmentReset(usage, now);
+  const bottom = segmentBottom(usage, now);
   return `
     <div class="seg">
       <div class="seg-top">
         <span class="seg-name">${escapeHtml(shortName(id))}</span>
         <span class="seg-pct" style="color:${color}">${escapeHtml(text)}</span>
       </div>
-      <span class="seg-reset">${escapeHtml(reset)}</span>
+      <span class="seg-reset">${escapeHtml(bottom)}</span>
     </div>`;
 }
 
@@ -112,29 +146,50 @@ function errorSegment(id: ProviderId, entry: Extract<ProviderSnapshotEntry, { st
     </div>`;
 }
 
+function mutedSegment(id: ProviderId): string {
+  return `
+    <div class="seg">
+      <div class="seg-top">
+        <span class="seg-name">${escapeHtml(shortName(id))}</span>
+      </div>
+      <span class="seg-reset">NO DATA THIS TICK</span>
+    </div>`;
+}
+
+/** Visible segment ids: results ∪ stored, honoring the stored order first,
+ * then metadata order, then any unknown-but-visible ids. */
+export function orderedSegments(
+  snapshot: CycleSnapshot,
+  storedProviders: readonly ProviderId[],
+  order: readonly ProviderId[],
+): ProviderId[] {
+  const visible = new Set<ProviderId>([
+    ...(Object.keys(snapshot.results) as ProviderId[]),
+    ...storedProviders,
+  ]);
+  const listed = order.filter((id) => visible.has(id));
+  const metadataOrder = PROVIDER_METADATA.map((entry) => entry.id) as ProviderId[];
+  const rest = metadataOrder.filter((id) => visible.has(id) && !listed.includes(id));
+  const unknown = [...visible].filter(
+    (id) => !listed.includes(id) && !rest.includes(id),
+  );
+  return [...listed, ...rest, ...unknown];
+}
+
 /**
- * The full strip body (S8): every provider with a STORED key renders — one
- * segment each, in stable metadata order. A provider whose tick produced no
- * entry (the qwen steps omit on transport failure by contract) shows a muted
- * NO DATA segment instead of vanishing.
+ * The full strip body (S8): every provider with a stored key renders, in the
+ * configured order (T18). A provider whose tick produced no entry shows a
+ * muted NO DATA segment instead of vanishing.
  */
 export function renderSegments(
   snapshot: CycleSnapshot,
   now: number,
   storedProviders: readonly ProviderId[] = [],
+  order: readonly ProviderId[] = [],
 ): string {
-  const keyed = Object.keys(snapshot.results) as ProviderId[];
-  const ordered = [
-    ...(PROVIDER_METADATA.map((entry) => entry.id) as ProviderId[]),
-    ...keyed,
-    ...storedProviders,
-  ].filter(
-    (id, index, all) =>
-      (snapshot.results[id] !== undefined || storedProviders.includes(id)) &&
-      all.indexOf(id) === index,
-  );
+  const ids = orderedSegments(snapshot, storedProviders, order);
 
-  if (ordered.length === 0) {
+  if (ids.length === 0) {
     return `
       <div class="seg">
         <div class="seg-top">
@@ -144,19 +199,15 @@ export function renderSegments(
       </div>`;
   }
   const segments: string[] = [];
-  for (const id of ordered) {
+  for (const id of ids) {
     const entry = snapshot.results[id];
     if (entry === undefined) {
-      segments.push(`
-        <div class="seg">
-          <div class="seg-top">
-            <span class="seg-name">${escapeHtml(shortName(id))}</span>
-          </div>
-          <span class="seg-reset">NO DATA THIS TICK</span>
-        </div>`);
-      continue;
+      segments.push(mutedSegment(id));
+    } else if (entry.status === "ok") {
+      segments.push(okSegment(id, entry.usage, now));
+    } else {
+      segments.push(errorSegment(id, entry));
     }
-    segments.push(entry.status === "ok" ? okSegment(id, entry.usage, now) : errorSegment(id, entry));
   }
   return segments.join("\n");
 }

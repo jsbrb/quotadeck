@@ -2,24 +2,27 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SystemClock } from "@shared/core/clock";
 import type { ProviderId } from "@shared/core/provider";
-import { SnapshotStore } from "@shared/storage/snapshot-store";
+import { SnapshotStore, type CycleSnapshot } from "@shared/storage/snapshot-store";
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
-import { createDesktopTransport, capturedResponses } from "./lib/desktop-transport";
+import { createDesktopTransport } from "./lib/desktop-transport";
 import { setupKeysView } from "./lib/keys-view";
 import { renderSegments, renderTickNotice, shortName, visibleCount } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
+import { readStripLayout, type StripLayout } from "./lib/strip-prefs";
 import { resolveChosenBand } from "./lib/tray-badge";
 
-// Second-taskbar shell (WU-G): the window IS a dark strip, one minimalist
-// segment per keyed provider (S8/S9). All controls live in the tray menu —
-// the strip itself has zero chrome. Rust owns the KEYS window size; the
-// frontend owns the strip width from the keyed count.
+// Second-taskbar shell (WU-L): dark strip of EQUAL-SIZED minimalist segments,
+// one per configured provider (S8). Orientation (horizontal row / vertical
+// right-edge column) and size (normal = taskbar height 48px / xl) are user
+// settings in KEYS; the window chrome stays at zero — all controls live in
+// the tray menu.
 
 const REFRESH_PERIOD_MS = 60_000;
-const SEG_WIDTH = 230;
-const BAR_HEIGHT = 68;
+// Segment geometry must match the CSS custom properties (index.html).
+const SEG_SIZE = { normal: { width: 230, height: 48 }, xl: { width: 300, height: 96 } } as const;
 const BAR_PAD_X = 16;
-const EMPTY_BAR_WIDTH = 330;
+const BAR_PAD_Y = 16;
+const EMPTY_SEGMENTS = 1;
 const LAST_TICK_ERROR_KEY = "qd:last-tick-error";
 
 // Boot diagnostics: an uncaught module error surfaces in the window title so
@@ -54,7 +57,55 @@ const clock = new SystemClock();
 
 let mode: "bar" | "keys" = "bar";
 let demoMode = false;
-let lastKeyedCount = 0;
+let layout: StripLayout = { order: [], orientation: "horizontal", size: "normal" };
+let lastSnapshot: CycleSnapshot = { results: {} };
+let lastStored: ProviderId[] = [];
+let lastVisibleCount = 0;
+
+async function refreshLayout(): Promise<void> {
+  layout = await readStripLayout(prefs);
+  document.body.dataset.size = layout.size;
+  document.body.dataset.orientation = layout.orientation;
+}
+
+/**
+ * Deterministic window size from segment count + layout (S9/S10/S11): the
+ * horizontal strip grows leftward from the bottom-right dock; the vertical
+ * column grows upward from the same dock. SEG_SIZE mirrors the CSS vars.
+ */
+function reflowBar(): void {
+  const count = Math.max(lastVisibleCount, EMPTY_SEGMENTS);
+  const seg = SEG_SIZE[layout.size];
+  if (layout.orientation === "vertical") {
+    const width = seg.width + BAR_PAD_X;
+    const height = BAR_PAD_Y + count * seg.height;
+    void invoke("reflow_flyout", { width, height });
+    return;
+  }
+  const width = BAR_PAD_X + count * seg.width;
+  void invoke("reflow_flyout", { width, height: seg.height });
+}
+
+function renderBar(): void {
+  if (bar === null) {
+    return;
+  }
+  bar.innerHTML = renderSegments(lastSnapshot, clock.now(), lastStored, layout.order);
+}
+
+function showBar(): void {
+  mode = "bar";
+  bar?.classList.remove("hidden");
+  keysView?.classList.add("hidden");
+  reflowBar();
+}
+
+function showKeys(): void {
+  mode = "keys";
+  bar?.classList.add("hidden");
+  keysView?.classList.remove("hidden");
+  // The KEYS window size is owned by the Rust tray-menu handler.
+}
 
 /**
  * Provider ids with a stored credential slot (S8 "stored keys render"):
@@ -72,52 +123,28 @@ async function storedProviders(): Promise<ProviderId[]> {
   return [...ids];
 }
 
-function reflowBar(): void {
-  const width =
-    lastKeyedCount === 0
-      ? EMPTY_BAR_WIDTH
-      : BAR_PAD_X + lastKeyedCount * SEG_WIDTH;
-  void invoke("reflow_flyout", { width, height: BAR_HEIGHT });
-}
-
-function showBar(): void {
-  mode = "bar";
-  bar?.classList.remove("hidden");
-  keysView?.classList.add("hidden");
-  reflowBar();
-}
-
-function showKeys(): void {
-  mode = "keys";
-  bar?.classList.add("hidden");
-  keysView?.classList.remove("hidden");
-  // The KEYS window size is owned by the Rust tray-menu handler.
-}
-
 async function tick(): Promise<void> {
   try {
     const outcome = await runDesktopRefreshTick({ prefs, secrets, transport, clock });
-    const stored = await storedProviders();
-    lastKeyedCount = visibleCount(outcome.snapshot, stored);
+    await refreshLayout();
+    lastSnapshot = outcome.snapshot;
+    lastStored = await storedProviders();
+    lastVisibleCount = visibleCount(lastSnapshot, lastStored);
     await prefs.remove(LAST_TICK_ERROR_KEY).catch(() => {});
-    if (mode === "bar" && bar !== null) {
-      bar.innerHTML = renderSegments(outcome.snapshot, clock.now(), stored);
-    }
     if (mode === "bar") {
+      renderBar();
       reflowBar();
     }
     await prefs
-      .set({ "qd:console-log": [...capturedErrors, ...capturedResponses] })
+      .set({ "qd:console-log": [...capturedErrors] })
       .catch(() => {});
     // The tray icon IS the desktop badge: band color from ZAI's threshold,
-    // figure in the tooltip. No badge choice — the segments carry every
-    // provider already (S10).
+    // figure in the tooltip.
     const chosen = resolveChosenBand(outcome.snapshot.results, "zai", shortName);
     await invoke("set_tray_badge", { band: chosen.band, tooltip: chosen.tooltip });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("[quotadeck-desktop] tick failed:", error);
-    // Persist for diagnosis; the strip shows the notice instead of dying.
     await prefs.set({ [LAST_TICK_ERROR_KEY]: { message, at: clock.now() } }).catch(() => {});
     if (mode === "bar" && bar !== null) {
       bar.innerHTML = renderTickNotice(message);
@@ -136,18 +163,32 @@ setupKeysView({
       void tick();
     }
   },
+  onLayoutChange: () => {
+    // Layout edits reflow/re-render without a network tick.
+    void (async () => {
+      await refreshLayout();
+      lastVisibleCount = visibleCount(lastSnapshot, lastStored);
+      if (mode === "bar") {
+        renderBar();
+        reflowBar();
+      }
+    })();
+  },
+  stripProviders: () => lastStored,
 });
 
 // Demo mode (QUOTADECK_DEMO=1): render the seeded snapshot and freeze — no
 // ticks, no key-save refresh. A normal launch runs the live loop.
 void (async () => {
+  await refreshLayout();
   if (await invoke<boolean>("is_demo")) {
     demoMode = true;
     const snapshot = await new SnapshotStore(prefs).read();
-    if (snapshot !== undefined && bar !== null) {
-      bar.innerHTML = renderSegments(snapshot, Date.now());
-      lastKeyedCount = visibleCount(snapshot);
+    if (snapshot !== undefined) {
+      lastSnapshot = snapshot;
+      lastVisibleCount = visibleCount(snapshot);
     }
+    renderBar();
     showBar();
     return;
   }
@@ -156,6 +197,4 @@ void (async () => {
   setInterval(() => {
     void tick();
   }, REFRESH_PERIOD_MS);
-})().catch((error: unknown) => {
-  document.title = `BOOT ERR: ${error instanceof Error ? error.message : String(error)}`;
-});
+})();

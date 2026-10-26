@@ -25,7 +25,9 @@ const FIXTURE = `
     <p id="qwen-plan-masked"></p>
     <button id="qwen-plan-save"></button>
     <button id="qwen-plan-revoke"></button>
-    <select id="badge-provider"><option value="zai"></option><option value="qwen"></option></select>
+    <div id="strip-order"></div>
+    <select id="strip-orientation"><option value="horizontal"></option><option value="vertical"></option></select>
+    <select id="strip-size"><option value="normal"></option><option value="xl"></option></select>
   </div>
 </main>
 `;
@@ -33,6 +35,7 @@ const FIXTURE = `
 let prefs: StorageArea;
 let secrets: StorageArea;
 const onKeyChange = vi.fn();
+const onLayoutChange = vi.fn();
 
 function tickMacros(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -44,7 +47,14 @@ describe("keys view", () => {
     prefs = fakeArea();
     secrets = fakeArea();
     onKeyChange.mockClear();
-    setupKeysView({ prefs, secrets, onKeyChange });
+    onLayoutChange.mockClear();
+    setupKeysView({
+      prefs,
+      secrets,
+      onKeyChange,
+      onLayoutChange,
+      stripProviders: () => ["zai", "qwen"],
+    });
   });
 
   it("saves a zai token through KeyStore, clears the input, and masks the display", async () => {
@@ -98,5 +108,36 @@ describe("keys view", () => {
     const stored = await prefs.get("qd:pref:zai-platform");
     expect(stored).toEqual({ "qd:pref:zai-platform": "zhipu" });
     expect(onKeyChange).toHaveBeenCalled();
+  });
+
+  it("renders the strip order list and persists a move", async () => {
+    const rows = document.querySelectorAll<HTMLElement>("#strip-order .order-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.dataset.id).toBe("zai");
+    expect(rows[1]?.dataset.id).toBe("qwen");
+
+    const qwenUp = rows[1]?.querySelector<HTMLButtonElement>('[data-act="up"]');
+    qwenUp?.click();
+    await tickMacros();
+    await tickMacros();
+
+    const stored = await prefs.get("qd:pref:strip-order");
+    expect(stored).toEqual({ "qd:pref:strip-order": ["qwen", "zai"] });
+    expect(onLayoutChange).toHaveBeenCalled();
+  });
+
+  it("persists orientation and size choices", async () => {
+    const orientation = document.getElementById("strip-orientation") as HTMLSelectElement;
+    orientation.value = "vertical";
+    orientation.dispatchEvent(new Event("change"));
+    const size = document.getElementById("strip-size") as HTMLSelectElement;
+    size.value = "xl";
+    size.dispatchEvent(new Event("change"));
+    await tickMacros();
+
+    const stored = await prefs.get(["qd:pref:strip-orientation", "qd:pref:strip-size"]);
+    expect(stored["qd:pref:strip-orientation"]).toBe("vertical");
+    expect(stored["qd:pref:strip-size"]).toBe("xl");
+    expect(onLayoutChange).toHaveBeenCalledTimes(2);
   });
 });
