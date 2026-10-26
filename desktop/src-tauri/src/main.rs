@@ -62,6 +62,59 @@ fn is_demo() -> bool {
     std::env::var("QUOTADECK_DEMO").as_deref() == Ok("1")
 }
 
+/// Qwen embedded sign-in (WU-K): the token-plan gateway WAF blocks non-browser
+/// clients, while the Chrome extension rides the real browser stack WITH the
+/// user's console session cookies. The desktop counterpart: open the real
+/// Alibaba console in a normal webview window, let the user sign in there,
+/// and read that window's cookie jar (HTTP-only included) for the gateway
+/// domain on every request. Cookies live ONLY in the webview's store — never
+/// persisted to prefs, never returned to the strip, never logged.
+const QWEN_CONSOLE_URL: &str = "https://modelstudio.console.alibabacloud.com";
+const QWEN_GATEWAY_ORIGIN: &str = "https://token-plan.ap-southeast-1.maas.aliyuncs.com";
+
+fn spawn_qwen_login(app: &tauri::AppHandle) {
+    if let Some(existing) = app.get_webview_window("qwen-login") {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        return;
+    }
+    let Ok(url) = QWEN_CONSOLE_URL.parse() else {
+        return;
+    };
+    let _window = tauri::WebviewWindowBuilder::new(
+        app,
+        "qwen-login",
+        tauri::WebviewUrl::External(url),
+    )
+    .title("Qwen Console — sign in")
+    .inner_size(980.0, 760.0)
+    .build();
+}
+
+#[tauri::command]
+fn open_qwen_login(app: tauri::AppHandle) {
+    spawn_qwen_login(&app);
+}
+
+/// The gateway Cookie header assembled from the login window's jar, or None
+/// when no sign-in window exists (user must sign in via the tray menu).
+#[tauri::command]
+fn qwen_gateway_cookies(app: tauri::AppHandle) -> Option<String> {
+    let webview = app.get_webview_window("qwen-login")?;
+    let url = tauri::Url::parse(QWEN_GATEWAY_ORIGIN).ok()?;
+    let cookies = webview.cookies_for_url(url).ok()?;
+    let header = cookies
+        .iter()
+        .map(|cookie| format!("{}={}", cookie.name(), cookie.value()))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if header.is_empty() {
+        None
+    } else {
+        Some(header)
+    }
+}
+
 /// Resizes the flyout (logical px from the frontend's deterministic strip
 /// math) and re-docks it in the same step, so growth never displaces the
 /// bottom-right anchor.
@@ -108,10 +161,12 @@ fn main() {
             anchor_flyout(&window);
 
             let keys_item = MenuItem::with_id(app, "keys", "Keys…", true, None::<&str>)?;
+            let qwen_login_item =
+                MenuItem::with_id(app, "qwen_login", "Qwen sign-in…", true, None::<&str>)?;
             let pin_item =
                 CheckMenuItem::with_id(app, "pin", "Always on top", true, false, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit QuotaDeck", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&keys_item, &pin_item, &quit])?;
+            let menu = Menu::with_items(app, &[&keys_item, &qwen_login_item, &pin_item, &quit])?;
 
             let tray = TrayIconBuilder::with_id("quotadeck-tray")
                 .icon(app.default_window_icon().expect("bundle icon").clone())
@@ -129,6 +184,7 @@ fn main() {
                             let _ = app.emit_to("flyout", "quotadeck://show-keys", ());
                         }
                     }
+                    "qwen_login" => spawn_qwen_login(app),
                     "pin" => {
                         let pinned = !PINNED.load(Ordering::SeqCst);
                         PINNED.store(pinned, Ordering::SeqCst);
@@ -172,6 +228,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            // The sign-in window keeps its cookie jar alive: closing it only
+            // hides it — destroyed windows lose the session cookies and the
+            // gateway falls back to the WAF block page.
+            if window.label() == "qwen-login" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                return;
+            }
             if matches!(event, WindowEvent::Focused(false)) && window.label() == "flyout" {
                 if !PINNED.load(Ordering::SeqCst) {
                     let _ = window.hide();
@@ -182,6 +248,8 @@ fn main() {
             set_tray_badge,
             reflow_flyout,
             is_demo,
+            open_qwen_login,
+            qwen_gateway_cookies,
             prefs::prefs_read_all,
             prefs::prefs_write_all,
             secrets::secrets_read_all,

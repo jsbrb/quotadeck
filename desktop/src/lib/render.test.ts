@@ -138,6 +138,27 @@ describe("renderSegments (S8 keyed-only taskbar strip)", () => {
     expect(html).toContain("NO DATA THIS TICK");
   });
 
+  it("shows the sign-in hint for a stored qwen without a live session (WU-K)", () => {
+    const snapshot: CycleSnapshot = {
+      results: {
+        zai: {
+          status: "ok",
+          usage: {
+            providerId: "zai",
+            kind: "balance",
+            fetchedAt: NOW,
+            windows: { fiveHour: { percentage: 15 } },
+          },
+        },
+      },
+    };
+    const html = renderSegments(snapshot, NOW, ["zai", "qwen"], [], {
+      qwen: "SIGN IN VIA TRAY MENU",
+    });
+    expect(html).toContain("SIGN IN VIA TRAY MENU");
+    expect(html).not.toContain("NO DATA THIS TICK");
+  });
+
   it("renders one hint segment when there are no keys at all", () => {
     const html = renderSegments({ results: {} }, NOW);
     expect(html).toContain("NO KEYS YET");

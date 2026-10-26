@@ -32,34 +32,17 @@ const REFRESH_SEGMENT_HTML = `
       <button id="refresh-btn" type="button" aria-label="Refresh quotas now">⟳</button>
     </div>`;
 
-// Boot diagnostics: an uncaught module error surfaces in the window title so
-// a headless debug session can read it via the process list.
-window.addEventListener("error", (event) => {
-  document.title = `BOOT ERR: ${event.message}`;
-});
-
-// T12 diagnostic (temporary): the shared qwen steps swallow failures by
-// contract and only log to console.error — capture those lines so the
-// headless debug session can read the exact failure class from prefs.
-const capturedErrors: string[] = [];
-const originalConsoleError = console.error.bind(console);
-console.error = (...args: unknown[]) => {
-  const line = args
-    .map((a) => (a instanceof Error ? `${a.name}: ${a.message}` : typeof a === "string" ? a : JSON.stringify(a)))
-    .join(" ");
-  capturedErrors.push(line.slice(0, 200));
-  if (capturedErrors.length > 20) {
-    capturedErrors.shift();
-  }
-  originalConsoleError(...args);
-};
-
 const bar = document.getElementById("bar");
 const keysView = document.getElementById("keys");
 
 const prefs = createPrefsArea();
 const secrets = createSecretsArea();
-const transport = createDesktopTransport();
+// WU-K: gateway requests carry the session cookies of the embedded Qwen
+// console sign-in window (Rust reads them from that webview's jar — memory
+// only, never persisted, never logged).
+const transport = createDesktopTransport(async () =>
+  invoke<null | string>("qwen_gateway_cookies").catch(() => null),
+);
 const clock = new SystemClock();
 
 let mode: "bar" | "keys" = "bar";
@@ -68,6 +51,7 @@ let layout: StripLayout = { order: [], orientation: "horizontal", size: "normal"
 let lastSnapshot: CycleSnapshot = { results: {} };
 let lastStored: ProviderId[] = [];
 let lastVisibleCount = 0;
+let lastHints: Partial<Record<ProviderId, string>> = {};
 
 async function refreshLayout(): Promise<void> {
   layout = await readStripLayout(prefs);
@@ -97,7 +81,9 @@ function renderBar(): void {
   if (bar === null) {
     return;
   }
-  bar.innerHTML = renderSegments(lastSnapshot, clock.now(), lastStored, layout.order) + REFRESH_SEGMENT_HTML;
+  bar.innerHTML =
+    renderSegments(lastSnapshot, clock.now(), lastStored, layout.order, lastHints) +
+    REFRESH_SEGMENT_HTML;
 }
 
 function showBar(): void {
@@ -130,6 +116,22 @@ async function storedProviders(): Promise<ProviderId[]> {
   return [...ids];
 }
 
+/**
+ * Muted-segment hints (WU-K): a stored qwen without an entry AND without a
+ * live sign-in window means the session was never started — tell the user
+ * exactly that instead of the generic NO DATA.
+ */
+async function buildHints(): Promise<Partial<Record<ProviderId, string>>> {
+  const hints: Partial<Record<ProviderId, string>> = {};
+  if (lastStored.includes("qwen") && lastSnapshot.results.qwen === undefined) {
+    const cookies = await invoke<null | string>("qwen_gateway_cookies").catch(() => null);
+    if (cookies === null) {
+      hints.qwen = "SIGN IN VIA TRAY MENU";
+    }
+  }
+  return hints;
+}
+
 async function tick(): Promise<void> {
   try {
     const outcome = await runDesktopRefreshTick({ prefs, secrets, transport, clock });
@@ -137,14 +139,12 @@ async function tick(): Promise<void> {
     lastSnapshot = outcome.snapshot;
     lastStored = await storedProviders();
     lastVisibleCount = visibleCount(lastSnapshot, lastStored);
+    lastHints = await buildHints();
     await prefs.remove(LAST_TICK_ERROR_KEY).catch(() => {});
     if (mode === "bar") {
       renderBar();
       reflowBar();
     }
-    await prefs
-      .set({ "qd:console-log": [...capturedErrors] })
-      .catch(() => {});
     // The tray icon IS the desktop badge: band color from ZAI's threshold,
     // figure in the tooltip.
     const chosen = resolveChosenBand(outcome.snapshot.results, "zai", shortName);

@@ -146,13 +146,13 @@ function errorSegment(id: ProviderId, entry: Extract<ProviderSnapshotEntry, { st
     </div>`;
 }
 
-function mutedSegment(id: ProviderId): string {
+function mutedSegment(id: ProviderId, hint?: string): string {
   return `
     <div class="seg">
       <div class="seg-top">
         <span class="seg-name">${escapeHtml(shortName(id))}</span>
       </div>
-      <span class="seg-reset">NO DATA THIS TICK</span>
+      <span class="seg-reset">${escapeHtml(hint ?? "NO DATA THIS TICK")}</span>
     </div>`;
 }
 
@@ -179,13 +179,15 @@ export function orderedSegments(
 /**
  * The full strip body (S8): every provider with a stored key renders, in the
  * configured order (T18). A provider whose tick produced no entry shows a
- * muted NO DATA segment instead of vanishing.
+ * muted segment instead of vanishing; `hints` overrides the muted line (e.g.
+ * "SIGN IN VIA TRAY" for a qwen session that was never started).
  */
 export function renderSegments(
   snapshot: CycleSnapshot,
   now: number,
   storedProviders: readonly ProviderId[] = [],
   order: readonly ProviderId[] = [],
+  hints: Partial<Record<ProviderId, string>> = {},
 ): string {
   const ids = orderedSegments(snapshot, storedProviders, order);
 
@@ -202,7 +204,7 @@ export function renderSegments(
   for (const id of ids) {
     const entry = snapshot.results[id];
     if (entry === undefined) {
-      segments.push(mutedSegment(id));
+      segments.push(mutedSegment(id, hints[id]));
     } else if (entry.status === "ok") {
       segments.push(okSegment(id, entry.usage, now));
     } else {
