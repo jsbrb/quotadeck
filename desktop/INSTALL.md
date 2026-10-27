@@ -20,6 +20,15 @@ ZAI, DeepSeek and Qwen plan status, without opening a browser.
    the system tray (near the clock; Windows may keep it behind the `^`
    chevron — drag it onto the taskbar to pin it).
 
+## Verify the download (optional)
+
+The release includes a `SHA256SUMS.txt` file. To confirm your installer
+was not corrupted or tampered with, run in PowerShell:
+
+    Get-FileHash .\QuotaDeck_0.1.0_x64-setup.exe -Algorithm SHA256
+
+and compare the output with the hash listed in `SHA256SUMS.txt`.
+
 ## First run
 
 Right-click the tray icon for the menu:
