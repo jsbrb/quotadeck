@@ -1,3 +1,7 @@
+// Prevents an extra console window on Windows in release builds. In dev
+// builds (debug_assertions) the console stays so logs remain visible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! QuotaDeck desktop shell: a tray icon plus a second-taskbar strip.
 //!
 //! Flyout behavior (S2/S9 in odd/tasks/desktop-tray-app.md):
