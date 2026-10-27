@@ -47,7 +47,14 @@ const KEYS_HEIGHT: f64 = 560.0;
 /// cross-origin gateway response; this webview only ever loads the
 /// ALIBABA console URL, and the Bearer rides only as a fetch argument.
 const QWEN_CONSOLE_URL: &str = "https://modelstudio.console.alibabacloud.com";
-const QWEN_GATEWAY_ORIGIN: &str = "https://token-plan.ap-southeast-1.maas.aliyuncs.com";
+/// Hard allowlist of the origins this hop may ever talk to: the mint host,
+/// the quota gateway (the extension's hop-2 host), and the legacy token-plan
+/// origin (kept so older cached flows still route through the hop).
+const QWEN_GATEWAY_ORIGINS: [&str; 3] = [
+    "https://token-plan.ap-southeast-1.maas.aliyuncs.com",
+    "https://bailian-singapore-cs.alibabacloud.com",
+    "https://modelstudio.ap-southeast-1.aliyuncs.com",
+];
 const QWEN_AGENT_LABEL: &str = "qwen-agent";
 
 /// Managed tray handles: the icon (re-badged per tick via `set_tray_badge`)
@@ -252,9 +259,16 @@ fn qwen_gateway_fetch(
     method: String,
     authorization: Option<String>,
     body: Option<String>,
+    content_type: Option<String>,
 ) -> Option<(u16, String, String)> {
-    if !url.starts_with(QWEN_GATEWAY_ORIGIN) {
-        return None; // hard allowlist: this hop only ever talks to the gateway
+    // Spike WU-U (cookie-hop): an ABSENT (or empty) authorization switches the
+    // hop to SESSION-COOKIE auth — no Authorization header at all (a custom
+    // header would force a CORS preflight and require an explicit allow) plus
+    // `credentials: "include"` so the console session cookies ride along. This
+    // mirrors how the console web app itself reads quotas.
+    let bearer = authorization.filter(|value| !value.is_empty());
+    if !QWEN_GATEWAY_ORIGINS.iter().any(|origin| url.starts_with(origin)) {
+        return None; // hard allowlist: this hop only ever talks to the gateways
     }
     // Wait for the agent page to sit on the console origin (first load can
     // take a while; the caller falls back to the plain hop meanwhile).
@@ -266,14 +280,23 @@ fn qwen_gateway_fetch(
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
-    let auth_json = serde_json::to_string(&authorization).ok()?;
+    let auth_json = serde_json::to_string(&bearer).ok()?;
     let body_json = serde_json::to_string(&body).ok()?;
+    let content_type =
+        content_type.unwrap_or_else(|| "application/json".to_string());
+    let ct_json = serde_json::to_string(&content_type).ok()?;
+    let headers_json = match &bearer {
+        Some(_) => format!(r#"{{ "Authorization": {auth_json}, "Content-Type": {ct_json} }}"#),
+        None => format!(r#"{{ "Content-Type": {ct_json} }}"#),
+    };
+    let credentials_json = if bearer.is_some() { "omit" } else { "include" };
     let script = format!(
         r#"(async () => {{
             try {{
                 const r = await fetch({url}, {{
                     method: {method},
-                    headers: {{ "Authorization": {auth}, "Content-Type": "application/json" }},
+                    headers: {headers},
+                    credentials: {credentials},
                     body: {body}
                 }});
                 const t = await r.text();
@@ -285,7 +308,8 @@ fn qwen_gateway_fetch(
         }})();"#,
         url = serde_json::to_string(&url).ok()?,
         method = serde_json::to_string(&method).ok()?,
-        auth = auth_json,
+        headers = headers_json,
+        credentials = credentials_json,
         body = body_json,
     );
     let answer = qwen_agent_eval(&app, &script)?;

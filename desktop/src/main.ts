@@ -6,6 +6,7 @@ import { SnapshotStore, type CycleSnapshot } from "@shared/storage/snapshot-stor
 import { createPrefsArea, createSecretsArea } from "./lib/desktop-storage";
 import { createDesktopTransport, gatewayProbe } from "./lib/desktop-transport";
 import { setupKeysView } from "./lib/keys-view";
+import { qwenUsageProbeBody, qwenUsageProbeUrl } from "./lib/qwen-probe";
 import { renderSegments, renderTickNotice, shortName, visibleCount } from "./lib/render";
 import { runDesktopRefreshTick } from "./lib/refresh-loop";
 import { readStripLayout, stripGeometry, writeStripOrientation, type StripLayout } from "./lib/strip-prefs";
@@ -46,6 +47,52 @@ const transport = createDesktopTransport(async ({ url, method, authorization, bo
   return result === null ? null : { status: result.s, contentType: result.c, text: result.b };
 });
 const clock = new SystemClock();
+
+// ── Spike WU-U: qwen cookie-hop probe ──────────────────────────────────────
+// The browser-hop WITH an Authorization header is CORS-walled: a custom
+// header forces a preflight and the gateway never allows the console origin.
+// The console web app itself reads quotas with plain session cookies — so the
+// probe replays the EXACT hop-2 usage request (pinned twin in qwen-probe.ts)
+// with NO Authorization header and credentials: "include" (the Rust hop
+// switches modes when auth is absent). Two content-type variants separate a
+// preflight wall from a response wall. Results land in the
+// `qd:qwen-cookie-probe` pref for offline reading — the spike is measured,
+// never guessed. Quarantine: never runs in autotest/demo mode.
+const QWEN_COOKIE_PROBE_KEY = "qd:qwen-cookie-probe";
+
+interface QwenCookieProbeArm {
+  status: number;
+  contentType: string;
+  bodyPrefix: string;
+}
+
+async function runQwenCookieProbe(reason: string): Promise<void> {
+  if (demoMode || qwenQuarantine) {
+    return;
+  }
+  const arm = async (label: string, contentType: string): Promise<QwenCookieProbeArm> => {
+    const result = await invoke<null | { s: number; c: string; b: string }>("qwen_gateway_fetch", {
+      url: qwenUsageProbeUrl(),
+      method: "POST",
+      authorization: null,
+      body: qwenUsageProbeBody(),
+      contentType,
+    }).catch((error: unknown) => {
+      console.error(`[quotadeck-desktop] qwen cookie probe (${label}) invoke failed:`, error);
+      return null;
+    });
+    return {
+      status: result?.s ?? 0,
+      contentType: result?.c ?? "invoke-null",
+      bodyPrefix: (result?.b ?? "").slice(0, 400),
+    };
+  };
+  const formSimple = await arm("form-simple", "application/x-www-form-urlencoded");
+  const jsonPreflight = await arm("json-preflight", "application/json");
+  await prefs.set({
+    [QWEN_COOKIE_PROBE_KEY]: { at: clock.now(), reason, formSimple, jsonPreflight },
+  });
+}
 
 let mode: "bar" | "keys" = "bar";
 let demoMode = false;
@@ -228,6 +275,7 @@ void listen("quotadeck://qwen-session", () => {
   qwenBackoffUntil = 0;
   browserHopBlocked = false;
   qwenFailures = 0;
+  void runQwenCookieProbe("console-open");
   void tick();
 });
 
@@ -469,4 +517,7 @@ void (async () => {
   setInterval(() => {
     void tick();
   }, REFRESH_PERIOD_MS);
+  // Spike WU-U: one boot probe — the WebView2 profile may already hold a
+  // live console session from a previous sign-in.
+  void sleep(15_000).then(() => runQwenCookieProbe("boot"));
 })();
