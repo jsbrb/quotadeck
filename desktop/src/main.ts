@@ -64,6 +64,7 @@ interface QwenCookieProbeArm {
   status: number;
   contentType: string;
   bodyPrefix: string;
+  errorText?: string;
 }
 
 async function runQwenCookieProbe(reason: string): Promise<void> {
@@ -78,13 +79,26 @@ async function runQwenCookieProbe(reason: string): Promise<void> {
       body: qwenUsageProbeBody(),
       contentType,
     }).catch((error: unknown) => {
-      console.error(`[quotadeck-desktop] qwen cookie probe (${label}) invoke failed:`, error);
-      return null;
+      return { __invokeError: String(error) };
     });
+    if (result !== null && typeof result === "object" && "__invokeError" in result) {
+      console.error(`[quotadeck-desktop] qwen cookie probe (${label}) invoke failed:`, result.__invokeError);
+      return {
+        status: -1,
+        contentType: "ipc-error",
+        bodyPrefix: "",
+        errorText: String(result.__invokeError).slice(0, 300),
+      };
+    }
+    // The Rust command returns Option<(u16, String, String)> — a JSON ARRAY
+    // over IPC, not an object. Normalize before reading fields.
+    const hop = Array.isArray(result)
+      ? { s: result[0], c: result[1], b: result[2] }
+      : result;
     return {
-      status: result?.s ?? 0,
-      contentType: result?.c ?? "invoke-null",
-      bodyPrefix: (result?.b ?? "").slice(0, 400),
+      status: hop?.s ?? 0,
+      contentType: hop?.c ?? "invoke-null",
+      bodyPrefix: (hop?.b ?? "").slice(0, 400),
     };
   };
   const formSimple = await arm("form-simple", "application/x-www-form-urlencoded");
@@ -513,6 +527,10 @@ void (async () => {
     return;
   }
   showBar();
+  // Spike WU-U boot marker: proves THIS exact frontend reached the production
+  // path (asset-embed verification — the exe compresses assets, so string
+  // scans cannot tell old from new). Removed when the spike closes.
+  await prefs.set({ "qd:spike-boot": clock.now() });
   void tick();
   setInterval(() => {
     void tick();

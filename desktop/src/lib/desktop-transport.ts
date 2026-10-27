@@ -99,7 +99,7 @@ export function createDesktopFetchImpl(
   ): Promise<FetchResponseLike> => {
     if (isGatewayUrl(url)) {
       try {
-        const hop = await withTimeout(
+        const raw = await withTimeout(
           gatewayViaBrowser({
             url,
             method: init.method,
@@ -108,6 +108,12 @@ export function createDesktopFetchImpl(
           }),
           "gateway browser-hop",
         );
+        // The Rust command returns Option<(u16, String, String)> — a JSON
+        // ARRAY over IPC. Reading it as {s,c,b} silently produced undefined
+        // fields and disabled the whole browser-hop (spike WU-U finding).
+        const hop = Array.isArray(raw)
+          ? { status: raw[0], contentType: raw[1], text: raw[2] }
+          : raw;
         if (hop !== null) {
           gatewayProbe.last = {
             status: hop.status,
